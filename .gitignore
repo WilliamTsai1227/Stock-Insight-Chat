@@ -1,0 +1,61 @@
+# Python 工具快取與環境
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.venv
+venv
+ENV/
+
+# 環境變數 (重要！不可進 Git)
+.env
+.env.*
+
+# 資料庫本地資料 (Docker 掛載)
+db_data/
+
+# IDE 配置 (VS Code / PyCharm)
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# MacOS 系統文件
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+
+# 資料庫與掛載資料 (Docker)
+db_data/
+qdrant_storage/
+
+# 日誌與測試
+*.log
+logs/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node.js (前端支持)
+node_modules/
+dist/
+.next/
+.vercel/

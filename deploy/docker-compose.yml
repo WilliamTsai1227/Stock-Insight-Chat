@@ -1,0 +1,52 @@
+services:
+  # 1. 後端 (FastAPI + AsyncPG)
+  backend:
+    build:
+      context: . # 指向專案根目錄
+      dockerfile: deploy/backend.Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      # 更新連線字串至 Stock_Insight_Chat
+      - DATABASE_URL=postgresql+asyncpg://postgres:password123@db:5432/Stock_Insight_Chat
+      - QDRANT_HOST=qdrant
+    depends_on:
+      - db
+      - qdrant
+
+  # 2. 資料庫 (PostgreSQL 16)
+  db:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password123
+      - POSTGRES_DB=Stock_Insight_Chat
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+  # 3. 向量資料庫 (Qdrant)
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: always
+    ports:
+      - "6333:6333" # REST API 控制台
+      - "6334:6334" # gRPC
+    volumes:
+      - qdrant_storage:/qdrant/storage
+
+  # 4. 前端 (Nginx + Vanilla Frontend)
+  frontend:
+    build:
+      context: . 
+      dockerfile: deploy/frontend.Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+volumes:
+  db_data:
+  qdrant_storage:
