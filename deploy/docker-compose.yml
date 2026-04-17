@@ -2,7 +2,7 @@ services:
   # 1. 後端 (FastAPI + AsyncPG)
   backend:
     build:
-      context: . # 指向專案根目錄
+      context: .. # 指向專案根目錄 (原本的 . 會抓錯路徑)
       dockerfile: deploy/backend.Dockerfile
     ports:
       - "8000:8000"
@@ -40,7 +40,7 @@ services:
   # 4. 前端 (Nginx + Vanilla Frontend)
   frontend:
     build:
-      context: . 
+      context: .. 
       dockerfile: deploy/frontend.Dockerfile
     ports:
       - "80:80"

@@ -10,8 +10,11 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models
 from openai import AsyncOpenAI
+from dotenv import load_dotenv
 
 # 1. 環境配置
+load_dotenv()
+
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 MONGO_DB = os.getenv("MONGO_DB", "stock_insight")
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
@@ -63,15 +66,15 @@ async def get_embedding(text: str) -> List[float]:
 # --- 核心邏輯 C：確定性 ID 生成器 ---
 def generate_deterministic_uuid(mongo_id: str, chunk_idx: int) -> str:
     """基於原始 ID 與序號產生固定 UUID，防止重複向量入庫"""
-    # 使用 NAMESPACE_DNS 確保這兩個字串組合出的 UUID 是唯一的且固定的
     namespace = uuid.NAMESPACE_DNS
     return str(uuid.uuid5(namespace, f"{mongo_id}_{chunk_idx}"))
 
 # --- 核心邏輯 D：遷移主程序 ---
 async def migrate_collection(mongo_col_name: str, qdrant_col_name: str, mapping_config: Dict[str, Any], limit: int, batch_size: int):
-    print(f"🚀 Starting migration legacy: {mongo_col_name} -> {qdrant_col_name} (Limit: {limit})")
+    print(f"🚀 Starting migration: {mongo_col_name} -> {qdrant_col_name} (Newest {limit} documents)")
     
-    cursor = db[mongo_col_name].find().limit(limit)
+    # 修正：加入 .sort("_id", -1) 以確保拿到最新的資料
+    cursor = db[mongo_col_name].find().sort("_id", -1).limit(limit)
     processed_count = 0
     
     async for doc in cursor:
@@ -105,9 +108,7 @@ async def migrate_collection(mongo_col_name: str, qdrant_col_name: str, mapping_
                  store_key = "stock_list" if extra_key == "stock" else extra_key
                  payload[store_key] = val
 
-            # 使用確定性 ID：如果 mongo_id 和 chunk_idx 一樣，Qdrant 會執行 Overwrite
             point_id = generate_deterministic_uuid(mongo_id, idx)
-            
             points.append(models.PointStruct(id=point_id, vector=vector, payload=payload))
             
         if points:
@@ -132,16 +133,15 @@ async def main():
         mapping_config={
             "title_key": "title",
             "content_keys": ["content"],
-            # 將 MongoDB 的 'stock' 欄位名稱對應至 Qdrant 的 'stock_list'
             "extra_payload_keys": ["source", "category", "url", "stock"] 
         },
         limit=args.limit,
         batch_size=args.batch_size
     )
     
-    # 2. AI 分析遷移
+    # 2. AI 分析遷移 (修正 MongoDB Collection Name 為 AI_news_analysis)
     await migrate_collection(
-        mongo_col_name="ai_analysis",
+        mongo_col_name="AI_news_analysis",
         qdrant_col_name="ai_analysis",
         mapping_config={
             "title_key": "article_title",

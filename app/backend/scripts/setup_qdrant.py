@@ -1,6 +1,10 @@
 import os
+from dotenv import load_dotenv
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
+
+# 載入 .env 環境變數
+load_dotenv()
 
 # 配置 Qdrant 連線 (依照 docker-compose.yml 的配置)
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
@@ -36,15 +40,12 @@ def setup_collections():
                 )
                 print(f"✅ Successfully created Collection: {collection_name}")
             
-            # 2. 建立 Datetime Index (Qdrant 1.8.0 特點)
+            # 2. 建立 Datetime Index (Qdrant 1.8.0+ 特點)
             print(f"Creating Datetime Index for '{collection_name}.publishAt'...")
             client.create_payload_index(
                 collection_name=collection_name,
                 field_name="publishAt",
-                field_schema=models.DatetimeIndexParams(
-                    type=models.PayloadSchemaType.DATETIME,
-                    is_indexed=True
-                )
+                field_schema=models.PayloadSchemaType.DATETIME
             )
 
             # 3. 建立 Keyword Index
