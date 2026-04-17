@@ -24,19 +24,35 @@ async def search_news(
     query: str,
     query_embedding: List[float],
     chat_id: str,
-    top_k: int = 10
+    top_k: int = 10,
+    start_date: Optional[str] = None, # ISO 格式字串
+    end_date: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    新聞工具 #1：混合搜尋 (向量 + 關鍵字)
+    新聞工具 #1：混合搜尋 (向量 + 時間/標籤過濾)
     """
     start_time = time.time()
     
+    # 建立過濾條件
+    search_filter = None
+    if start_date or end_date:
+        conditions = []
+        if start_date or end_date:
+            conditions.append(models.FieldCondition(
+                key="publishAt",
+                range=models.DatetimeRange(
+                    gte=start_date,
+                    lte=end_date
+                )
+            ))
+        search_filter = models.Filter(must=conditions)
+
     try:
-        # 在 Qdrant 執行混合搜尋 (Hybrid Search)
-        # 這裡示範基本的向量搜尋，若要支援關鍵字過濾可加模型過濾器
+        # 在 Qdrant 執行帶有 Filter 的搜尋
         search_result = await qdrant_client.search(
             collection_name="news",
             query_vector=query_embedding,
+            query_filter=search_filter, # 注入過濾器
             limit=top_k,
             with_payload=True
         )

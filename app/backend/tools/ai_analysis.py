@@ -1,41 +1,50 @@
-import time
 import os
+import time
 from typing import List, Dict, Any, Optional
 from motor.motor_asyncio import AsyncIOMotorClient
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models
 from dotenv import load_dotenv
 
-# 載入 .env 環境變數
 load_dotenv()
 
-# --- 資料庫連線配置 ---
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-MONGO_DB = os.getenv("MONGO_DB", "stock_insight")
+# 初始化連線
+MONGODB_URL = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
 
-# 初始化客戶端
-mongo_client = AsyncIOMotorClient(MONGO_URI)
-db = mongo_client[MONGO_DB]
+mongo_client = AsyncIOMotorClient(MONGODB_URL)
+db = mongo_client["stock_insight"]
+# 全面改用 AsyncQdrantClient
 qdrant_client = AsyncQdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
 
 async def search_ai_analysis(
     query: str,
     query_embedding: List[float],
     chat_id: str,
-    top_k: int = 10
+    top_k: int = 10,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    AI 分析工具 #3：混合搜尋 (向量 + 關鍵字)
+    AI 分析工具：混合搜尋 (向量 + 時間過濾)
     """
-    start_time = time.time()
-    
+    search_filter = None
+    if start_date or end_date:
+        search_filter = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="publishAt",
+                    range=models.DatetimeRange(gte=start_date, lte=end_date)
+                )
+            ]
+        )
+
     try:
-        # 在 Qdrant 執行混合搜尋 (Hybrid Search)
         search_result = await qdrant_client.search(
             collection_name="ai_analysis",
             query_vector=query_embedding,
+            query_filter=search_filter,
             limit=top_k,
             with_payload=True
         )
@@ -44,68 +53,98 @@ async def search_ai_analysis(
         for hit in search_result:
             payload = hit.payload
             context.append({
-                "title": payload.get("title", "未知標題"),
+                "title": payload.get("title", "無標題"),
+                "content": payload.get("content", ""),
                 "mongo_id": payload.get("mongo_id"),
-                "chunk_idx": payload.get("chunk_idx"),
-                "content": payload.get("content", "") 
+                "publishAt": payload.get("publishAt")
             })
             
+        return {"context": context}
     except Exception as e:
-        context = [{"error": str(e)}]
-    
-    execution_time = time.time() - start_time
-    
-    return {
-        "query": query,
-        "query_embedding": query_embedding,
-        "top_k": top_k,
-        "execution_time": round(execution_time, 4),
-        "context": context,
-        "chat_id": chat_id
-    }
+        print(f"❌ Error searching AI analysis: {e}")
+        return {"context": []}
 
-async def get_full_ai_analysis(
-    ai_analysis_ids: List[str],
-    chat_id: str,
-    query: str,
+async def search_recommendations(
     query_embedding: List[float],
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     top_k: int = 10
 ) -> Dict[str, Any]:
     """
-    AI 分析工具 #4：獲取完整分析報告 (MongoDB)
-    這通常是要給一個完整的 ai_analysis_id 列表，然後去 MongoDB 把列表內的所有分析內容完整拿回。
+    推薦專用工具：從 AI 分析報告中提取結構化的推薦股票與產業標籤。
     """
-    start_time = time.time()
-    
+    search_filter = None
+    if start_date or end_date:
+        search_filter = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="publishAt",
+                    range=models.DatetimeRange(gte=start_date, lte=end_date)
+                )
+            ]
+        )
+
     try:
-        # 到 MongoDB 根據 _id 列表拿取全文
-        from bson import ObjectId
-        object_ids = [ObjectId(aid) for aid in ai_analysis_ids]
-        cursor = db.AI_news_analysis.find({"_id": {"$in": object_ids}})
-        documents = await cursor.to_list(length=len(ai_analysis_ids))
-        
-        context = []
-        for doc in documents:
-            context.append({
-                "title": doc.get("article_title"),
-                "mongo_id": str(doc.get("_id")),
-                "content": doc.get("summary", ""), # 傳回摘要作為全文代表
-                "publishAt": str(doc.get("publishAt", ""))
+        search_result = await qdrant_client.search(
+            collection_name="ai_analysis",
+            query_vector=query_embedding,
+            query_filter=search_filter,
+            limit=top_k,
+            with_payload=True
+        )
+
+        recommended_stocks = set()
+        recommended_industries = set()
+        details = []
+
+        for hit in search_result:
+            payload = hit.payload
+            raw_stocks = payload.get("stock_list", [])
+            formatted_stocks = []
+            if raw_stocks:
+                for s in raw_stocks:
+                    if isinstance(s, list) and len(s) >= 3:
+                        stock_name = f"{s[2]}({s[1]})"
+                        recommended_stocks.add(stock_name)
+                        formatted_stocks.append(stock_name)
+                    elif isinstance(s, str):
+                        recommended_stocks.add(s)
+                        formatted_stocks.append(s)
+
+            industries = payload.get("industry_list", [])
+            recommended_industries.update(industries)
+            
+            details.append({
+                "title": payload.get("title"),
+                "stocks": formatted_stocks,
+                "industries": industries,
+                "publishAt": payload.get("publishAt")
             })
-            
-        if not context:
-            context = [{"error": f"找不到指定的 AI 分析 IDs: {ai_analysis_ids}"}]
-            
+
+        return {
+            "stocks": list(recommended_stocks),
+            "industries": list(recommended_industries),
+            "sources": details
+        }
     except Exception as e:
-        context = [{"error": str(e)}]
+        print(f"❌ Error searching recommendations: {e}")
+        return {"stocks": [], "industries": [], "sources": []}
+
+async def get_full_ai_analysis(mongo_ids: List[str]) -> List[Dict[str, Any]]:
+    from bson import ObjectId
+    try:
+        object_ids = [ObjectId(mid) for mid in mongo_ids if mid]
+        cursor = db["AI_news_analysis"].find({"_id": {"$in": object_ids}})
+        docs = await cursor.to_list(length=len(mongo_ids))
         
-    execution_time = time.time() - start_time
-    
-    return {
-        "query": query,
-        "query_embedding": query_embedding,
-        "top_k": top_k,
-        "execution_time": round(execution_time, 4),
-        "context": context,
-        "chat_id": chat_id
-    }
+        results = []
+        for doc in docs:
+            results.append({
+                "id": str(doc["_id"]),
+                "summary": doc.get("summary", ""),
+                "title": doc.get("title", "")
+            })
+        return results
+    except Exception as e:
+        print(f"❌ Error getting full AI analysis: {e}")
+        return []
