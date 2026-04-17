@@ -4,6 +4,10 @@ from typing import List, Dict, Any, Optional
 from motor.motor_asyncio import AsyncIOMotorClient
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models
+from dotenv import load_dotenv
+
+# 載入 .env 環境變數
+load_dotenv()
 
 # --- 資料庫連線配置 ---
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
@@ -41,9 +45,9 @@ async def search_ai_analysis(
             payload = hit.payload
             context.append({
                 "title": payload.get("title", "未知標題"),
-                "ai_analysis_id": payload.get("ai_analysis_id"),
-                "chunk_id": payload.get("chunk_id"),
-                "content": payload.get("content", "") # 檢索到的片段
+                "mongo_id": payload.get("mongo_id"),
+                "chunk_idx": payload.get("chunk_idx"),
+                "content": payload.get("content", "") 
             })
             
     except Exception as e:
@@ -77,16 +81,16 @@ async def get_full_ai_analysis(
         # 到 MongoDB 根據 _id 列表拿取全文
         from bson import ObjectId
         object_ids = [ObjectId(aid) for aid in ai_analysis_ids]
-        cursor = db.ai_analysis.find({"_id": {"$in": object_ids}})
+        cursor = db.AI_news_analysis.find({"_id": {"$in": object_ids}})
         documents = await cursor.to_list(length=len(ai_analysis_ids))
         
         context = []
         for doc in documents:
             context.append({
-                "title": doc.get("title"),
-                "ai_analysis_id": str(doc.get("_id")),
-                "content": doc.get("content", ""), # 全文報告
-                "created_at": str(doc.get("created_at", ""))
+                "title": doc.get("article_title"),
+                "mongo_id": str(doc.get("_id")),
+                "content": doc.get("summary", ""), # 傳回摘要作為全文代表
+                "publishAt": str(doc.get("publishAt", ""))
             })
             
         if not context:

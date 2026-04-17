@@ -64,6 +64,17 @@ python app/backend/scripts/migrate_to_qdrant.py --limit 10
 
 ---
 
+## 🧪 測試工具 (Testing)
+本專案提供後端工具函式的自動化測試，確保檢索邏輯正常：
+```bash
+# 執行所有工具測試
+pytest test/backend/tools/ -s
+```
+*   **news**: 測試新聞檢索與全文抓取流程。
+*   **ai_analysis**: 測試 AI 報告搜尋與摘要抓取流程。
+
+---
+
 ## 🧠 向量儲存結構 (Qdrant Schema)
 
 系統採用 **Qdrant** 作為核心向量資料庫，支援高效的語義搜尋與動態過濾。以下是目前規劃的 Collection 結構設計：
@@ -144,6 +155,25 @@ python app/backend/scripts/migrate_to_qdrant.py --limit 10
 *   **對應關係**:
     *   MongoDB `news` -> Qdrant `news`
     *   MongoDB `AI_news_analysis` -> Qdrant `ai_analysis`
+
+---
+
+## 🔍 RAG 檢索邏輯 (Retrieval Architecture)
+
+系統採用兩階段檢索架構，平衡搜尋速度與資料完整性：
+
+### 1. 第一階段：向量檢索 (Qdrant)
+*   **目標**: 快速定位最相關的資料片段。
+*   **搜尋方式**: 透過 `text-embeddings-3-small` 產生的 `query_vector` 進行 **Cosmic Similarity (餘弦相似度)** 搜尋。
+*   **廣義混合搜尋 (Hybrid)**: 雖然目前未配置 Sparse Vector，但系統結合了 **向量搜尋 + 標籤過濾 (Payload Filtering)**。可同時針對 `stock_list`、`publishAt` 等 metadata 進行精確篩選。
+*   **輸出**: 回傳 Top-K 個 **Chunks (片段)**，每個片段皆附帶 `[標題]` 前綴以增強語義脈絡。
+
+### 2. 第二階段：全文提領 (MongoDB)
+*   **目標**: 提供深度分析所需的完整上下文。
+*   **觸發場景**:
+    *   **場景 A (節省 Token)**: AI 僅需回答事實性問題（如「營收是多少？」），此時僅使用 Qdrant 片段。
+    *   **場景 B (深度分析)**: 當使用者要求「總結長篇報告」或「對比全文細節」時，Agent 會根據 `mongo_id` 回到 **MongoDB** 提領完整原始文件。
+*   **邏輯**: 確保 AI 不會因片段切分而遺失長文本中的關鍵連結。
 
 ---
 

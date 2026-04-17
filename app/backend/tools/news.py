@@ -4,6 +4,10 @@ from typing import List, Dict, Any, Optional
 from motor.motor_asyncio import AsyncIOMotorClient
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models
+from dotenv import load_dotenv
+
+# 載入 .env 環境變數
+load_dotenv()
 
 # --- 資料庫連線配置 ---
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
@@ -11,7 +15,7 @@ MONGO_DB = os.getenv("MONGO_DB", "stock_insight")
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
 
-# 初始化客戶端 (在模組層級建立，或在函數內建立)
+# 初始化客戶端
 mongo_client = AsyncIOMotorClient(MONGO_URI)
 db = mongo_client[MONGO_DB]
 qdrant_client = AsyncQdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
@@ -42,9 +46,9 @@ async def search_news(
             payload = hit.payload
             context.append({
                 "title": payload.get("title", "未知標題"),
-                "news_id": payload.get("news_id"), # 提供給下一個階段用
-                "chunk_id": payload.get("chunk_id"),
-                "content": payload.get("content", "") # 檢索到的片段
+                "mongo_id": payload.get("mongo_id"), # 與遷移指令同步
+                "chunk_idx": payload.get("chunk_idx"),
+                "content": payload.get("content", "") 
             })
             
     except Exception as e:
@@ -85,9 +89,9 @@ async def get_full_news(
         for doc in documents:
             context.append({
                 "title": doc.get("title"),
-                "news_id": str(doc.get("_id")),
+                "mongo_id": str(doc.get("_id")),
                 "content": doc.get("content", ""), # 這是全文
-                "publish_date": str(doc.get("publish_date", ""))
+                "publishAt": str(doc.get("publishAt", ""))
             })
             
         if not context:
