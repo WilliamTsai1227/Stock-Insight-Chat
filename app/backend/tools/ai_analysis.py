@@ -116,6 +116,8 @@ async def search_recommendations(
             
             details.append({
                 "title": payload.get("title"),
+                "mongo_id": payload.get("mongo_id"),
+                "content": payload.get("content", ""),
                 "stocks": formatted_stocks,
                 "industries": industries,
                 "publishAt": payload.get("publishAt")

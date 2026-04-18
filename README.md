@@ -69,9 +69,16 @@ python app/backend/scripts/migrate_to_qdrant.py --limit 10
 ```bash
 # 執行所有工具測試
 pytest test/backend/tools/ -s
-```
-*   **news**: 測試新聞檢索與全文抓取流程。
-*   **ai_analysis**: 測試 AI 報告搜尋與摘要抓取流程。
+
+# 或執行個別測試
+# 1. 新聞檢索測試
+pytest test/backend/tools/test_news_tool.py -s
+# 2. AI 分析報告測試
+pytest test/backend/tools/test_ai_analysis_tool.py -s
+# 3. 推薦標的提取測試 (New)
+python test/backend/tools/test_recommendations_tool.py
+# 4. Agent 綜合對話測試
+python app/backend/agent/chat.py
 
 ---
 
@@ -117,9 +124,49 @@ pytest test/backend/tools/ -s
 
 *   **後端系統**: Python FastAPI (非同步架構)
 *   **向量檢索**: Qdrant (Rust-based Vector Database)
-*   **大數據儲存**: MongoDB (用於原始文章全文儲存)
-*   **關係型數據**: PostgreSQL (用於會員系統、專案管理與對話歷史)
-*   **人工智慧**: OpenAI GPT-4o / GPT-4 Turbo & Embedding API
+*   **數據儲存**: MongoDB Atlas (雲端全文存儲) & PostgreSQL (對話狀態管理)
+*   **AI 核心**: OpenAI GPT-4o & GPT-4o-mini (雙模型架構)
+*   **工作排程**: LangGraph (Agent 邏輯編排與狀態隔離)
+
+---
+
+## 🌐 核心 API 規範 (Messaging API)
+
+本系統的核心 API 採用高度透明的設計，提供完整的執行軌跡與效能數據。
+
+### 1. 發送訊息與分析 (`getAIResponse`)
+- **Endpoint**: `POST /api/getAIResponse`
+- **功能**: 啟動 LangGraph 雙模型工作流，進行搜尋與投資分析。
+
+#### **Request Body (JSON)**
+| 參數名稱 | 型別 | 必填 | 說明 |
+| :--- | :--- | :--- | :--- |
+| `query` | string | 是 | 使用者的問題內容。 |
+| `chat_id` | string | 否 | 傳入 UUID 以延續對話上下文；若為 `null` 則啟動新 session。 |
+| `agent_config` | object | 否 | 包含 `enabled_tools` (list)，若為空則由 Agent 自行判斷工具。 |
+
+#### **範例請求**
+```json
+{
+  "query": "近期台積電表現如何？",
+  "chat_id": null,
+  "agent_config": {
+    "enabled_tools": ["search_stock_news", "get_market_recommendations"]
+  }
+}
+```
+
+#### **Response Body (JSON)**
+| 欄位名稱 | 說明 |
+| :--- | :--- |
+| `chat_id` | 本次對話的 UUID，前端後續應帶回此 ID。 |
+| `total_execution_time` | API 總執行耗時（秒）。 |
+| `router_trace` | 顯示 Router (mini) 的決策過程、耗時與所選工具。 |
+| `analyst_trace` | 顯示 Analyst (4o) 的生成耗時與最終報告內容。 |
+| `retrieval_sources` | 條列本次檢索到的原始數據來源、長度與狀態。 |
+
+---
+GPT-4o / GPT-4 Turbo & Embedding API
 *   **工作流程**: LangGraph (Agent 邏輯編排與工具調用)
 
 ---

@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- 資料庫連線配置 ---
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+MONGO_URI = os.getenv("MONGO_URI")
 MONGO_DB = os.getenv("MONGO_DB", "stock_insight")
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
@@ -62,7 +62,9 @@ async def search_news(
             payload = hit.payload
             context.append({
                 "title": payload.get("title", "未知標題"),
-                "mongo_id": payload.get("mongo_id"), # 與遷移指令同步
+                "mongo_id": payload.get("mongo_id"),
+                "publishAt": payload.get("publishAt"),
+                "url": payload.get("url"),
                 "chunk_idx": payload.get("chunk_idx"),
                 "content": payload.get("content", "") 
             })

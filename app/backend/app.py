@@ -6,7 +6,7 @@ load_dotenv()
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from backend.api import api_router  # 這裡就是引用 api/__init__.py 聚合後的路由
+from app.backend.api import api_router  # 統一使用 app.backend 開頭
 
 # 1. 初始化 FastAPI 應用程式
 app = FastAPI(

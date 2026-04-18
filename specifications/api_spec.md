@@ -59,7 +59,7 @@
   },
   "agent_config": {
     "tool_choice": "manual", 
-    "enabled_tools": ["news_vector_search", "AI_analysis_vector_search", "file_retriever"]
+    "enabled_tools": ["search_stock_news", "search_market_ai_analysis", "get_market_recommendations"]
   }
 }
 ```
@@ -141,7 +141,8 @@ sequenceDiagram
         end
     end
 
-    AG->>AG: LLM 綜合總結 (System Prompt + Chunks/全文 + 歷史 + Query)
+    Note over AG: [雙模型合成] Router (mini) 負責決策，Analyst (4o) 負責產出
+    AG->>AG: LLM 綜合總結 (System Prompt + Chunks/全文 + 結構化推薦)
     AG-->>BE: 回傳最終分析回答 (ai_response)
     
     BE->>PG: 持久化：儲存訊息、Tokens 與 Context Refs

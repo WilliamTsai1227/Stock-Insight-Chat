@@ -1,15 +1,16 @@
 services:
-  # 1. 後端 (FastAPI + AsyncPG)
+  # 1. 後端 (FastAPI + Agent)
   backend:
     build:
-      context: .. # 指向專案根目錄 (原本的 . 會抓錯路徑)
+      context: .. 
       dockerfile: deploy/backend.Dockerfile
     ports:
       - "8000:8000"
+    env_file:
+      - ../.env # 這邊會自動讀取你 .env 內的 MONGODB_URL 與 OPENAI_API_KEY
     environment:
-      # 更新連線字串至 Stock_Insight_Chat
-      - DATABASE_URL=postgresql+asyncpg://postgres:password123@db:5432/Stock_Insight_Chat
       - QDRANT_HOST=qdrant
+      - DATABASE_URL=postgresql+asyncpg://postgres:password123@db:5432/Stock_Insight_Chat
     depends_on:
       - db
       - qdrant
@@ -32,12 +33,11 @@ services:
     image: qdrant/qdrant:latest
     restart: always
     ports:
-      - "6333:6333" # REST API 控制台
-      - "6334:6334" # gRPC
+      - "6333:6333"
     volumes:
       - qdrant_storage:/qdrant/storage
 
-  # 4. 前端 (Nginx + Vanilla Frontend)
+  # 4. 前端 (Nginx + Frontend)
   frontend:
     build:
       context: .. 

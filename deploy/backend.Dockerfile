@@ -1,23 +1,24 @@
-FROM python:3.12-slim
+FROM python:3.11-slim
 
-WORKDIR /app
+# 工作目錄設為 /src
+WORKDIR /src
 
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
-ENV PYTHONPATH=/app
+# 只需要將 /src 加入路徑，Python 就會找到底下的 app 資料夾
+ENV PYTHONPATH=/src
 
-# 安裝編譯依賴 (針對 asyncpg/psycopg2)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# 安裝 Python 依賴
+# 安裝依賴
 COPY app/backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 複製後端程式與模組
-COPY app/backend ./backend
+# 複製整個 app 目錄到 /src/app
+COPY app ./app
 
-# 啟動命令 (uvicorn 會自動載入模組路徑)
-CMD ["uvicorn", "backend.app:app", "--host", "0.0.0.0", "--port", "8000"]
+# 啟動命令：指向層級明確的 app.backend.app:app
+CMD ["uvicorn", "app.backend.app:app", "--host", "0.0.0.0", "--port", "8000"]
