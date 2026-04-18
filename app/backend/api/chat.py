@@ -27,17 +27,12 @@ class RouterTrace(BaseModel):
     execution_time: float
     tool_calls: List[Dict[str, Any]]
     router_thought: str
-
-class AnalystTrace(BaseModel):
-    execution_time: float
-    content: str
-
 class MessageResponse(BaseModel):
-    status: str = "success"
+    status: str
     chat_id: str
     total_execution_time: float
-    router_trace: RouterTrace
-    analyst_trace: AnalystTrace
+    steps: List[Dict[str, Any]] # 改為儲存所有步驟
+    final_content: str        # 最後的分析結果截讀
     retrieval_sources: List[Dict[str, Any]]
 
 # --- 初始化 Agent ---
@@ -102,15 +97,8 @@ async def get_ai_response(request: MessageRequest):
             "status": "success",
             "chat_id": current_chat_id,
             "total_execution_time": total_time,
-            "router_trace": {
-                "execution_time": router_info.get("execution_time", 0),
-                "tool_calls": router_info.get("tool_calls", []),
-                "router_thought": router_info.get("thought", "Processing...")
-            },
-            "analyst_trace": {
-                "execution_time": analyst_info.get("execution_time", 0),
-                "content": analyst_info.get("content", "")
-            },
+            "steps": steps, # 展示所有 ReAct 歷程
+            "final_content": analyst_info.get("content", ""),
             "retrieval_sources": sources
         }
         

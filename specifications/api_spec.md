@@ -79,23 +79,41 @@
 ```json
 {
   "status": "success",
-  "data": {
-    "message_id": "postgresql_id",
-    "ai_response": "根據分析，台積電在 2021-2023 年間成長顯著...",
-    "project_id": "550e8400-e29b-41d4-a716-446655440000",
-    "chat_id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
-    "sources": [
-        { "id": "file_001(postgresql_id)", "type":"file", "title": "2024Q3營收報告.pdf", "chunks": 2 },
-        { "id": "file_002(postgresql_id)", "type":"image", "title": "台積電股價圖.jpg" },
-        { "id": "news_001(mongodb_id)", "type":"news", "title": "台積電近期新聞" },
-        { "id": "ai_analysis_001(mongodb_id)","type":"ai_analysis", "title": "台積電AI分析報告" }
-    ],
-    "usage": {
-        "prompt_tokens": 120500,
-        "completion_tokens": 500,
-        "is_cached": true 
+  "chat_id": "fb636ad8-8da0-4569-bddd-f479139523fd",
+  "total_execution_time": 34.879,
+  "steps": [
+    {
+      "node": "router",
+      "execution_time": 1.724,
+      "tool_calls": [
+        {
+          "name": "search_stock_news",
+          "query": "台積電 供應商 化學",
+          "start_date": "2026-04-11T00:00:00Z",
+          "end_date": null,
+          "raw_args": { ... }
+        }
+      ],
+      "thought": "為了精準回答，啟動 search_stock_news 來獲取股市資訊。"
+    },
+    { "node": "router", "thought": "... (ReAct 循環歷程)" },
+    {
+      "node": "analyst",
+      "execution_time": 6.256,
+      "content": "**[關鍵標的清單]** ... (最終分析全文)"
     }
-  }
+  ],
+  "final_content": "**[關鍵標的清單]** ... (主要回覆快捷讀取)",
+  "retrieval_sources": [
+    {
+      "tool": "news",
+      "title": "台積電近期新聞...",
+      "publishAt": "2026-04-17T18:13:36+08:00",
+      "url": "https://...",
+      "mongo_id": "69e21c49a3c443c88bbe56df",
+      "content_preview": "[標題]: 內容摘要..."
+    }
+  ]
 }
 ```
 

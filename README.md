@@ -159,11 +159,18 @@ python app/backend/agent/chat.py
 #### **Response Body (JSON)**
 | 欄位名稱 | 說明 |
 | :--- | :--- |
-| `chat_id` | 本次對話的 UUID，前端後續應帶回此 ID。 |
+| `status` | 請求狀態 (`success` / `error`)。 |
+| `chat_id` | 本次對話的 UUID，前端後續應帶回此 ID 以延續語境。 |
 | `total_execution_time` | API 總執行耗時（秒）。 |
-| `router_trace` | 顯示 Router (mini) 的決策過程、耗時與所選工具。 |
-| `analyst_trace` | 顯示 Analyst (4o) 的生成耗時與最終報告內容。 |
-| `retrieval_sources` | 條列本次檢索到的原始數據來源、長度與狀態。 |
+| `steps` | **核心執行軌跡 (ReAct Trace)**：包含所有 Router 的思考過程與 Analyst 的生成內容。 |
+| `final_content` | 最後一個分析節點產出的報告內容（快捷讀區）。 |
+| `retrieval_sources` | 條列本次檢索到的所有原始來源 Metadata (含 ID, URL, Preview)。 |
+
+#### **ReAct 執行範例 (以台積電化學公司偵測為例)**
+當問題較為複雜時，Agent 會啟動多次思考循環：
+1. **Step 1 (Router)**: 搜尋台積電供應商名單。
+2. **Step 2 (Router)**: 針對名單中的「台灣化學纖維」再次進行精確風險搜尋（ReAct）。
+3. **Step 3 (Analyst)**: 整合多段資訊，產出最終報告。
 
 ---
 GPT-4o / GPT-4 Turbo & Embedding API
@@ -237,8 +244,8 @@ GPT-4o / GPT-4 Turbo & Embedding API
 - [x] Qdrant 向量結構規劃與初始化
 - [x] 資料遷移腳本 (含排序、防重覆機制)
 - [x] 資料切分與檢索策略設計
-- [ ] LangGraph Agent 核心邏輯實現
-- [ ] 前端對話介面開發
+- [x] LangGraph Agent 核心邏輯實現 (支援 ReAct 模式)
+- [ ] 前端對話介面開發 (Next.js + 玻璃擬態設計)
 
 ---
 *Last Update: 2026-04-17*
