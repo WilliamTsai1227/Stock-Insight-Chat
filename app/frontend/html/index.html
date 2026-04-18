@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock Insight Chat | AI Investment Analyst</title>
+    <link rel="stylesheet" href="../css/index.css">
+    <!-- Google Fonts: Outfit & Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Marked for Markdown Parsing -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body class="dark-theme">
+    <div class="app-container">
+        <!-- 左側側欄: 專案與聊天列表 -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <i data-lucide="trending-up"></i>
+                    <span>StockInsight</span>
+                </div>
+                <button id="new-project-btn" class="icon-btn" title="新增專案">
+                    <i data-lucide="folder-plus"></i>
+                </button>
+            </div>
+            
+            <div class="project-list-container">
+                <h3>PROJECTS</h3>
+                <ul id="project-list" class="sidebar-list">
+                    <!-- 專案項目動態插入 -->
+                </ul>
+            </div>
+
+            <div class="chat-list-container">
+                <h3>CHATS</h3>
+                <ul id="chat-list" class="sidebar-list">
+                    <!-- 聊天項目動態插入 -->
+                </ul>
+                <button id="new-chat-btn" class="new-entry-btn">
+                    <i data-lucide="plus"></i> New Chat
+                </button>
+            </div>
+
+            <div class="sidebar-footer">
+                <div class="user-profile">
+                    <div class="avatar">W</div>
+                    <span>William Tsai</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- 主內容區: 聊天界面 -->
+        <main class="main-content">
+            <header class="chat-header">
+                <div class="chat-title-info">
+                    <h2 id="current-chat-title">歡迎回來</h2>
+                    <span id="chat-status" class="status-badge">Ready</span>
+                </div>
+                <div class="header-actions">
+                    <button class="icon-btn"><i data-lucide="share-2"></i></button>
+                    <button class="icon-btn"><i data-lucide="more-horizontal"></i></button>
+                </div>
+            </header>
+
+            <div id="chat-messages" class="chat-messages">
+                <!-- 歡迎畫面 -->
+                <div class="welcome-hero">
+                    <h1>您今天想研究哪檔股票？</h1>
+                    <p>我具備即時搜尋與分析能力，能為您追蹤供應鏈動向。</p>
+                </div>
+            </div>
+
+            <!-- 輸入區塊 -->
+            <footer class="chat-input-area">
+                <div class="input-container">
+                    <div class="toolbar">
+                        <div class="tool-settings">
+                            <button id="tool-toggle-btn" class="tool-btn" title="切換工具權限">
+                                <i data-lucide="settings-2"></i>
+                            </button>
+                            <div id="tool-popover" class="tool-popover hidden">
+                                <h5>工具權限控制</h5>
+                                <label><input type="checkbox" id="tool-auto" checked> 自動 (Smart Mode)</label>
+                                <div id="manual-tools" class="disabled-group">
+                                    <label><input type="checkbox" class="tool-check" value="search_stock_news"> 股市新聞搜尋</label>
+                                    <label><input type="checkbox" class="tool-check" value="search_market_ai_analysis"> 市場報告分析</label>
+                                    <label><input type="checkbox" class="tool-check" value="get_market_recommendations"> 推薦名單提取</label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <textarea id="user-input" placeholder="問問台積電的供應商風險..." rows="1"></textarea>
+                    <button id="send-btn" class="send-btn">
+                        <i data-lucide="arrow-up"></i>
+                    </button>
+                </div>
+                <p class="disclaimer">AI 產出僅供參考，不構成投資建議。</p>
+            </footer>
+        </main>
+    </div>
+
+    <!-- 腳本 -->
+    <script src="../js/index.js"></script>
+    <script>lucide.createIcons();</script>
+</body>
+</html>

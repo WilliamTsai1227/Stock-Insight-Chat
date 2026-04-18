@@ -1,6 +1,7 @@
 import os
 import time
-from typing import TypedDict, Annotated, List, Union, Dict, Any
+import asyncio
+from typing import TypedDict, Annotated, List, Tuple, Union, Dict, Any
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -30,59 +31,101 @@ class AgentState(TypedDict):
 # 這裡將之前寫好的 async 函式封裝成 LangChain 可識別的 @tool
 
 @tool
-async def search_stock_news(query: str, start_date: str = None, end_date: str = None):
+async def search_stock_news(
+    query: str,
+    start_date: str = None,
+    end_date: str = None,
+    stock_code: str = None,
+    news_type: str = None,
+):
     """
     搜尋股市相關新聞。
     注意：若使用者詢問「最近」、「最新」或「這幾天」，請根據當前提問時間計算出具體日期範圍。
     - 最近：通常指過去 14 天。
     範例：若今天是 2026-04-18，最近 14 天則 start_date="2026-04-04T00:00:00Z"。
     參數:
-        query: 關鍵字。
+        query: 搜尋關鍵字。
         start_date: 開始時間 (ISO 格式，如 2026-04-01T00:00:00Z)。
         end_date: 結束時間 (ISO 格式)。
+        stock_code: 股票代碼過濾 (如 "2330" 代表台積電)。若使用者提及特定個股，請填入其代碼。
+        news_type: 新聞類型過濾 (如 "台股新聞" 或 "國際新聞")。
     """
     embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
     query_vector = await embeddings.aembed_query(query)
-    
+
     result = await search_news(
-        query=query, 
-        query_embedding=query_vector, 
+        query=query,
+        query_embedding=query_vector,
         chat_id="agent_session",
         start_date=start_date,
-        end_date=end_date
+        end_date=end_date,
+        stock_code=stock_code,
+        news_type=news_type,
     )
-    
+
     # 格式化回傳給 LLM 讀取的字串
     if not result["context"]:
         return "找不到相關新聞。"
-    
+
     output = "找到以下新聞片段：\n"
     for item in result["context"]:
-        output += f"- 【{item['title']}】: {item['content']}\n"
+        stocks_info = ""
+        if item.get("stock_names"):
+            stocks_info = f" [相關個股: {', '.join(item['stock_names'])}]"
+        output += f"- 【{item['title']}】{stocks_info}: {item['content']}\n"
     return output
 
 @tool
-async def search_market_ai_analysis(query: str, start_date: str = None, end_date: str = None):
+async def search_market_ai_analysis(
+    query: str,
+    start_date: str = None,
+    end_date: str = None,
+    sentiment: str = None,
+    industry: str = None,
+):
     """
-    搜尋投研機構成產出的 AI 市場分析報告。這比一般新聞更具備專業深度。
+    搜尋投研機構產出的 AI 市場分析報告。這比一般新聞更具備專業深度。
     注意：若問題包含「最近」、「最近一月」或「近況」，必須填入具體的 start_date。
     - 最近一月：指過去 30 天。
     參數:
-        query: 關鍵字。
+        query: 搜尋關鍵字。
         start_date: 開始時間 (ISO 格式)。
         end_date: 結束時間 (ISO 格式)。
+        sentiment: 情緒過濾 ("positive" / "negative" / "neutral")。若使用者問「利空」用 negative，「利多」用 positive。
+        industry: 產業標籤過濾 (如 "半導體測試"、"能源")。
     """
     embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
     query_vector = await embeddings.aembed_query(query)
-    
+
     result = await search_ai_analysis(
-        query=query, 
-        query_embedding=query_vector, 
+        query=query,
+        query_embedding=query_vector,
         chat_id="agent_session",
         start_date=start_date,
-        end_date=end_date
+        end_date=end_date,
+        sentiment=sentiment,
+        industry=industry,
     )
-    
+
+    if not result["context"]:
+        return "找不到相關的 AI 分析報告。"
+
+    output = "找到以下 AI 分析報告：\n"
+    for item in result["context"]:
+        meta_parts = []
+        if item.get("sentiment_label"):
+            meta_parts.append(f"情緒: {item['sentiment_label']}")
+        if item.get("industry_list"):
+            meta_parts.append(f"產業: {', '.join(item['industry_list'])}")
+        meta = f" ({', '.join(meta_parts)})" if meta_parts else ""
+
+        output += f"\n--- 【{item['title']}】{meta} ---\n"
+        output += f"{item['content']}\n"
+        if item.get("source_news_titles"):
+            output += f"  參考新聞: {'; '.join(item['source_news_titles'][:3])}\n"
+
+    return output
+
 @tool
 async def get_market_recommendations(start_date: str = None, end_date: str = None):
     """
@@ -96,35 +139,39 @@ async def get_market_recommendations(start_date: str = None, end_date: str = Non
     embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
     # 使用固定關鍵字來抓取推薦類型的報告
     query_vector = await embeddings.aembed_query("推薦股票、強勢產業、潛力標的、看好板塊")
-    
+
     result = await search_recommendations(
         query_embedding=query_vector,
         start_date=start_date,
         end_date=end_date
     )
-    
+
     if not result["stocks"] and not result["industries"]:
         return "在此時間區間內找不到特定推薦的股票或產業。"
-    
+
     output = "根據近期分析報告，整理出的推薦資訊如下：\n"
     if result["stocks"]:
         output += f"📈 推薦股票：{', '.join(result['stocks'])}\n"
     if result["industries"]:
         output += f"🏭 關注產業：{', '.join(result['industries'])}\n"
-        
+
     output += "\n資料來源報告：\n"
-    for src in result["sources"][:3]: # 只列出前三個來源標題
-        output += f"- {src['title']} ({src['publishAt'][:10]})\n"
-        
+    for src in result["sources"][:5]:
+        sentiment_tag = f" [{src.get('sentiment_label', '')}]" if src.get("sentiment_label") else ""
+        publish_date = src.get("publishAt", "")[:10] if src.get("publishAt") else "未知日期"
+        output += f"- {src['title']} ({publish_date}){sentiment_tag}\n"
+        if src.get("source_news_titles"):
+            output += f"  參考新聞: {'; '.join(src['source_news_titles'][:2])}\n"
+
     return output
 
 tools = [search_stock_news, search_market_ai_analysis, get_market_recommendations]
 
 # --- 模型配置 ---
 # 1. 導航模型 (Router): 速度快、工具調用準確
-router_model_base = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+router_model_base = ChatOpenAI(model="gpt-5-mini", temperature=1)
 # 2. 分析模型 (Analyst): 深度思考、文筆詳盡
-analyst_model = ChatOpenAI(model="gpt-4o", temperature=0.5)
+analyst_model = ChatOpenAI(model="gpt-5", temperature=1)
 
 # --- 3. 定義節點 (Nodes) ---
 
@@ -157,6 +204,13 @@ async def call_router(state: AgentState):
 
 [時間規範]
 - 只要提到「最近」、「最新」或「這週」，請統一計算為「過去 14 天」並填入 start_date。
+
+[精準過濾指引 - 善用進階參數]
+- 若使用者提及**特定股票**，使用 search_stock_news 時請填入 stock_code 參數。常見代碼：台積電="2330"、鴻海="2317"、聯發科="2454"、台達電="2308"。
+- 若使用者僅關心「台股」相關，使用 search_stock_news 時可設定 news_type="台股新聞"；若關心國際局勢則填 "國際新聞"。
+- 若使用者詢問「利空消息」或「負面新聞」，使用 search_market_ai_analysis 時請設定 sentiment="negative"；反之「利多」設定 sentiment="positive"。
+- 若使用者指定產業（如「半導體」、「能源」、「房地產」），使用 search_market_ai_analysis 時請填入 industry 參數，如 industry="半導體"。
+- 上述進階參數皆為可選，只在使用者提問明確對應時才填入，不要強制猜測。
 """
     
     # 核心修正：動態挑選工具物件實體，進行硬性綁定
@@ -210,20 +264,18 @@ async def call_analyst(state: AgentState):
     messages = state["messages"]
     current_now = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
     
-    # 使用最強的模型和最詳盡的指令來撰寫最後的回覆
-    analyst_prompt = f"""你是一位資深首席股市分析師。現在是 {current_now}。
-    請根據對話歷史中搜尋工具 (Tool Messages) 回傳的所有原始資料，撰寫一份極具深度且專業的投資研究報告。
+    # 使用 Gemini 風格：自然、具備層次感且充滿洞察力的投研報告
+    analyst_prompt = f"""你是一位具備頂尖洞察力的資深分析師，擅長從碎片化的數據中提取最有價值的投資核心資訊。現在是 {current_now}。
 
-    你的報告**必須**嚴格遵守以下格式規範：
-    1. **[關鍵標的清單]**：如果你在工具回傳中看到了「推薦股票」或「推薦產業」，請務必在報告的一開始或結尾，使用「無序列表 (Bullet Points)」將它們**完整**列出，不可省略任何一個。
-    - 格式範例：
-        * 股票：台積電(2330)、世芯-KY(3661)、...
-        * 產業：AI 伺服器、先進封裝...
-    2. **[深度分析內容]**：基於新聞與分析報告，解讀市場脈動。
-    3. **[數據引用]**：必須引用具體的日期、股價或損益預估數據。
-    4. **[繁體中文]**：一律使用專業的繁體中文投研風格。
-
-    請注意：不要為了美觀而進行「過度摘要」。使用者需要看到完整的檢索資訊，加上你的專業點評。
+    請將對話歷史中搜尋工具 (Tool Messages) 提供的一切資料，轉化為一封「清晰、優雅且具備專業點評」的分析報告。
+    
+    ### 撰寫規範：
+    * **語意化結構**：請使用多級標題（如：## 市場核心觀察、### 關鍵標的追蹤），避免死板的 [1][2] 格式。
+    * **數據強調**：對於重要的「日期、股價、成長率、股票代碼」，請務必使用 **粗體** 標註。
+    * **深度合成**：將多來源資訊進行交叉驗證與點評，解釋其對投資者的實質意義與潛在風險。
+    * **標的清單**：請在報告末尾優雅地列出提到的股票或產業，並附上入選理由。
+    * **語氣風格**：流暢、專業且友善的繁體中文。
+    * **細節**：如有數據，像是股價、漲跌幅、成交量等，任何數據請務必列出。
     """
     full_messages = [SystemMessage(content=analyst_prompt)] + messages
     response = await analyst_model.ainvoke(full_messages)
@@ -248,56 +300,107 @@ async def call_analyst(state: AgentState):
     return {"messages": [response], "trace": trace}
 
 async def call_tools(state: AgentState):
-    """執行工具呼叫節點"""
+    """執行工具呼叫節點 (v3: 並行執行 + Embedding 快取)"""
     last_message = state["messages"][-1]
-    tool_messages = []
-    new_retrieved_data = []
-    
-    for tool_call in last_message.tool_calls:
+
+    # 🆕 P4: 統一建立 Embedding 實例 + 快取，避免重複 API 呼叫
+    embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+    embedding_cache: Dict[str, List[float]] = {}
+
+    async def get_cached_embedding(text: str) -> List[float]:
+        if text not in embedding_cache:
+            embedding_cache[text] = await embeddings.aembed_query(text)
+        return embedding_cache[text]
+
+    # 🆕 P3: 定義單一工具的執行邏輯，供並行調用
+    async def execute_single_tool(tool_call) -> Tuple[ToolMessage, List[Dict[str, Any]]]:
         tool_name = tool_call["name"]
         args = tool_call["args"]
-        
-        # 執行工具並取得原始結構化結果
+        retrieved = []
+
         if tool_name == "search_stock_news":
+            query_text = args.get("query", "")
             raw_result = await search_news(
-                query=args.get("query"),
-                query_embedding=(await OpenAIEmbeddings().aembed_query(args.get("query"))),
+                query=query_text,
+                query_embedding=(await get_cached_embedding(query_text)),
                 chat_id="api_call",
                 start_date=args.get("start_date"),
-                end_date=args.get("end_date")
+                end_date=args.get("end_date"),
+                stock_code=args.get("stock_code"),
+                news_type=args.get("news_type"),
             )
-            # 給 AI 看的簡化內容
-            ai_content = "\n\n".join([f"[{c.get('title')}]: {c.get('content')}" for c in raw_result.get("context", [])])
-            # 給 API 看的完整 Metadata
+            parts = []
             for c in raw_result.get("context", []):
-                new_retrieved_data.append({**c, "source_tool": "news"})
-                
+                stock_info = ""
+                if c.get("stock_names"):
+                    stock_info = f" [相關: {', '.join(c['stock_names'])}]"
+                parts.append(f"[{c.get('title')}]{stock_info}: {c.get('content')}")
+            ai_content = "\n\n".join(parts) if parts else "找不到相關新聞。"
+            for c in raw_result.get("context", []):
+                retrieved.append({**c, "source_tool": "news"})
+
         elif tool_name == "search_market_ai_analysis":
+            query_text = args.get("query", "")
             raw_result = await search_ai_analysis(
-                query=args.get("query"),
-                query_embedding=(await OpenAIEmbeddings().aembed_query(args.get("query"))),
+                query=query_text,
+                query_embedding=(await get_cached_embedding(query_text)),
                 chat_id="api_call",
                 start_date=args.get("start_date"),
-                end_date=args.get("end_date")
+                end_date=args.get("end_date"),
+                sentiment=args.get("sentiment"),
+                industry=args.get("industry"),
             )
-            ai_content = "\n\n".join([f"[{c.get('title')}]: {c.get('content')}" for c in raw_result.get("context", [])])
+            parts = []
             for c in raw_result.get("context", []):
-                new_retrieved_data.append({**c, "source_tool": "ai_analysis"})
-                
+                meta = ""
+                meta_parts = []
+                if c.get("sentiment_label"):
+                    meta_parts.append(f"情緒:{c['sentiment_label']}")
+                if c.get("industry_list"):
+                    meta_parts.append(f"產業:{','.join(c['industry_list'])}")
+                if meta_parts:
+                    meta = f" ({', '.join(meta_parts)})"
+                entry = f"[{c.get('title')}]{meta}: {c.get('content')}"
+                if c.get("source_news_titles"):
+                    entry += f"\n  參考新聞: {'; '.join(c['source_news_titles'][:3])}"
+                parts.append(entry)
+            ai_content = "\n\n".join(parts) if parts else "找不到相關的 AI 分析報告。"
+            for c in raw_result.get("context", []):
+                retrieved.append({**c, "source_tool": "ai_analysis"})
+
         elif tool_name == "get_market_recommendations":
             raw_result = await search_recommendations(
-                query_embedding=(await OpenAIEmbeddings().aembed_query("推薦股票與強勢產業")),
+                query_embedding=(await get_cached_embedding("推薦股票與強勢產業")),
                 start_date=args.get("start_date"),
                 end_date=args.get("end_date")
             )
-            ai_content = f"推薦股票清單: {raw_result.get('stocks')}\n推薦產業清單: {raw_result.get('industries')}"
+            lines = []
+            if raw_result.get("stocks"):
+                lines.append(f"推薦股票清單: {', '.join(raw_result['stocks'])}")
+            if raw_result.get("industries"):
+                lines.append(f"推薦產業清單: {', '.join(raw_result['industries'])}")
+            for src in raw_result.get("sources", [])[:5]:
+                sentiment_tag = f" [{src.get('sentiment_label', '')}]" if src.get("sentiment_label") else ""
+                lines.append(f"- {src.get('title')} ({src.get('publishAt', '')[:10]}){sentiment_tag}: {src.get('content', '')[:200]}")
+            ai_content = "\n".join(lines) if lines else "找不到推薦資訊。"
             for s in raw_result.get("sources", []):
-                new_retrieved_data.append({**s, "source_tool": "recommendations"})
+                retrieved.append({**s, "source_tool": "recommendations"})
         else:
             ai_content = f"錯誤：找不到工具 {tool_name}"
-            
-        tool_messages.append(ToolMessage(content=ai_content, tool_call_id=tool_call["id"], name=tool_name))
-        
+
+        msg = ToolMessage(content=ai_content, tool_call_id=tool_call["id"], name=tool_name)
+        return msg, retrieved
+
+    # 🆕 P3: 並行執行所有工具 (asyncio.gather)
+    results = await asyncio.gather(*[
+        execute_single_tool(tc) for tc in last_message.tool_calls
+    ])
+
+    tool_messages = [r[0] for r in results]
+    new_retrieved_data = []
+    for r in results:
+        new_retrieved_data.extend(r[1])
+
     return {"messages": tool_messages, "retrieved_data": new_retrieved_data}
 
 # --- 4. 定義邊界邏輯 (Conditional Edges) ---

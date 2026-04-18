@@ -50,11 +50,32 @@ pip install -r app/backend/requirements.txt
 將資料從 MongoDB 遷移至 Qdrant：
 
 ```bash
-# Step A: 初始化 Collection 與索引
-python app/backend/scripts/setup_qdrant.py
+cd app/backend
 
-# Step B: 執行遷移 (建議先 limit 10 進行測試)
-python app/backend/scripts/migrate_to_qdrant.py --limit 10
+# Step A: 初始化 Collection 與索引
+python -m scripts.setup_qdrant
+
+# Step B: Dry Run 預覽切分結果 (推薦先執行確認)
+python -m scripts.migrate_to_qdrant --dry-run --limit 10
+
+# Step C: 正式遷移 (各取最新 100 篇)
+python -m scripts.migrate_to_qdrant --limit 100
+
+# Step D: 驗證遷移結果
+python -m scripts.test_qdrant_filter
+```
+
+#### 遷移進階用法
+```bash
+# 只遷移特定 collection
+python -m scripts.migrate_to_qdrant --collection news --limit 500
+python -m scripts.migrate_to_qdrant --collection ai_analysis --limit 200
+
+# 全量遷移
+python -m scripts.migrate_to_qdrant --limit 99999
+
+# 重建 Collection (⚠️ 清除所有現有資料)
+python -m scripts.setup_qdrant --reset
 ```
 
 ### 5. 驗證資料 (Qdrant Dashboard)
@@ -92,31 +113,46 @@ python app/backend/agent/chat.py
 *   **時區規範**: `Asia/Taipei (UTC+8)`
 
 ### 2. Collection: `news` (股市新聞)
-收錄每日爬蟲抓取的最新股市動態，並進行精細分段。
+收錄每日爬蟲抓取的最新股市動態，依語意段落進行精細切分。
 
 | 欄位 (Payload Key) | 資料型態 | 索引類型 | 說明 |
 | :--- | :--- | :--- | :--- |
-| `mongo_id` | String | Keyword | 對應 MongoDB 原始新聞 ID |
-| `title` | String | Text | 新聞標題 |
+| `mongo_id` | String | - | 對應 MongoDB 原始新聞 ID |
+| `title` | String | - | 新聞標題 |
 | `publishAt` | String (ISO) | **Datetime** | 發布時間 (支援時間區間過濾) |
 | `source` | String | Keyword | 來源 (如: anue) |
 | `category` | String | Keyword | 文章分類 (如: headline) |
-| `stock_list` | Array[String] | Keyword | 提及之股票代碼 |
+| `type` | String | Keyword | 新聞類型 (如: 台股新聞, 國際新聞) |
+| `stock_codes` | Array[String] | Keyword | 提及之股票代碼 (如: ["3017", "2330"]) |
+| `stock_names` | Array[String] | Keyword | 提及之股票名稱 (如: ["奇鋐", "台積電"]) |
+| `keywords` | Array[String] | Keyword | 新聞關鍵字 (如: ["水冷散熱", "AI伺服器"]) |
+| `chunk_type` | String | Keyword | `full` (短文不切) 或 `partial` (長文切分後) |
+| `chunk_idx` | Integer | Integer | 當前片段序號 |
+| `total_chunks` | Integer | Integer | 該文章總片段數 |
 | `content` | String | - | 文字片段內容 (含標題前綴) |
 | `url` | String | - | 原始新聞連結 |
+| `collection_type` | String | Keyword | 固定為 `news` |
 
 ### 3. Collection: `ai_analysis` (AI 產業分析)
-收錄由 LLM 產出的深度統整與產業趨勢分析。
+收錄由 LLM 產出的深度統整與產業趨勢分析，按欄位語意角色拆分為多個向量。
 
 | 欄位 (Payload Key) | 資料型態 | 索引類型 | 說明 |
 | :--- | :--- | :--- | :--- |
-| `mongo_id` | String | Keyword | 對應 MongoDB 原始分析報告 ID |
-| `title` | String | Text | 報告標題 |
+| `mongo_id` | String | Keyword | 對應 MongoDB 原始分析報告 ID (用於 group_by 聚合) |
+| `title` | String | - | 報告標題 |
 | `publishAt` | String (ISO) | **Datetime** | 生成時間 |
-| `sentiment` | String | Keyword | 情緒標籤 (`positive`, `negative`, `neutral`) |
+| `chunk_type` | String | Keyword | 語意角色: `summary` / `key_news` / `stock_insight` |
+| `sentiment` | String | - | 原始情緒描述文字 |
+| `sentiment_label` | String | Keyword | 情緒分類: `positive` / `negative` / `neutral` |
 | `industry_list` | Array[String] | Keyword | 涉及產業 (如: 半導體、能源) |
-| `stock_list` | Array[String] | Keyword | 推薦或提及之股票代碼 |
-| `content` | String | - | 分析摘要或重要新聞片段 |
+| `stock_list` | Array | Keyword | 推薦或提及之股票 (如: [["tw","6515","穎崴"]]) |
+| `category` | String | Keyword | 來源分類 (如: headline) |
+| `is_summary` | Boolean | Bool | 是否為彙總報告 |
+| `analysis_batch` | Integer | Integer | 分析批次編號 |
+| `source_news_titles` | Array[String] | - | 引用的來源新聞標題 |
+| `source_news_ids` | Array[String] | - | 引用的來源新聞 MongoDB IDs |
+| `content` | String | - | 分析內容片段 |
+| `collection_type` | String | Keyword | 固定為 `ai_analysis` |
 
 ---
 
@@ -125,8 +161,9 @@ python app/backend/agent/chat.py
 *   **後端系統**: Python FastAPI (非同步架構)
 *   **向量檢索**: Qdrant (Rust-based Vector Database)
 *   **數據儲存**: MongoDB Atlas (雲端全文存儲) & PostgreSQL (對話狀態管理)
-*   **AI 核心**: OpenAI GPT-4o & GPT-4o-mini (雙模型架構)
+*   **AI 核心**: OpenAI GPT-5 & GPT-5 mini (雙模型架構)
 *   **工作排程**: LangGraph (Agent 邏輯編排與狀態隔離)
+*   **文本切分**: LangChain `RecursiveCharacterTextSplitter` (語意段落感知)
 
 ---
 
@@ -173,8 +210,12 @@ python app/backend/agent/chat.py
 3. **Step 3 (Analyst)**: 整合多段資訊，產出最終報告。
 
 ---
-GPT-4o / GPT-4 Turbo & Embedding API
-*   **工作流程**: LangGraph (Agent 邏輯編排與工具調用)
+
+### 🧠 核心模型架構 (Next-Gen AI Stack)
+為了達到速度與品質的最佳平衡，系統採用雙模型動態協作：
+- **Router LLM**: `GPT-5 mini` (負責極速意圖辨識、工具決策與 ReAct 導航)。
+- **Analyst LLM**: `GPT-5` (負責旗艦級資料合成、深度投資見解與專業報告產出)。
+- **Embedding**: `text-embedding-3-small` (高效能且低成本的向量轉換)。
 
 ---
 
@@ -182,30 +223,48 @@ GPT-4o / GPT-4 Turbo & Embedding API
 
 系統內建完善的數據 ETL 工具，可確保 Qdrant 與 MongoDB 資料同步：
 
-*   `setup_qdrant.py`: 自動初始化 Collection 與建立高性能索引（含 Datetime 索引）。
+*   `setup_qdrant.py`: 自動初始化 Collection 與建立高性能索引（含 Datetime / Keyword / Integer / Bool 索引），支援 `--reset` 旗標重建。
 *   `migrate_to_qdrant.py`: 具備**防重複機制**的遷移腳本。
-    *   利用 `uuid5` 產生確定性 ID，確保資料變動時僅執行 `upsert`。
-    *   支援語義化情緒標籤轉換與時間時區校正。
+    *   利用 `uuid5` 產生確定性 ID（基於 `mongo_id` + `chunk_type` + `chunk_idx`），確保資料變動時僅執行 `upsert`。
+    *   支援 `--dry-run` 模式預覽切分結果。
+    *   支援 `--collection` 指定遷移特定 collection。
+    *   Batch Embedding (批次 256 筆)，大幅加速遷移效率。
+    *   Exponential backoff 重試機制，提升穩定性。
+*   `test_qdrant_filter.py`: 全面驗證 v2 metadata 的過濾/聚合功能。
 
 ---
 
 ## 🧩 資料切分與儲存策略 (Chunking & Storage Strategy)
 
-為了確保 RAG (檢索增強生成) 的品質與系統的強健性，本專案採用以下策略：
+為了確保 RAG (檢索增強生成) 的品質與系統的強健性，本專案採用**混合式切分策略**，針對不同資料性質使用最適合的方法：
 
 ### 1. 文本切分 (Chunking Strategy)
-*   **固定長度切分**: 每 1000 個字元切分為一個片段 (Chunk)。
-*   **上下文注入 (Context Injection)**: 每個片段開頭均強制加上 `[標題]:` 前綴方案。這能確保向量检索到的任何片段都具備明確的主題背景，大幅提升 LLM 回答的準確度。
-*   **組合內容**: AI 分析報告會將「摘要」與「重要新聞」合併後再行切分，確保關鍵資訊不遺漏。
+
+#### News Collection — 語意段落切分
+*   **工具**: LangChain `RecursiveCharacterTextSplitter`
+*   **參數**: `chunk_size=800`, `chunk_overlap=150`
+*   **分隔符**: `["\n\n", "\n", "。", "，", "；", " ", ""]`（優先在段落與句號處斷開）
+*   **智慧判斷**: 短文 (≤ 800 字) 不切分，直接作為單一 chunk (`chunk_type=full`)；長文才進行語意切分 (`chunk_type=partial`)
+*   **上下文注入**: 每個片段開頭均加上 `[標題]` 前綴，確保 Embedding 具備主題背景
+
+#### AI Analysis Collection — 按欄位語意角色拆分
+*   **策略**: 每篇 AI 分析報告按欄位角色拆為最多 3 個獨立向量，**不做二次切割**
+*   **Chunk 類型**:
+    | chunk_type | 內容來源 | 搜尋場景 |
+    | :--- | :--- | :--- |
+    | `summary` | `article_title` + `summary` | 搜尋「某產業近況」 |
+    | `key_news` | `important_news` | 搜尋「具體事件」 |
+    | `stock_insight` | `potential_stocks_and_industries` | 搜尋「推薦個股」 |
 
 ### 2. 資料一致性與防重複 (Idempotency)
-*   **確定性 ID 生成**: 系統使用 `uuid5` 演算法，根據 `mongo_id` 與 `chunk_idx` 產生固定 UUID。
+*   **確定性 ID 生成**: 系統使用 `uuid5` 演算法，根據 `mongo_id` + `chunk_type` + `chunk_idx` 產生固定 UUID。
 *   **覆蓋更新 (Upsert)**: Qdrant 偵測到相同 ID 時會自動執行更新，這讓遷移腳本可以多次重複執行而不會造成資料庫重複寫入。
 
 ### 3. 資料精煉與同步 (Data Refinement & Sync)
 *   **最新優先 (Newest First)**: 遷移腳本預設採用 `.sort("_id", -1)` 排序，確保優先搬移最新的新聞與分析資料。
-*   **情緒標準化**: 使用關鍵字比對技術 (Heuristic logic) 將原始情緒文本歸類為 `positive`, `negative`, 或 `neutral`。
+*   **情緒標準化**: 保留原始情緒文字（`sentiment`），同時使用 Heuristic 比對產生分類標籤（`sentiment_label`）供 Qdrant filter 使用。
 *   **時間格式統一**: 將所有時間轉換為 `Asia/Taipei` 時區的 ISO 8601 格式，以支援精確的時間區間檢索。
+*   **Metadata 全量保留**: keywords、stock_names、source_news_titles 等欄位完整寫入 Qdrant payload。
 *   **對應關係**:
     *   MongoDB `news` -> Qdrant `news`
     *   MongoDB `AI_news_analysis` -> Qdrant `ai_analysis`
@@ -218,9 +277,13 @@ GPT-4o / GPT-4 Turbo & Embedding API
 
 ### 1. 第一階段：向量檢索 (Qdrant)
 *   **目標**: 快速定位最相關的資料片段。
-*   **搜尋方式**: 透過 `text-embeddings-3-small` 產生的 `query_vector` 進行 **Cosmic Similarity (餘弦相似度)** 搜尋。
-*   **廣義混合搜尋 (Hybrid)**: 雖然目前未配置 Sparse Vector，但系統結合了 **向量搜尋 + 標籤過濾 (Payload Filtering)**。可同時針對 `stock_list`、`publishAt` 等 metadata 進行精確篩選。
-*   **輸出**: 回傳 Top-K 個 **Chunks (片段)**，每個片段皆附帶 `[標題]` 前綴以增強語義脈絡。
+*   **搜尋方式**: 透過 `text-embeddings-3-small` 產生的 `query_vector` 進行 **Cosine Similarity (餘弦相似度)** 搜尋。
+*   **去重聚合**: 使用 `search_groups(group_by="mongo_id")` 確保同一篇文章/報告不會因多 chunks 而重複出現。
+*   **精準過濾 (Payload Filtering)**:
+    *   `news` collection: 支援 `publishAt` (時間)、`stock_codes` (股票代碼)、`type` (新聞類型) 過濾
+    *   `ai_analysis` collection: 支援 `publishAt` (時間)、`chunk_type` (語意角色)、`sentiment_label` (情緒)、`industry_list` (產業) 過濾
+*   **智慧 chunk_type 路由**: `search_recommendations` 工具自動鎖定 `chunk_type=stock_insight`，精準命中潛力標的分析。
+*   **輸出**: 回傳 Top-K 個不重複的文章/報告，每篇附帶完整 metadata。
 
 ### 2. 第二階段：全文提領 (MongoDB)
 *   **目標**: 提供深度分析所需的完整上下文。
@@ -230,8 +293,8 @@ GPT-4o / GPT-4 Turbo & Embedding API
 
 ### 3. 專項工具：結構化推薦 (Recommendations)
 *   **工具**: `get_market_recommendations`
-*   **功能**: 專門從 `ai_analysis` Payload 中提取 `stock_list` 與 `industry_list`。
-*   **策略**: 使用推薦關鍵字向量觸發關鍵報告，彙整並去重後產出潛力標的清單。
+*   **功能**: 專門搜尋 `chunk_type=stock_insight` 的向量，從 payload 中提取 `stock_list` 與 `industry_list`。
+*   **策略**: 使用推薦關鍵字向量觸發關鍵報告，彙整並去重後產出潛力標的清單，同時附帶情緒標籤與來源溯源。
 
 ### 4. 時間同步機制 (Temporal Sync)
 *   **邏輯**: Agent 會根據當下問題鎖定一個時間窗口（如：最近一週）。
@@ -243,9 +306,12 @@ GPT-4o / GPT-4 Turbo & Embedding API
 - [x] 資料庫 Schema 設計 (PostgreSQL+MongoDB)
 - [x] Qdrant 向量結構規劃與初始化
 - [x] 資料遷移腳本 (含排序、防重覆機制)
-- [x] 資料切分與檢索策略設計
+- [x] v2 混合式切分策略 (語意段落切分 + 欄位角色拆分)
+- [x] Metadata 全量保留與精準過濾 (stock_codes, keywords, chunk_type, sentiment_label)
+- [x] search_groups 聚合去重
+- [x] Batch Embedding + Dry Run 預覽
 - [x] LangGraph Agent 核心邏輯實現 (支援 ReAct 模式)
-- [ ] 前端對話介面開發 (Next.js + 玻璃擬態設計)
+- [x] 前端對話介面開發 (Vanilla JS + HTML/CSS 玻璃擬態設計)
 
 ---
-*Last Update: 2026-04-17*
+*Last Update: 2026-04-18*

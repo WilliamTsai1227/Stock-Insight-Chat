@@ -16,3 +16,5 @@ pytest-asyncio
 langgraph==0.0.32
 langchain==0.1.14
 langchain-openai==0.1.1
+langchain-text-splitters==0.0.1
+tqdm==4.66.2

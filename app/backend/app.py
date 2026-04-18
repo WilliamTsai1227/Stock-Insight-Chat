@@ -16,16 +16,10 @@ app = FastAPI(
 )
 
 # 2. 設定 CORS (跨域資源共享)
-# 確保前端 (例如 localhost:3000) 可以正常與後端溝通
-origins = [
-    "http://localhost",
-    "http://localhost:3000",
-    "http://localhost:5173",  # Vite 預設端口
-]
-
+# 確保前端可以正常與後端溝通
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"], # 開發環境允許所有
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
