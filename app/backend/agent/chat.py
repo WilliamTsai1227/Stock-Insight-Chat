@@ -37,6 +37,8 @@ async def search_stock_news(
     end_date: str = None,
     stock_code: str = None,
     news_type: str = None,
+    keyword: str = None,
+    stock_name: str = None,
 ):
     """
     搜尋股市相關新聞。
@@ -49,6 +51,12 @@ async def search_stock_news(
         end_date: 結束時間 (ISO 格式)。
         stock_code: 股票代碼過濾 (如 "2330" 代表台積電)。若使用者提及特定個股，請填入其代碼。
         news_type: 新聞類型過濾 (如 "台股新聞" 或 "國際新聞")。
+        keyword: 關鍵字標籤過濾 (如 "國巨"、"台積電"、"AI")。
+            用於匹配新聞的 keywords 標籤。
+        stock_name: 股票名稱過濾 (如 "勤誠"、"台積電")。
+            用於匹配新聞的 stock_names 標籤。
+        keyword、stock_code、stock_name 三者以 OR 邏輯匹配，只要其中任一命中即可。
+        建議查詢個股時同時填入三者以最大化搜尋命中率。
     """
     embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
     query_vector = await embeddings.aembed_query(query)
@@ -61,6 +69,8 @@ async def search_stock_news(
         end_date=end_date,
         stock_code=stock_code,
         news_type=news_type,
+        keyword=keyword,
+        stock_name=stock_name,
     )
 
     # 格式化回傳給 LLM 讀取的字串
@@ -206,11 +216,24 @@ async def call_router(state: AgentState):
 - 只要提到「最近」、「最新」或「這週」，請統一計算為「過去 14 天」並填入 start_date。
 
 [精準過濾指引 - 善用進階參數]
-- 若使用者提及**特定股票**，使用 search_stock_news 時請填入 stock_code 參數。常見代碼：台積電="2330"、鴻海="2317"、聯發科="2454"、台達電="2308"。
+- 若使用者提及**特定股票或公司名稱**（如「國巨」、「勤誠」、「台積電」），使用 search_stock_news 時請**同時**填入 stock_code 和 keyword 參數。
+  例如查詢國巨：stock_code="2327", keyword="國巨", stock_name="國巨"。
+  這三個參數以 OR 邏輯匹配，只要其中一個命中即可，能最大化搜尋命中率。
+  常見代碼：台積電="2330"、鴻海="2317"、聯發科="2454"、台達電="2308"、國巨="2327"。
 - 若使用者僅關心「台股」相關，使用 search_stock_news 時可設定 news_type="台股新聞"；若關心國際局勢則填 "國際新聞"。
 - 若使用者詢問「利空消息」或「負面新聞」，使用 search_market_ai_analysis 時請設定 sentiment="negative"；反之「利多」設定 sentiment="positive"。
 - 若使用者指定產業（如「半導體」、「能源」、「房地產」），使用 search_market_ai_analysis 時請填入 industry 參數，如 industry="半導體"。
 - 上述進階參數皆為可選，只在使用者提問明確對應時才填入，不要強制猜測。
+
+[空結果重試策略 - 極重要]
+當你看到工具回傳的 Tool Message 包含「找不到」、「找不到相關新聞」、「找不到相關的 AI 分析報告」或「找不到推薦資訊」等空結果時，你「不得」直接回覆使用者或提供選項。你必須按照以下策略自動重試：
+1. **擴大時間範圍**：將 start_date 往前推至 90 天或更久。
+2. **切換新聞類型**：若 news_type 為「台股新聞」，試改為「國際新聞」，反之亦然。也可嘗試不帶 news_type。
+3. **更換關鍵字**：嘗試用英文名稱（如「Yageo」代替「國巨」）、公司全稱、或更廣泛的產業關鍵字。
+4. **放寬過濾條件**：移除 stock_code、sentiment、industry 等限制條件重試。
+5. **嘗試其他工具**：若某個工具無結果，改用另一個工具搜尋。
+
+每次重試至少嘗試 2-3 個不同策略（可同時並行呼叫多個工具）。只有在所有合理策略都已嘗試過但仍無結果時，才可以停止搜尋並告知使用者目前資料庫中確實沒有相關資料。
 """
     
     # 核心修正：動態挑選工具物件實體，進行硬性綁定
@@ -341,6 +364,8 @@ async def call_tools(state: AgentState):
                 end_date=args.get("end_date"),
                 stock_code=args.get("stock_code"),
                 news_type=args.get("news_type"),
+                keyword=args.get("keyword"),
+                stock_name=args.get("stock_name"),
             )
             parts = []
             for c in raw_result.get("context", []):
@@ -418,29 +443,76 @@ async def call_tools(state: AgentState):
 
 # --- 4. 定義邊界邏輯 (Conditional Edges) ---
 
-def should_continue(state: AgentState):
-    """判斷是否需要繼續呼叫工具，若不需要則進入分析階段"""
+async def retry_check(state: AgentState):
+    """Safety net：若工具全部返回空結果且未達上限，注入重試提示強制 Router 重新搜尋"""
     last_message = state["messages"][-1]
-    if last_message.tool_calls:
+
+    # 如果 Router 已經發起新的工具呼叫，直接通過
+    if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+        return {"messages": [], "trace": state.get("trace", {})}
+
+    trace = state.get("trace", {})
+    router_cycles = sum(1 for s in trace.get("steps", []) if s.get("node") == "router")
+    MAX_CYCLES = 5
+
+    if router_cycles < MAX_CYCLES:
+        # 檢查最近的 Tool Messages 是否全為空結果
+        tool_msgs = [m for m in state["messages"] if isinstance(m, ToolMessage)]
+        if tool_msgs:
+            empty_keywords = ["找不到", "找不到相關", "找不到推薦"]
+            recent_tools = tool_msgs[-3:]  # 檢查最近幾則
+            all_empty = all(
+                any(kw in m.content for kw in empty_keywords)
+                for m in recent_tools
+            )
+            if all_empty:
+                hint = SystemMessage(content=(
+                    "[系統提示] 前一次搜尋所有工具均回傳空結果。"
+                    "請參考你上一段回覆中提出的備選方案，選擇最合適的策略重試搜尋。"
+                    "優先嘗試：擴大時間範圍、更換關鍵字（中/英文）、移除過濾條件。"
+                    "不要詢問使用者，直接執行搜尋。"
+                ))
+                return {"messages": [hint], "trace": trace}
+
+    return {"messages": [], "trace": state.get("trace", {})}
+
+def should_continue_after_check(state: AgentState):
+    """retry_check 之後的路由判斷"""
+    last_message = state["messages"][-1]
+
+    # 如果最後一條是 SystemMessage（重試提示），回到 router
+    if isinstance(last_message, SystemMessage):
+        return "router"
+
+    # 如果有 tool_calls，去執行工具
+    if hasattr(last_message, "tool_calls") and last_message.tool_calls:
         return "tools"
-    # 沒有工具調用了，進入最終分析節點
+
+    # 否則進入分析
     return "analyst"
 
 # --- 5. 建立 Graph ---
+# 流程: Router → retry_check → (tools / router 重試 / analyst)
 
 def create_chat_agent():
     workflow = StateGraph(AgentState)
 
     # 添加節點
     workflow.add_node("router", call_router)
+    workflow.add_node("retry_check", retry_check)
     workflow.add_node("tools", call_tools)
     workflow.add_node("analyst", call_analyst)
 
     # 設置起點
     workflow.set_entry_point("router")
 
-    # 添加跳轉邏輯
-    workflow.add_conditional_edges("router", should_continue)
+    # Router 產出後先經過 retry_check
+    workflow.add_edge("router", "retry_check")
+
+    # retry_check 判斷是否重試、執行工具、或進入分析
+    workflow.add_conditional_edges("retry_check", should_continue_after_check)
+
+    # 工具執行完回到 Router
     workflow.add_edge("tools", "router")
     workflow.add_edge("analyst", END)
 

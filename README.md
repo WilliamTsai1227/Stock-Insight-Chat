@@ -16,9 +16,16 @@ Stock Insight Chat 是一套專為投資者設計的 AI 智能對話系統。它
 ### 1. 啟動基礎設施
 透過 Docker Compose 啟動 Qdrant 向量資料庫與 PostgreSQL：
 ```bash
-cd deploy
-docker-compose up -d
+docker-compose -f ./deploy/docker-compose.yml up -d
 ```
+
+### 1-1. 重啟後端服務 (Restarting Backend)
+若你修改了後端程式碼（如 `chat.py` 或 `news.py`），需要重新構建 Image 並重啟容器：
+```bash
+docker-compose -f ./deploy/docker-compose.yml up -d --build backend
+```
+> [!TIP]
+> 使用 `--build` 參數確保 Docker 讀取最新的程式碼變動。
 
 ### 2. 環境設定
 在專案根目錄建立或編輯 `.env` 檔案，確保包含以下必要的配置：
@@ -47,35 +54,33 @@ pip install -r app/backend/requirements.txt
 ```
 
 ### 4. 執行資料遷移 (Migration)
-將資料從 MongoDB 遷移至 Qdrant：
+將資料從 MongoDB 遷移至 Qdrant。你可以直接從 **專案根目錄** 執行：
 
 ```bash
-cd app/backend
-
 # Step A: 初始化 Collection 與索引
-python -m scripts.setup_qdrant
+python3 app/backend/scripts/setup_qdrant.py
 
 # Step B: Dry Run 預覽切分結果 (推薦先執行確認)
-python -m scripts.migrate_to_qdrant --dry-run --limit 10
+python3 app/backend/scripts/migrate_to_qdrant.py --dry-run --limit 10
 
 # Step C: 正式遷移 (各取最新 100 篇)
-python -m scripts.migrate_to_qdrant --limit 100
+python3 app/backend/scripts/migrate_to_qdrant.py --limit 100
 
 # Step D: 驗證遷移結果
-python -m scripts.test_qdrant_filter
+python3 app/backend/scripts/test_qdrant_filter.py
 ```
 
 #### 遷移進階用法
 ```bash
 # 只遷移特定 collection
-python -m scripts.migrate_to_qdrant --collection news --limit 500
-python -m scripts.migrate_to_qdrant --collection ai_analysis --limit 200
+python3 app/backend/scripts/migrate_to_qdrant.py --collection news --limit 500
+python3 app/backend/scripts/migrate_to_qdrant.py --collection ai_analysis --limit 200
 
 # 全量遷移
-python -m scripts.migrate_to_qdrant --limit 99999
+python3 app/backend/scripts/migrate_to_qdrant.py --limit 99999
 
 # 重建 Collection (⚠️ 清除所有現有資料)
-python -m scripts.setup_qdrant --reset
+python3 app/backend/scripts/setup_qdrant.py --reset
 ```
 
 ### 5. 驗證資料 (Qdrant Dashboard)

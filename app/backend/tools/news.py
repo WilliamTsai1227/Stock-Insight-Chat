@@ -40,16 +40,20 @@ async def search_news(
     end_date: Optional[str] = None,
     stock_code: Optional[str] = None,  # 按股票代碼過濾 (e.g. "2330")
     news_type: Optional[str] = None,   # 按新聞類型過濾 (e.g. "台股新聞")
+    keyword: Optional[str] = None,     # 按 keywords 欄位過濾 (e.g. "國巨")
+    stock_name: Optional[str] = None,  # 按 stock_names 欄位過濾 (e.g. "勤誠")
     score_threshold: float = 0.3,      # 🆕 P1: 最低相似度門檻，過濾低品質結果
 ) -> Dict[str, Any]:
     """
     新聞工具 #1：混合搜尋 (向量 + 時間/標籤過濾)
     使用 search_groups 按 mongo_id 聚合，確保同一篇新聞不會回傳多個 chunks。
+    stock_code、keyword、stock_name 使用 should (OR) 邏輯，只要其中一個匹配即可。
     """
     start_time = time.time()
 
     # 組建過濾條件
     must_conditions = []
+    should_conditions = []
 
     if start_date or end_date:
         must_conditions.append(models.FieldCondition(
@@ -60,21 +64,40 @@ async def search_news(
             )
         ))
 
-    # 股票代碼過濾
+    # stock_code、keyword、stock_name 用 should (OR) 邏輯
+    # 只要其中任一欄位匹配，該文件就會被保留
     if stock_code:
-        must_conditions.append(models.FieldCondition(
+        should_conditions.append(models.FieldCondition(
             key="stock_codes",
             match=models.MatchValue(value=stock_code)
         ))
 
-    # 新聞類型過濾
+    if keyword:
+        should_conditions.append(models.FieldCondition(
+            key="keywords",
+            match=models.MatchValue(value=keyword)
+        ))
+
+    if stock_name:
+        should_conditions.append(models.FieldCondition(
+            key="stock_names",
+            match=models.MatchValue(value=stock_name)
+        ))
+
+    # 新聞類型過濾 (必須滿足)
     if news_type:
         must_conditions.append(models.FieldCondition(
             key="type",
             match=models.MatchValue(value=news_type)
         ))
 
-    search_filter = models.Filter(must=must_conditions) if must_conditions else None
+    # 組建 filter：must 全部滿足 且 should 至少一個滿足
+    filter_args = {}
+    if must_conditions:
+        filter_args["must"] = must_conditions
+    if should_conditions:
+        filter_args["should"] = should_conditions
+    search_filter = models.Filter(**filter_args) if filter_args else None
 
     try:
         # 🔄 P2: 使用 group_size=2 取每篇新聞最相關的前 2 個 chunks，提升長文上下文完整度
