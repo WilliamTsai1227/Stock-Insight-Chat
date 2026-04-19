@@ -217,8 +217,21 @@ async def call_router(state: AgentState):
     # 從 tools 全域變數中，找出名稱符合 target_tools 的物件
     current_tools_to_bind = [t for t in tools if t.name in target_tools]
     
-    # 這裡我們將 Router 模型動態綁定選後的工具，並改用 SystemMessage 增強指令強度
-    dynamic_router = router_model_base.bind_tools(current_tools_to_bind)
+    # 萃取目前的 trace 紀錄，計算已經走過幾次 router 節點
+    trace = state.get("trace", {})
+    router_cycles = sum(1 for step in trace.get("steps", []) if step.get("node") == "router")
+    MAX_CYCLES = 5 # 限制一個問題最多只能進行 5 次檢索循環
+
+    if router_cycles >= MAX_CYCLES:
+        # 達到上限：清空可用工具，並在 prompt 加上強制終止指令
+        current_tools_to_bind = []
+        system_prompt += f"\n\n[系統通知 - 極重要] 檢索次數已達上限 ({MAX_CYCLES}次)。請立刻根據你目前手邊已獲取的所有資料進行總結與回覆。"
+        # 不綁定工具，強迫產出純文字
+        dynamic_router = router_model_base
+    else:
+        # 這裡我們將 Router 模型動態綁定選後的工具
+        dynamic_router = router_model_base.bind_tools(current_tools_to_bind)
+
     router_prompt = [SystemMessage(content=system_prompt)] + messages
     response = await dynamic_router.ainvoke(router_prompt)
     
