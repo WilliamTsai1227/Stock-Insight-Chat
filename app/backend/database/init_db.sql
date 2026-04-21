@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS projects (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(255) NOT NULL,
     user_id VARCHAR(255) NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 3. 建立 chats 表 (隸屬於專案下的對話視窗)
@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS chats (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     title VARCHAR(255) NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    summary TEXT, -- 存儲 LLM 產生的對話摘要，優化下次載入 Context 的速度
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 4. 建立 messages 表 (存放每一筆對話記錄)
@@ -28,7 +29,7 @@ CREATE TABLE IF NOT EXISTS messages (
     tokens JSONB NOT NULL DEFAULT '{"prompt":0, "completion":0, "total":0, "is_cached": false}',
     context_refs JSONB,        -- 存儲檢索到的來源與片段 (方案 B)
     metadata JSONB,            -- 存儲系統元數據如 System Prompt
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 5. 建立 files 表 (專案共用的知識庫文件)
@@ -40,5 +41,5 @@ CREATE TABLE IF NOT EXISTS files (
     s3_url TEXT NOT NULL,
     file_type VARCHAR(50) NOT NULL, -- image, pdf, etc.
     status VARCHAR(50) NOT NULL,    -- uploading, ready, failed
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );

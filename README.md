@@ -224,6 +224,22 @@ python app/backend/agent/chat.py
 
 ---
 
+## 🗂️ 對話歷史結構與溯源 (Chat History & Parent DAG Architecture)
+
+系統捨棄了傳統的「陣列式」對話儲存，改採用進階的 **「自參照樹狀結構 (Self-referencing DAG)」**。透過 `messages` 表中的 `parent_id` 欄位，系統能夠精確掌握上下句的關聯性。
+
+### 1. 解決的問題 (Why Parent ID?)
+*   **支援「重新生成」(Regenerate)**：當使用者要求重新回答時，兩則 AI 回答會共用同一個 User 訊息的 `parent_id`，前端可藉此繪製版本切換 `< 1/2 >` UI。
+*   **精確追問與溯源**：後端能得知使用者是在針對滿天飛的回答中的「哪一句話」進行追問，進而提供正確的 Context。
+*   **防禦訊息超車 (Race Conditions)**：即便網路延遲導致資料庫寫入順序錯亂，憑藉 `parent_id` 依然能百分之百還原正確的時間線邏輯。
+
+### 2. 歷史讀取策略 (Context Loading)
+為了避免超出 LLM Token 上限，系統結合 **滑動視窗** 與 **動態摘要**：
+1.  **遞迴回溯 (Recursive CTE)**：後端不使用 `ORDER BY created_at` 盲目撈取，而是從「最新的訊息」沿著 `parent_id` 往上遞迴 (最多 10 層)，撈出純淨無干擾（不含被放棄的分支）的對話邏輯鏈。
+2.  **動態摘要注入 (`chats.summary`)**：對於超過 10 則的舊歷史，系統會在背景產生精短摘要寫回 `chats` 表，並作為 Context 的第一句話送給 LLM。
+
+---
+
 ## 🚀 資料遷移與維護
 
 系統內建完善的數據 ETL 工具，可確保 Qdrant 與 MongoDB 資料同步：
