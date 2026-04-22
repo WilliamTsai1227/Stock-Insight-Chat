@@ -1,3 +1,8 @@
+# 專案初始意圖 (Project Initialization - ⚠️ 僅供歷史參考)
+
+> [!NOTE]
+> 本文件紀錄了專案啟動時的初始構想。目前系統架構已演進，請優先參考各項正式規格說明書 (`agent_spec.md`, `api_spec.md`, `database_spec.md` 等)。
+
 我現在的原本應用叫做stock insight 他就是一個應用後面的data 流程會是每天不斷去爬蟲股市新聞，每則新聞處理成一定結構存入mongodb 的 news collection ，然後另外一條pipeleine 去每天固定時間拿到一定數量的news 新聞去餵給llm 去產生統整報告，然後回存到mongodb 的ai_analysis collection (有產生推薦股票跟推薦產業）最終前端有可以去看新聞跟ai統整報告這樣，還有配一顆postgresql 去建立上市櫃公司十年歷史財報的數據，以結構化儲存，也有會員系統機制可以註冊跟登入，postgresql 也有結構化的會員相關表
 
 

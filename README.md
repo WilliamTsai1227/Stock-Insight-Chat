@@ -5,13 +5,13 @@
 
 > **股市洞察生成式聊天系統** —— 結合即時新聞、AI 產業分析與企業財報的智慧對話助手。
 
-## 🌟 系統概覽
+##  系統概覽
 
 Stock Insight Chat 是一套專為投資者設計的 AI 智能對話系統。它不僅能理解使用者的提問，更能主動調用專業工具，從海量的新聞數據與 AI 分析報告中檢索關鍵片段（RAG），並結合企業歷史財報，提供具備深度見解的投資分析。
 
 ---
 
-## 🚀 快速開始 (Quick Start)
+##  快速開始 (Quick Start)
 
 ### 1. 啟動基礎設施
 透過 Docker Compose 啟動 Qdrant 向量資料庫與 PostgreSQL：
@@ -108,7 +108,7 @@ python app/backend/agent/chat.py
 
 ---
 
-## 🧠 向量儲存結構 (Qdrant Schema)
+##  向量儲存結構 (Qdrant Schema)
 
 系統採用 **Qdrant** 作為核心向量資料庫，支援高效的語義搜尋與動態過濾。以下是目前規劃的 Collection 結構設計：
 
@@ -172,7 +172,7 @@ python app/backend/agent/chat.py
 
 ---
 
-## 🌐 核心 API 規範 (Messaging API)
+##  核心 API 規範 (Messaging API)
 
 本系統的核心 API 採用高度透明的設計，提供完整的執行軌跡與效能數據。
 
@@ -216,7 +216,7 @@ python app/backend/agent/chat.py
 
 ---
 
-### 🧠 核心模型架構 (Next-Gen AI Stack)
+###  核心模型架構 (Next-Gen AI Stack)
 為了達到速度與品質的最佳平衡，系統採用雙模型動態協作：
 - **Router LLM**: `GPT-5 mini` (負責極速意圖辨識、工具決策與 ReAct 導航)。
 - **Analyst LLM**: `GPT-5` (負責旗艦級資料合成、深度投資見解與專業報告產出)。
@@ -224,7 +224,7 @@ python app/backend/agent/chat.py
 
 ---
 
-## 🗂️ 對話歷史結構與溯源 (Chat History & Parent DAG Architecture)
+##  對話歷史結構與溯源 (Chat History & Parent DAG Architecture)
 
 系統捨棄了傳統的「陣列式」對話儲存，改採用進階的 **「自參照樹狀結構 (Self-referencing DAG)」**。透過 `messages` 表中的 `parent_id` 欄位，系統能夠精確掌握上下句的關聯性。
 
@@ -240,7 +240,7 @@ python app/backend/agent/chat.py
 
 ---
 
-## 🚀 資料遷移與維護
+##  資料遷移與維護
 
 系統內建完善的數據 ETL 工具，可確保 Qdrant 與 MongoDB 資料同步：
 
@@ -255,7 +255,7 @@ python app/backend/agent/chat.py
 
 ---
 
-## 🧩 資料切分與儲存策略 (Chunking & Storage Strategy)
+##  資料切分與儲存策略 (Chunking & Storage Strategy)
 
 為了確保 RAG (檢索增強生成) 的品質與系統的強健性，本專案採用**混合式切分策略**，針對不同資料性質使用最適合的方法：
 
@@ -323,7 +323,78 @@ python app/backend/agent/chat.py
 
 ---
 
-## 📊 專案進度
+##  Token 管理與會員等級設計 (Membership & Token Economics)
+
+為了支撐商業化營運，系統設計了一套嚴謹的 Token 計量與會員等級系統。這不僅是資料庫欄位的增加，更涉及高併發下的數據一致性與效能平衡。
+
+### 1. 會員等級與配額 (Subscription Tiers)
+系統預設提供三種等級，透過 `subscription_tiers` 表定義：
+*   **Free (免費版)**：每個月 100k Tokens，支援 10 個專案。
+*   **Pro (中階版)**：每個月 1M Tokens，支援 20 個專案，優先處理權。
+*   **Ultra (高級版)**：每個月 5M Tokens，無限制專案，支援進階 RAG 模式。
+
+### 2. Token 管理架構 (Token Management Architecture)
+
+設計 Token 系統時，採用 **「雙軌制儲存」** 與 **「預扣/結算機制」**。
+
+#### A. 雙軌制儲存策略
+*   **PostgreSQL (權威存儲)**：
+    *   `user_usage_quotas`: 儲存當前週期的「累計用量」，用於精確計費。
+    *   `token_usage_logs`: 儲存每一筆對話的詳細流水（含 Model 名稱、Prompt/Completion 分布、成本），用於對帳與報表。
+*   **Redis (即時快取)**：
+    *   儲存 `usage:{user_id}:current`，利用 Redis 的 `INCRBY` 原子操作提供微秒級的計量與檢查。
+
+#### B. 高併發策略 (Concurrency Control)
+在高併發情況下，若直接使用 `UPDATE ... SET used = used + N` 容易造成資料庫鎖競爭或死鎖。
+1.  **原子更新 (Atomic Increment)**：
+    ```sql
+    UPDATE user_usage_quotas 
+    SET used_tokens = used_tokens + :n, updated_at = NOW()
+    WHERE user_id = :uid AND used_tokens + :n <= :limit;
+    ```
+2.  **非同步回寫 (Async Flush)**：
+    應用層先將 Token 用量寫入訊息隊列 (MQ) 或 Redis 串流，再由專門的 Worker 批次 (Batch) 寫回 PostgreSQL，減少對資料庫的頻繁 IO。
+
+### 3. 即時限流與配額檢查 (Real-time Guardrails)
+
+系統如何判斷「這一句」能不能說？
+1.  **Pre-flight Check (預檢查)**：在呼叫 LLM 前，先從快取讀取當前用量，若已達 95% 則發出警告；若已達 100% 則直接拒絕請求。
+2.  **Reservation Pattern (預留模式)**：
+    *   假設 LLM 可能生成 1000 tokens，先在 Redis 中預扣 1000。
+    *   當 LLM 生成結束後，根據「實際使用量」(如 450) 進行結算，將多扣的 (550) 退回。
+    *   這能確保在高併發追問下，使用者絕不會超出預算。
+
+### 4. Python Class 設計實踐
+
+在程式碼層面，我們建議採用 **「單一權責原則」** 的 `UsageManager`：
+
+```python
+class TokenUsage:
+    """封裝 Token 計算邏輯"""
+    prompt_tokens: int
+    completion_tokens: int
+    model_weight: float = 1.0
+
+    @property
+    def total_billable(self) -> int:
+        return int((self.prompt_tokens + self.completion_tokens) * self.model_weight)
+
+class UsageManager:
+    """處理與資料庫/快取的交互"""
+    async def check_quota(self, user_id: str) -> bool:
+        # 從 Redis 快速判斷
+        pass
+
+    async def record_usage(self, user_id: str, usage: TokenUsage):
+        # 1. 寫入流水帳 (Log)
+        # 2. 原子更新累計值 (Quota)
+        # 3. 更新快取
+        pass
+```
+
+---
+
+##  專案進度
 - [x] 資料庫 Schema 設計 (PostgreSQL+MongoDB)
 - [x] Qdrant 向量結構規劃與初始化
 - [x] 資料遷移腳本 (含排序、防重覆機制)

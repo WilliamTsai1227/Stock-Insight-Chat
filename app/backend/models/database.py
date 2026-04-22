@@ -5,13 +5,87 @@ from pydantic import BaseModel, Field
 
 # --- 資料庫實體模型 (Database Entites / Models) ---
 
+class SubscriptionTierModel(BaseModel):
+    """
+    訂閱等級模型 (subscription_tiers table)
+    """
+    id: UUID = Field(default_factory=uuid4)
+    name: str
+    monthly_token_limit: int
+    max_projects: int = 3
+    features: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=datetime.now)
+
+class UserModel(BaseModel):
+    """
+    使用者模型 (users table)
+    """
+    id: UUID = Field(default_factory=uuid4)
+    email: str
+    username: str
+    password_hash: str
+    status: str = "active"
+    tier_id: Optional[UUID] = None
+    last_login_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+
+class UserUsageQuotaModel(BaseModel):
+    """
+    使用者用量配額模型 (user_usage_quotas table)
+    """
+    user_id: UUID
+    current_period_start: datetime
+    used_tokens: int = 0
+    updated_at: datetime = Field(default_factory=datetime.now)
+
+class TokenUsageLogModel(BaseModel):
+    """
+    Token 使用日誌模型 (token_usage_logs table)
+    """
+    id: UUID = Field(default_factory=uuid4)
+    user_id: UUID
+    message_id: Optional[UUID] = None
+    model_name: str
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    cost_usd: Optional[float] = None
+    created_at: datetime = Field(default_factory=datetime.now)
+
+class RoleModel(BaseModel):
+    """
+    角色模型 (roles table)
+    """
+    id: UUID = Field(default_factory=uuid4)
+    name: str
+    description: Optional[str] = None
+
+class UserRoleModel(BaseModel):
+    """
+    使用者角色關聯模型 (user_roles table)
+    """
+    user_id: UUID
+    role_id: UUID
+
+class UserSettingModel(BaseModel):
+    """
+    使用者設定模型 (user_settings table)
+    """
+    user_id: UUID
+    theme: str = "dark"
+    language: str = "zh-TW"
+    notifications_enabled: bool = True
+    settings: Dict[str, Any] = Field(default_factory=dict)
+    updated_at: datetime = Field(default_factory=datetime.now)
+
 class ProjectModel(BaseModel):
     """
     專案頂層容器 (projects table)
     """
     id: UUID = Field(default_factory=uuid4)
     name: str
-    user_id: str
+    user_id: UUID
     created_at: datetime = Field(default_factory=datetime.now)
 
 class ChatModel(BaseModel):

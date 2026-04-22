@@ -1,51 +1,101 @@
 # 資料庫規格說明書 (Database Specification)
 
-本專案使用 **PostgreSQL** 作為關聯式資料庫，用於管理專案、對話、訊息以及上傳的文件。
+本專案使用 **PostgreSQL** 作為關聯式資料庫，用於管理會員、訂閱、專案、對話、訊息以及上傳的文件。向量數據則存儲於 **Qdrant**。
 
 ## 1. 實體關係圖 (ERD)
 
 ```mermaid
 erDiagram
-    projects ||--o{ chats : "隸屬於"
-    projects ||--o{ files : "共用文件"
-    chats ||--o{ messages : "包含"
+    subscription_tiers ||--o{ users : "定義等級"
+    users ||--o{ projects : "擁有"
+    users ||--o| user_usage_quotas : "目前用量"
+    users ||--o{ token_usage_logs : "使用日誌"
+    users ||--o{ user_roles : "具備角色"
+    roles ||--o{ user_roles : "定義角色"
+    users ||--o| user_settings : "個人偏好"
+    projects ||--o{ chats : "包含"
+    projects ||--o{ files : "相關文件"
+    chats ||--o{ messages : "對話記錄"
     messages ||--o{ messages : "Q&A 對齊 (parent_id)"
 
+    subscription_tiers {
+        uuid id PK
+        string name "free / pro / ultra"
+        bigint monthly_token_limit
+        int max_projects
+        jsonb features
+    }
+
+    users {
+        uuid id PK
+        string email
+        string username
+        string password_hash
+        string status "active / disabled"
+        uuid tier_id FK
+    }
+
+    user_usage_quotas {
+        uuid user_id PK, FK
+        timestamp current_period_start
+        bigint used_tokens
+        timestamp updated_at
+    }
+
+    token_usage_logs {
+        uuid id PK
+        uuid user_id FK
+        uuid message_id FK
+        string model_name
+        int prompt_tokens
+        int completion_tokens
+        int total_tokens
+        numeric cost_usd
+        timestamp created_at
+    }
+
+    user_settings {
+        uuid user_id PK, FK
+        string theme "dark / light"
+        string language "zh-TW / en"
+        boolean notifications_enabled
+        jsonb settings
+    }
+
     projects {
-        uuid id PK "專案唯一識別碼"
-        string name "專案名稱"
-        string user_id "建立者 ID"
-        timestamp created_at "建立時間"
-    }
-
-    chats {
-        uuid id PK "對話唯一識別碼"
-        uuid project_id FK "所屬專案 ID"
-        string title "對話標題"
-        timestamp created_at "建立時間"
-    }
-
-    messages {
-        uuid id PK "訊息唯一識別碼"
-        uuid chat_id FK "所屬對話 ID"
-        uuid parent_id FK "父訊息 ID (溯源用)"
-        string role "user / assistant"
-        text content "訊息內容"
-        jsonb tokens "消耗 Token (詳情)"
-        jsonb context_refs "參考資訊 (來源/片段)"
-        jsonb metadata "附加資訊 (System Prompt 等)"
-        timestamp created_at "發送時間"
+        uuid id PK
+        string name
+        uuid user_id FK
+        timestamp created_at
     }
 
     files {
-        uuid id PK "文件唯一識別碼"
-        uuid project_id FK "所屬專案 ID"
-        uuid chat_id FK "上傳時的對話 ID (選填)"
-        string file_name "原始檔名"
-        string s3_url "S3 路徑"
-        string file_type "image / pdf / csv / etc."
-        string status "處理狀態 (uploading / ready / failed)"
-        timestamp created_at "上傳時間"
+        uuid id PK
+        uuid project_id FK
+        uuid chat_id FK
+        string file_name
+        string s3_url
+        string file_type
+        string status "uploading / ready / failed"
+    }
+
+    chats {
+        uuid id PK
+        uuid project_id FK
+        string title
+        timestamp created_at
+    }
+
+    messages {
+        uuid id PK
+        uuid chat_id FK
+        uuid parent_id FK
+        string role "user / assistant"
+        text content
+        jsonb tokens "prompt/completion/total"
+        jsonb context_refs "引用來源"
+        jsonb metadata "系統元數據"
+        timestamp created_at
     }
 ```
 
@@ -53,51 +103,67 @@ erDiagram
 
 ## 2. 資料表詳細定義
 
-### 2.1 projects (專案)
+### 2.1 subscription_tiers (訂閱等級)
+定義不同會員等級的權利與配額。
+
+| 欄位名稱 | 資料型別 | 限制 | 說明 |
+| :--- | :--- | :--- | :--- |
+| id | UUID | PRIMARY KEY | 等級唯一識別碼 |
+| name | VARCHAR(50) | UNIQUE, NOT NULL | 等級名稱 (free, pro, ultra) |
+| monthly_token_limit | BIGINT | NOT NULL | 每月 Token 額度 |
+| max_projects | INTEGER | DEFAULT 3 | 最大專案數 |
+| features | JSONB | NULLABLE | 功能開關設定 |
+
+### 2.2 users (使用者)
+會員系統核心表。
+
+| 欄位名稱 | 資料型別 | 限制 | 說明 |
+| :--- | :--- | :--- | :--- |
+| id | UUID | PRIMARY KEY | 使用者唯一識別碼 |
+| email | VARCHAR(255) | UNIQUE, NOT NULL | 電子郵件 (登入帳號) |
+| username | VARCHAR(100) | UNIQUE, NOT NULL | 顯示名稱 |
+| password_hash | TEXT | NOT NULL | 加密後的密碼 |
+| status | VARCHAR(20) | DEFAULT 'active' | 帳號狀態 (active, disabled) |
+| tier_id | UUID | FK -> subscription_tiers.id | 目前等級 |
+
+### 2.3 user_usage_quotas (當前用量)
+紀錄使用者在當前計費週期內的即時累計用量。
+
+| 欄位名稱 | 資料型別 | 限制 | 說明 |
+| :--- | :--- | :--- | :--- |
+| user_id | UUID | PRIMARY KEY, FK -> users.id | 使用者 ID |
+| current_period_start | TIMESTAMP | NOT NULL | 當前週期開始時間 |
+| used_tokens | BIGINT | DEFAULT 0 | 已消耗總 Token 數 |
+| updated_at | TIMESTAMP | DEFAULT NOW() | 最後更新時間 |
+
+### 2.4 projects (專案)
 存放頂層容器資訊。
 
 | 欄位名稱 | 資料型別 | 限制 | 說明 |
 | :--- | :--- | :--- | :--- |
-| id | UUID | PRIMARY KEY, DEFAULT gen_random_uuid() | 專案唯一識別碼 |
+| id | UUID | PRIMARY KEY | 專案唯一識別碼 |
 | name | VARCHAR(255) | NOT NULL | 專案名稱 |
-| user_id | VARCHAR(255) | NOT NULL | 建立者 ID (由 Auth 服務提供) |
+| user_id | UUID | FK -> users.id, NOT NULL | 建立者 ID |
 | created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 建立時間 |
 
-### 2.2 chats (對話)
-隸屬於專案下的各個對話視窗。
+### 2.5 files (檔案管理)
+管理專案相關的附件與上傳文件。
 
 | 欄位名稱 | 資料型別 | 限制 | 說明 |
 | :--- | :--- | :--- | :--- |
-| id | UUID | PRIMARY KEY, DEFAULT gen_random_uuid() | 對話唯一識別碼 |
-| project_id | UUID | FK -> projects.id, NOT NULL, ON DELETE CASCADE | 所屬專案 ID |
-| title | VARCHAR(255) | NOT NULL | 對話標題 |
-| created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 建立時間 |
+| id | UUID | PRIMARY KEY | 檔案唯一識別碼 |
+| project_id | UUID | FK -> projects.id | 所屬專案 |
+| s3_url | TEXT | NOT NULL | 儲存路徑 |
+| status | VARCHAR(20) | NOT NULL | 狀態 (ready, failed, etc.) |
 
-### 2.3 messages (訊息)
-存放每一筆對話記錄。
-
-| 欄位名稱 | 資料型別 | 限制 | 說明 |
-| :--- | :--- | :--- | :--- |
-| id | UUID | PRIMARY KEY, DEFAULT gen_random_uuid() | 訊息唯一識別碼 |
-| chat_id | UUID | FK -> chats.id, NOT NULL, ON DELETE CASCADE | 所屬對話 ID |
-| parent_id | UUID | FK -> messages.id, NULLABLE | 指向觸發本則回覆的父訊息 ID |
-| role | VARCHAR(50) | NOT NULL | 角色 (user / assistant) |
-| content | TEXT | NOT NULL | 訊息內容 |
-| tokens | JSONB | NOT NULL | 消耗的 Token 詳情 `{ "prompt": 100, "completion": 50, "is_cached": true }` |
-| context_refs | JSONB | NULLABLE | 檢索到的來源與片段 (方案 B) |
-| metadata | JSONB | NULLABLE | 系統與對話元數據 `{ "system": "...", "ref_id": "...", "params": "{}" }` |
-| created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 訊息發送時間 |
-
-### 2.4 files (專案文件)
-專案共用的知識庫文件（RAG 用）。
+### 2.6 messages (訊息)
+存放每一筆對話記錄與 Token 消耗。
 
 | 欄位名稱 | 資料型別 | 限制 | 說明 |
 | :--- | :--- | :--- | :--- |
-| id | UUID | PRIMARY KEY, DEFAULT gen_random_uuid() | 文件唯一識別碼 |
-| project_id | UUID | FK -> projects.id, NOT NULL, ON DELETE CASCADE | 所屬專案 ID |
-| chat_id | UUID | FK -> chats.id, NULLABLE, ON DELETE SET NULL | 上傳時的對話 ID |
-| file_name | VARCHAR(255) | NOT NULL | 原始檔名 |
-| s3_url | TEXT | NOT NULL | 存放於 S3 的路徑 |
-| file_type | VARCHAR(50) | NOT NULL | 檔案類型 (image, pdf, etc.) |
-| status | VARCHAR(50) | NOT NULL | 處理狀態 (uploading, ready, failed) |
-| created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 上傳時間 |
+| id | UUID | PRIMARY KEY | 訊息唯一識別碼 |
+| chat_id | UUID | FK -> chats.id | 所屬對話 ID |
+| parent_id | UUID | FK -> messages.id | 父訊息 ID (用於追溯) |
+| tokens | JSONB | NOT NULL | 消耗詳情 `{ "prompt": 100, "completion": 50 }` |
+| context_refs | JSONB | NULLABLE | 檢索來源片段 |
+| created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 發送時間 |
