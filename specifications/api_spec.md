@@ -4,13 +4,65 @@
 
 ---
 
-## 1. 認證與使用者接口 (Auth & User API - 🔴 待開發)
-
-目前的後端實作尚未包含 JWT 認證邏輯，以下接口為第一階段計畫目標：
-
 ### 1.1 註冊與登入 (Auth)
-- **POST** `/api/auth/register`: 建立新帳號。
-- **POST** `/api/auth/login`: 取得 Access Token。
+
+#### 1.1.1 使用者註冊 (Register)
+- **URL**: `/api/auth/register`
+- **Method**: `POST`
+- **Body**:
+    ```json
+    {
+      "email": "user@example.com",
+      "username": "investor_god",
+      "password": "strongpassword123"
+    }
+    ```
+- **Response (201)**:
+    ```json
+    {
+      "status": "success",
+      "message": "User registered successfully",
+      "user_id": "UUID"
+    }
+    ```
+
+#### 1.1.2 使用者登入 (Login)
+- **URL**: `/api/auth/login`
+- **Method**: `POST`
+- **Body**:
+    ```json
+    {
+      "email": "user@example.com",
+      "password": "strongpassword123"
+    }
+    ```
+- **Response (200)**:
+    ```json
+    {
+      "status": "success",
+      "access_token": "eyJhbG...",
+      "token_type": "bearer",
+      "user": {
+        "id": "UUID",
+        "username": "investor_god",
+        "email": "user@example.com",
+        "tier": "free"
+      }
+    }
+    ```
+- **Set-Cookie**: `refresh_token=...; HttpOnly; Secure; SameSite=Lax; Max-Age=604800`
+
+#### 1.1.3 使用者登出 (Logout)
+- **URL**: `/api/auth/logout`
+- **Method**: `POST`
+- **Response (200)**:
+    ```json
+    {
+      "status": "success",
+      "message": "Logged out successfully"
+    }
+    ```
+- **Effect**: 清除伺服器端 Refresh Token 並清除 Cookie。
 
 ### 1.2 個人資訊 (User Profile)
 - **GET** `/api/user/profile`: 返回等級與基本資料。

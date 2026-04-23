@@ -53,6 +53,10 @@ class TokenUsageLogModel(BaseModel):
     cost_usd: Optional[float] = None
     created_at: datetime = Field(default_factory=datetime.now)
 
+    model_config = {
+        "protected_namespaces": ()
+    }
+
 class RoleModel(BaseModel):
     """
     角色模型 (roles table)
@@ -126,4 +130,14 @@ class FileModel(BaseModel):
     s3_url: str
     file_type: str  # image, pdf, etc.
     status: str  # uploading, ready, failed
+    created_at: datetime = Field(default_factory=datetime.now)
+
+class RefreshTokenModel(BaseModel):
+    """
+    JWT 刷新權杖 (refresh_tokens table)
+    """
+    id: UUID = Field(default_factory=uuid4)
+    user_id: UUID
+    token: str
+    expires_at: datetime
     created_at: datetime = Field(default_factory=datetime.now)

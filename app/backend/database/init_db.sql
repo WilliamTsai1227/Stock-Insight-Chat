@@ -121,3 +121,27 @@ CREATE TABLE IF NOT EXISTS files (
     status VARCHAR(50) NOT NULL,    -- uploading, ready, failed
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
+
+-- =============================================
+-- 14. 建立索引優化 (Performance Indexing)
+-- =============================================
+
+-- 使用者與權限相關
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_token_usage_logs_user_id ON token_usage_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_token_usage_logs_created_at ON token_usage_logs(created_at);
+
+-- 專案與對話 (最核心的查詢路徑)
+CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id);
+CREATE INDEX IF NOT EXISTS idx_chats_project_id ON chats(project_id);
+CREATE INDEX IF NOT EXISTS idx_chats_created_at ON chats(created_at);
+
+-- 訊息表 (支援 Parent ID 遞迴查詢與對話流讀取)
+CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id);
+CREATE INDEX IF NOT EXISTS idx_messages_parent_id ON messages(parent_id);
+CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
+
+-- 文件管理
+CREATE INDEX IF NOT EXISTS idx_files_project_id ON files(project_id);
+CREATE INDEX IF NOT EXISTS idx_files_chat_id ON files(chat_id);
+
