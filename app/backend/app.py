@@ -1,35 +1,47 @@
 from dotenv import load_dotenv
 import os
+from contextlib import asynccontextmanager
 
 # 0. 載入環境變數 (務必放在最頂部，確保所有模組都能讀取到)
 load_dotenv()
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.backend.api import api_router  # 統一使用 app.backend 開頭
+from app.backend.api import api_router
+from app.backend.database.postgresql import create_pool, close_pool
 
-# 1. 初始化 FastAPI 應用程式
+
+# 1. 使用 lifespan 管理 asyncpg Connection Pool 生命週期
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # --- 啟動時建立 Connection Pool ---
+    await create_pool()
+    yield
+    # --- 關閉時釋放所有連線 ---
+    await close_pool()
+
+
+# 2. 初始化 FastAPI 應用程式
 app = FastAPI(
     title="Stock-Insight-Chat API",
     description="股市生成式聊天對話應用後端",
-    version="0.1.0"
+    version="0.2.0",
+    lifespan=lifespan
 )
 
-# 2. 設定 CORS (跨域資源共享)
-# 確保前端可以正常與後端溝通
+# 3. 設定 CORS (跨域資源共享)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # 開發環境允許所有
+    allow_origins=["*"],  # 開發環境允許所有來源
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# 3. 註冊所有子路由 (API Router)
-# 這會一次載入 file.py, chat.py 等所有 Router 模塊
+# 4. 註冊所有子路由
 app.include_router(api_router)
 
-# 4. 健康檢查接口
+# 5. 健康檢查接口
 @app.get("/", tags=["Health"])
 async def health_check():
     return {
@@ -39,5 +51,4 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    # 啟動開發伺服器
     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)

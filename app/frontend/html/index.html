@@ -45,8 +45,8 @@
 
             <div class="sidebar-footer">
                 <div class="user-profile">
-                    <div class="avatar">W</div>
-                    <span>William Tsai</span>
+                    <div class="avatar">U</div>
+                    <span>使用者</span>
                 </div>
             </div>
         </aside>
@@ -60,7 +60,46 @@
                 </div>
                 <div class="header-actions">
                     <button class="icon-btn"><i data-lucide="share-2"></i></button>
-                    <button class="icon-btn"><i data-lucide="more-horizontal"></i></button>
+
+                    <!-- 使用者頭像 & 下拉選單 -->
+                    <div class="user-menu" id="user-menu-trigger">
+                        <div class="user-avatar-btn" id="user-avatar">U</div>
+                        <div class="user-dropdown" id="user-dropdown">
+                            <div class="dropdown-header">
+                                <div class="dropdown-avatar" id="dropdown-avatar-char">U</div>
+                                <div class="dropdown-user-info">
+                                    <span class="dropdown-name" id="user-display-name">使用者</span>
+                                    <span class="dropdown-badge">Free</span>
+                                </div>
+                            </div>
+                            <div class="dropdown-divider"></div>
+                            <a href="#" class="dropdown-item" id="menu-profile">
+                                <i data-lucide="user"></i>
+                                <span>會員資料</span>
+                            </a>
+                            <a href="#" class="dropdown-item" id="menu-password">
+                                <i data-lucide="key-round"></i>
+                                <span>修改密碼</span>
+                            </a>
+                            <a href="#" class="dropdown-item" id="menu-settings">
+                                <i data-lucide="settings"></i>
+                                <span>偏好設定</span>
+                            </a>
+                            <a href="#" class="dropdown-item" id="menu-usage">
+                                <i data-lucide="activity"></i>
+                                <span>用量統計</span>
+                            </a>
+                            <div class="dropdown-divider"></div>
+                            <a href="#" class="dropdown-item danger" id="menu-delete">
+                                <i data-lucide="trash-2"></i>
+                                <span>刪除帳號</span>
+                            </a>
+                            <a href="#" class="dropdown-item" id="menu-logout">
+                                <i data-lucide="log-out"></i>
+                                <span>登出</span>
+                            </a>
+                        </div>
+                    </div>
                 </div>
             </header>
 
@@ -101,7 +140,94 @@
         </main>
     </div>
 
+    <!-- ========== Modals ========== -->
+
+    <!-- 個人資料 Modal -->
+    <div class="modal-overlay" id="profile-modal">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3><i data-lucide="user"></i> 會員資料</h3>
+                <button class="modal-close" onclick="closeAllModals()"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <div class="modal-field">
+                    <label>電子信箱</label>
+                    <input type="email" id="profile-email" disabled>
+                </div>
+                <div class="modal-field">
+                    <label>使用者名稱</label>
+                    <input type="text" id="profile-username" placeholder="輸入新的名稱">
+                </div>
+                <div class="modal-info-row">
+                    <span class="info-label">帳號狀態</span>
+                    <span class="info-value" id="profile-status">active</span>
+                </div>
+                <div class="modal-info-row">
+                    <span class="info-label">訂閱方案</span>
+                    <span class="info-value" id="profile-tier">Free</span>
+                </div>
+                <div id="profile-msg" class="modal-msg"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="modal-btn secondary" onclick="closeAllModals()">取消</button>
+                <button class="modal-btn primary" onclick="saveProfile()">儲存變更</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 修改密碼 Modal -->
+    <div class="modal-overlay" id="password-modal">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3><i data-lucide="key-round"></i> 修改密碼</h3>
+                <button class="modal-close" onclick="closeAllModals()"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <div class="modal-field">
+                    <label>目前密碼</label>
+                    <input type="password" id="pw-old" placeholder="輸入目前密碼">
+                </div>
+                <div class="modal-field">
+                    <label>新密碼</label>
+                    <input type="password" id="pw-new" placeholder="至少 8 個字元">
+                </div>
+                <div class="modal-field">
+                    <label>確認新密碼</label>
+                    <input type="password" id="pw-confirm" placeholder="再次輸入新密碼">
+                </div>
+                <div id="password-msg" class="modal-msg"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="modal-btn secondary" onclick="closeAllModals()">取消</button>
+                <button class="modal-btn primary" onclick="savePassword()">更新密碼</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 刪除帳號 Modal -->
+    <div class="modal-overlay" id="delete-modal">
+        <div class="modal-card danger">
+            <div class="modal-header">
+                <h3><i data-lucide="alert-triangle"></i> 刪除帳號</h3>
+                <button class="modal-close" onclick="closeAllModals()"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <p class="danger-text">此操作將永久刪除您的帳號及所有關聯資料，且<strong>無法復原</strong>。</p>
+                <div class="modal-field">
+                    <label>請輸入「DELETE」以確認刪除</label>
+                    <input type="text" id="delete-confirm-input" placeholder="DELETE" oninput="checkDeleteConfirm()">
+                </div>
+                <div id="delete-msg" class="modal-msg"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="modal-btn secondary" onclick="closeAllModals()">取消</button>
+                <button class="modal-btn danger" id="delete-confirm-btn" onclick="confirmDeleteAccount()" disabled>永久刪除</button>
+            </div>
+        </div>
+    </div>
+
     <!-- 腳本 -->
+    <script src="../js/auth.js"></script>
     <script src="../js/index.js"></script>
     <script>lucide.createIcons();</script>
 </body>
