@@ -1,174 +1,35 @@
-# API 規格說明書 (API Specification)
+# 🚀 Stock Insight Chat API 規格書 (API Specification)
 
-本文件定義了股市生成式聊天應用的各項 API 接口。
+## 1. API 端點清單 (RESTful Structure)
 
----
-
-### 1.1 註冊與登入 (Auth)
-
-#### 1.1.1 使用者註冊 (Register)
-- **URL**: `/api/auth/register`
-- **Method**: `POST`
-- **Body**:
-    ```json
-    {
-      "email": "user@example.com",
-      "username": "investor_god",
-      "password": "strongpassword123"
-    }
-    ```
-- **Response (201)**:
-    ```json
-    {
-      "status": "success",
-      "message": "User registered successfully",
-      "user_id": "UUID"
-    }
-    ```
-
-#### 1.1.2 使用者登入 (Login)
-- **URL**: `/api/auth/login`
-- **Method**: `POST`
-- **Body**:
-    ```json
-    {
-      "email": "user@example.com",
-      "password": "strongpassword123"
-    }
-    ```
-- **Response (200)**:
-    ```json
-    {
-      "status": "success",
-      "access_token": "eyJhbG...",
-      "token_type": "bearer",
-      "user": {
-        "id": "UUID",
-        "username": "investor_god",
-        "email": "user@example.com",
-        "tier": "free"
-      }
-    }
-    ```
-- **Set-Cookie**: `refresh_token=...; HttpOnly; Secure; SameSite=Lax; Max-Age=604800`
-
-#### 1.1.3 使用者登出 (Logout)
-- **URL**: `/api/auth/logout`
-- **Method**: `POST`
-- **Response (200)**:
-    ```json
-    {
-      "status": "success",
-      "message": "Logged out successfully"
-    }
-    ```
-- **Effect**: 清除伺服器端 Refresh Token 並清除 Cookie。
-
-### 1.2 個人資訊 (User Profile)
-- **GET** `/api/user/profile`: 返回等級與基本資料。
-- **GET** `/api/user/usage`: 返回當前週期的 `used_tokens` 與上限。
+| 模組 | 功能 | 新路徑 (RESTful) | 方法 | 說明 |
+| :--- | :--- | :--- | :---: | :--- |
+| **使用者 (User)** | 註冊帳號 | `/api/user/register` | `POST` | 建立新帳號 |
+| | 登入 | `/api/user/login` | `POST` | 驗證並取得 Token |
+| | 登出 | `/api/user/logout` | `POST` | 作廢 Session |
+| | 刷新 Token | `/api/user/refresh` | `POST` | 無感刷新 Access Token |
+| | **取得資料** | **`/api/user`** | **`GET`** | 取得當前使用者資訊 |
+| | **修改資料** | **`/api/user`** | **`PATCH`** | 修改當前使用者資訊 |
+| | **修改密碼** | **`/api/user/password`** | **`PATCH`** | 變更密碼並撤銷所有 Session |
+| | **刪除帳號** | **`/api/user`** | **`DELETE`** | 永久註銷帳號 |
+| **對話 (Chat)** | 發送訊息 | `/api/chat/messages` | `POST` | 驅動 Agent 進行股市分析 |
+| **檔案 (Files)** | 上傳檔案 | `/api/files/upload` | `POST` | 上傳分析素材 |
+| | 刪除檔案 | `/api/files/{id}` | `DELETE` | 刪除檔案紀錄 |
 
 ---
 
-## 2. 檔案管理接口 (File API - 🟢 已實作)
+## 2. 詳細定義與範例
 
-### 2.1 上傳檔案
-- **Method**: `POST`
-- **URL**: `/api/files/upload`
-- **Body**: `multipart/form-data` (file)
-- **Response**: 返回 `file_id` 與 `s3_url`。
+### 使用者模組
+- **GET /api/user**: 必須攜帶 `Authorization: Bearer <token>`。
+- **PATCH /api/user**: 目前支援欄位 `{ "username": "..." }`。
+- **PATCH /api/user/password**: 需包含舊密碼 (`old_password`) 與新密碼 (`new_password`)。
 
----
-
-## 3. 聊天與 Agent 接口 (Chat API - 🟢 已實作)
-
-此接口為系統的核心，負責啟動 LangGraph Agent 進行決策。
-
-### 3.1 獲取 AI 回應 (Get AI Response)
-- **Method**: `POST`
-- **URL**: `/api/getAIResponse`
-
-#### **Request Body (JSON)**
-```json
-{
-  "query": "最近台積電表現如何？",
-  "chat_id": "UUID (Optional)",
-  "agent_config": {
-    "enabled_tools": ["search_stock_news", "search_market_ai_analysis"]
+### 對話模組
+- **POST /api/chat/messages**: 
+  ```json
+  {
+    "query": "台積電最新財報分析",
+    "chat_id": "選填，不填則開啟新對話"
   }
-}
-```
-
-#### **Response Body (JSON)**
-```json
-{
-  "status": "success",
-  "chat_id": "UUID",
-  "final_content": "### 市場核心觀察\n台積電 (2330) 近期...",
-  "steps": [
-    {
-      "node": "router",
-      "thought": "為了精準回答，啟動 search_stock_news...",
-      "tool_calls": [
-        { "name": "search_stock_news", "query": "台積電", "start_date": "..." }
-      ],
-      "execution_time": 0.45
-    },
-    {
-      "node": "analyst",
-      "content": "### 市場核心觀察...",
-      "execution_time": 2.1
-    }
-  ],
-  "retrieval_sources": [
-    {
-      "title": "台積電法說會亮眼",
-      "url": "https://...",
-      "publishAt": "2026-04-18",
-      "tool": "news"
-    }
-  ]
-}
-```
-
----
-
-## 4. 訊息生成流程圖 (Sequence Diagram)
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant FE as 前端 (User UI)
-    participant BE as FastAPI (後端)
-    participant AG as LangGraph Agent (GPT-5)
-    participant QD as Qdrant (向量庫)
-    participant PG as PostgreSQL (歷史/配額)
-
-    FE->>BE: POST /api/getAIResponse
-    
-    BE->>AG: 啟動 Agent (Router 節點)
-    
-    loop ReAct 循環 (最多 5 次)
-        AG->>QD: 向量檢索 (search_groups)
-        QD-->>AG: 返回 Chunks (Payload)
-        AG->>AG: Retry Check (判斷是否重試)
-    end
-    
-    AG->>AG: Analyst 撰寫最終報告
-    
-    par 持久化與計量
-        BE->>PG: 儲存訊息與 Token 日誌
-        BE->>PG: 更新累計配額 (Atomic Update)
-    end
-
-    BE-->>FE: 回傳 JSON (含 final_content + steps)
-```
-
----
-
-## 5. 錯誤處理 (Error Handling)
-| 狀態碼 | 錯誤原因 |
-| :--- | :--- |
-| 400 | 請求格式錯誤或參數缺失 |
-| 403 | Token 配額已達上限 (Over Quota) |
-| 500 | AI 服務異常或資料庫連接失敗 |
+  ```

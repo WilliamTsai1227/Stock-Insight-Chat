@@ -179,7 +179,7 @@ async function sendMessage() {
     const typingId = showTypingIndicator();
 
     try {
-        const response = await fetch(`${state.apiBase}/getAIResponse`, {
+        const response = await fetch(`${state.apiBase}/chat/messages`, {
             method: 'POST',
             headers: { 
                 'Content-Type': 'application/json',

@@ -16,7 +16,7 @@ from app.backend.core.security import (
     REFRESH_TOKEN_EXPIRE_DAYS
 )
 
-router = APIRouter()
+router = APIRouter(prefix="/user", tags=["User Authentication"])
 
 # --- Request/Response Schemas ---
 
@@ -161,3 +161,55 @@ async def logout(
     # 清除 Cookie
     response.delete_cookie("refresh_token")
     return {"status": "success", "message": "Logged out successfully"}
+
+@router.post("/refresh")
+async def refresh_token(
+    refresh_token: Optional[str] = Cookie(None), 
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    使用 Refresh Token 換取新的 Access Token
+    """
+    if not refresh_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="Refresh token missing"
+        )
+
+    # 1. 檢查資料庫中是否存在此 Refresh Token
+    result = await db.execute(select(RefreshToken).where(RefreshToken.token == refresh_token))
+    db_token = result.scalar_one_or_none()
+    
+    if not db_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="Invalid refresh token"
+        )
+
+    # 2. 檢查是否過期
+    if db_token.expires_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
+        await db.delete(db_token)
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="Refresh token expired"
+        )
+
+    # 3. 取得使用者並產生新 Access Token
+    user_result = await db.execute(select(User).where(User.id == db_token.user_id))
+    user = user_result.scalar_one_or_none()
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="User not found"
+        )
+
+    user_data = {"sub": str(user.id), "email": user.email}
+    new_access_token = create_access_token(data=user_data)
+
+    return {
+        "status": "success",
+        "access_token": new_access_token,
+        "token_type": "bearer"
+    }

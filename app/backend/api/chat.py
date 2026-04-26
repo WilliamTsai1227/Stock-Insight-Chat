@@ -9,7 +9,7 @@ from datetime import datetime
 from app.backend.agent.chat import create_chat_agent
 from langchain_core.messages import HumanMessage, ToolMessage
 
-router = APIRouter()
+router = APIRouter(prefix="/chat", tags=["Chat"])
 
 # --- 請求相關格式 (Request Schemas) ---
 
@@ -38,7 +38,7 @@ class MessageResponse(BaseModel):
 # --- 初始化 Agent ---
 agent_app = create_chat_agent()
 
-@router.post("/getAIResponse", response_model=MessageResponse)
+@router.post("/messages", response_model=MessageResponse)
 async def get_ai_response(request: MessageRequest):
     start_total = time.time()
     

@@ -20,25 +20,54 @@
 4. 寫入 `users` 表，並預設分配 `Free` 等級的 `tier_id`。
 5. 初始化 `user_usage_quotas` (Token 配額)。
 
-### B. 登入流程 (Login - 本地)
-1. 前端發送 `email` 與 `password`。
-2. 後端從 DB 撈取 `password_hash` 進行比對。
-3. 比對成功後，產生一組 `access_token` 與 `refresh_token`。
-4. 將 `refresh_token` 存入 DB 並寫入客戶端 `HttpOnly` Cookie。
-5. 回傳 `access_token` 與使用者基本資訊。
+### B. 登入與權杖管理流程 (Login & Token Flow)
+
+```mermaid
+sequenceDiagram
+    participant Client as 前端 (Browser)
+    participant API as 後端 API (FastAPI)
+    participant DB as 資料庫 (PostgreSQL)
+
+    Note over Client, API: --- 登入流程 ---
+    Client->>API: POST /login (email, password)
+    API->>DB: 驗證使用者與密碼
+    DB-->>API: 驗證成功
+    API->>DB: 儲存 Refresh Token (RT)
+    API-->>Client: 回傳 Access Token (AT) + Set-Cookie (RT, HttpOnly)
+
+    Note over Client, API: --- 一般 API 請求 ---
+    Client->>API: GET /protected (Header: AT)
+    API->>API: 本地解碼驗證 AT
+    API-->>Client: 回傳資料 (快速，不經 DB)
+
+    Note over Client, API: --- AT 過期與自動刷新 ---
+    Client->>API: GET /protected (Header: 已過期 AT)
+    API-->>Client: 401 Unauthorized (Token Expired)
+    Client->>API: POST /refresh (Cookie: RT)
+    API->>DB: 檢查 RT 是否有效且存在
+    DB-->>API: 有效
+    API-->>Client: 回傳新的 Access Token (AT)
+    Client->>API: 重發原請求 (Header: 新 AT)
+    API-->>Client: 回傳資料
+```
 
 ### C. 登出流程 (Logout)
-1. 清除 DB 中該使用者的 `refresh_tokens`。
-2. 清除客戶端的 `refresh_token` Cookie。
+1. 前端呼叫 `POST /logout` (帶上 Cookie RT)。
+2. 後端從 DB 中刪除該 `refresh_tokens` 記錄。
+3. 後端回傳 `Set-Cookie: refresh_token=; Max-Age=0` 指令。
+4. 客戶端瀏覽器自動清除該 Cookie。
 
-### D. Google SSO 整合策略 (未來)
-1. 前端啟動 Google Login，取得 Google 核發的 `id_token`。
-2. 前端將 `id_token` 發送給後端 `/auth/google`。
-3. 後端驗證 Google Token 的有效性。
-4. 若該 Email 尚未存在於系統，自動建立新帳號。
-5. 後端核發本系統的 `access_token` 與 `refresh_token` 給前端，後續流程與本地登入一致。
+## 4. 各類情境處理 (Scenarios)
 
-## 4. 安全性考量
-- **HttpOnly & Secure**: 防止 XSS 攻擊讀取 Refresh Token。
-- **CSRF Protection**: Access Token 透過 Header 傳遞，天然具備基本的 CSRF 防禦能力。
-- **Token Rotation**: 每次刷新 Access Token 時，可選擇性地更新 Refresh Token 以增加安全性。
+| 情境 | 系統反應 |
+| :--- | :--- |
+| **Access Token 被盜** | 駭客在短時間內（30min）可存取，但無法更換新 AT。 |
+| **Refresh Token 被盜** | 只要使用者在其他地方登出或管理員刪除 RT，該權杖立即失效。 |
+| **使用者修改密碼** | 成功後應刪除該使用者所有舊的 Refresh Tokens，強制所有裝置重新登入。 |
+| **RT 過期 (7天)** | 瀏覽器會拒絕發送 Cookie 或後端回傳 401，使用者必須手動重新登入。 |
+
+## 5. 安全性考量
+- **HttpOnly & Secure**: 防止 XSS 攻擊透過 JS 讀取 Refresh Token。
+- **CSRF Protection**: Access Token 透過 Authorization Header 傳遞，不受傳統 CSRF 攻擊影響。
+- **Argon2id**: 使用當前最安全的雜湊演算法防止彩虹表攻擊。
+- **UUIDs**: 所有使用者與 Token ID 均使用 UUID，防止 ID 遍歷攻擊。

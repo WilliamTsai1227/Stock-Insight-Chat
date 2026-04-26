@@ -4,7 +4,7 @@ from ..models import FileModel
 from typing import List
 
 # 這裡不再需要寫 prefix="/api/files"，因為 __init__.py 已經幫你處理好了
-router = APIRouter()
+router = APIRouter(prefix="/files", tags=["Files"])
 
 @router.post("/upload")
 async def upload_file(
