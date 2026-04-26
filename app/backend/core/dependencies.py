@@ -2,7 +2,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import text
 from typing import Optional
 from uuid import UUID
 
@@ -43,9 +43,12 @@ async def get_current_user(
     except JWTError:
         raise credentials_exception
 
-    # 3. 從資料庫查詢使用者
-    result = await db.execute(select(User).where(User.id == user_uuid))
-    user = result.scalar_one_or_none()
+    # 3. 從資料庫查詢使用者 (純 SQL)
+    result = await db.execute(
+        text("SELECT id, email, username, status, tier_id, last_login_at, created_at, updated_at FROM users WHERE id = :u_id"),
+        {"u_id": user_uuid}
+    )
+    user = result.fetchone()
     
     if user is None:
         raise credentials_exception

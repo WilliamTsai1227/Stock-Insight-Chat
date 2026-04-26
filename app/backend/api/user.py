@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import delete
+from sqlalchemy import text
 
 from app.backend.database.postgresql import get_db
 from app.backend.models.orm import User, RefreshToken
@@ -43,17 +43,29 @@ async def get_my_profile(current_user: User = Depends(get_current_user)):
 async def update_my_profile(
     update_data: UserUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: Any = Depends(get_current_user)
 ):
     """
     修改個人資料 (目前僅限修改 username)
     """
     if update_data.username:
-        current_user.username = update_data.username
+        await db.execute(
+            text("UPDATE users SET username = :username, updated_at = :now WHERE id = :u_id"),
+            {
+                "username": update_data.username, 
+                "now": datetime.now(timezone.utc),
+                "u_id": current_user.id
+            }
+        )
     
     await db.commit()
-    await db.refresh(current_user)
-    return current_user
+    
+    # 重新撈取更新後的資料
+    result = await db.execute(
+        text("SELECT id, email, username, status, tier_id FROM users WHERE id = :u_id"),
+        {"u_id": current_user.id}
+    )
+    return result.fetchone()
 
 @router.patch("/password")
 async def change_password(
@@ -71,11 +83,21 @@ async def change_password(
             detail="Incorrect old password"
         )
     
-    # 2. 更新密碼
-    current_user.password_hash = hash_password(data.new_password)
+    # 2. 更新密碼 (純 SQL)
+    await db.execute(
+        text("UPDATE users SET password_hash = :pw, updated_at = :now WHERE id = :u_id"),
+        {
+            "pw": hash_password(data.new_password), 
+            "now": datetime.now(timezone.utc),
+            "u_id": current_user.id
+        }
+    )
     
-    # 3. 安全性增強：刪除該使用者的所有 Refresh Tokens (強制所有裝置重新登入)
-    await db.execute(delete(RefreshToken).where(RefreshToken.user_id == current_user.id))
+    # 3. 安全性增強：刪除該使用者的所有 Refresh Tokens (純 SQL)
+    await db.execute(
+        text("DELETE FROM refresh_tokens WHERE user_id = :u_id"),
+        {"u_id": current_user.id}
+    )
     
     await db.commit()
     return {"status": "success", "message": "Password updated successfully. Please login again on all devices."}
@@ -83,11 +105,14 @@ async def change_password(
 @router.delete("")
 async def delete_account(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: Any = Depends(get_current_user)
 ):
     """
-    刪除帳號 (永久刪除)
+    刪除帳號 (純 SQL)
     """
-    await db.delete(current_user)
+    await db.execute(
+        text("DELETE FROM users WHERE id = :u_id"),
+        {"u_id": current_user.id}
+    )
     await db.commit()
     return {"status": "success", "message": "Account has been permanently deleted."}
