@@ -3,11 +3,11 @@ from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
-from typing import Optional
+from typing import Optional, Any
 from uuid import UUID
 
 from app.backend.database.postgresql import get_db
-from app.backend.models.orm import User
+
 from app.backend.core.security import SECRET_KEY, ALGORITHM
 
 # 定義 Token 取得方式 (從 Header 的 Authorization: Bearer <token>)
@@ -16,7 +16,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 async def get_current_user(
     token: str = Depends(oauth2_scheme), 
     db: AsyncSession = Depends(get_db)
-) -> User:
+) -> Any:
     """
     從 Access Token 中解析出使用者，並從資料庫撈取完整的 User 物件。
     這是所有需要「登入」才能存取的 API 的共同依賴。

@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr
-from typing import Optional
+from typing import Optional, Any
+from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
 from app.backend.database.postgresql import get_db
-from app.backend.models.orm import User, RefreshToken
+
 from app.backend.core.dependencies import get_current_user
 from app.backend.core.security import hash_password, verify_password
 
@@ -71,7 +72,7 @@ async def update_my_profile(
 async def change_password(
     data: PasswordChange,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: Any = Depends(get_current_user)
 ):
     """
     修改密碼。修改成功後會強制登出所有裝置（刪除所有 Refresh Tokens）。

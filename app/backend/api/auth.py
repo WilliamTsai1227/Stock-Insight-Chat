@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
 from app.backend.database.postgresql import get_db
-from app.backend.models.orm import User, RefreshToken, UserUsageQuota, SubscriptionTier
+
 from app.backend.core.security import (
     hash_password, 
     verify_password, 
@@ -94,6 +94,7 @@ async def register(request: RegisterRequest, db: AsyncSession = Depends(get_db))
     )
     
     await db.commit()
+    return {
         "status": "success",
         "message": "User registered successfully",
         "user_id": new_user_id
