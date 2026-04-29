@@ -23,12 +23,42 @@ function isLoggedIn() {
     return !!getAccessToken();
 }
 
+// 解碼 JWT payload (Base64Url 解碼)
+function decodeJwtPayload(token) {
+    try {
+        const base64Url = token.split('.')[1];
+        const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+        const jsonPayload = decodeURIComponent(atob(base64).split('').map(function (c) {
+            return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+        }).join(''));
+        return JSON.parse(jsonPayload);
+    } catch (e) {
+        return null;
+    }
+}
+
 // 帶有認證的 fetch 封裝
 async function authFetch(url, options = {}) {
-    const token = getAccessToken();
+    let token = getAccessToken();
     if (!token) {
         window.location.href = 'login.html';
         return;
+    }
+
+    // 無縫更新 (事前檢查 AT 剩餘期限)
+    const payload = decodeJwtPayload(token);
+    if (payload && payload.exp) {
+        const currentTime = Math.floor(Date.now() / 1000);
+        // 若過期時間小於等於 90 秒，則先發送 refresh 拿新 AT
+        if (payload.exp - currentTime <= 90) {
+            const refreshed = await tryRefreshToken();
+            if (refreshed) {
+                token = getAccessToken(); // 更新為新的 token
+            } else {
+                logout();
+                return;
+            }
+        }
     }
 
     const headers = {

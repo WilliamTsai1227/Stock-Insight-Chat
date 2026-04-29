@@ -11,7 +11,7 @@ pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 # 2. JWT 安全設定 (從環境變數讀取，否則使用預設值)
 SECRET_KEY = os.getenv("SECRET_KEY", "super-secret-key-for-development")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = 15
 REFRESH_TOKEN_EXPIRE_DAYS = 7
 
 def hash_password(password: str) -> str:
