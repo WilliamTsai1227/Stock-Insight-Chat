@@ -17,9 +17,10 @@ from pydantic import BaseModel, EmailStr
 from typing import Optional
 from uuid import UUID
 from datetime import datetime, timezone, timedelta
+from asyncpg.exceptions import UniqueViolationError
 
 from app.backend.database.postgresql import get_db
-from app.backend.core.security import (
+from app.backend.module.security import (
     hash_password,
     verify_password,
     create_access_token,
@@ -137,23 +138,35 @@ async def login(
     user_id_str = str(user["id"])
     user_data = {"sub": user_id_str, "email": user["email"]}
     access_token = create_access_token(data=user_data)
-    refresh_token_str = create_refresh_token(data=user_data)
-
-    expires_at = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
 
     # 3. 寫入 Refresh Token 並更新最後登入時間（原子操作）
-    async with db.transaction():
-        await db.execute(
-            "INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)",
-            user["id"],
-            refresh_token_str,
-            expires_at
-        )
-        await db.execute(
-            "UPDATE users SET last_login_at = $1 WHERE id = $2",
-            datetime.now(timezone.utc),
-            user["id"]
-        )
+    # 避免極端情況下 refresh token 撞 unique constraint，做少量重試
+    refresh_token_str = None
+    expires_at = None
+    for _ in range(3):
+        candidate = create_refresh_token(data=user_data)
+        candidate_expires = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+        try:
+            async with db.transaction():
+                await db.execute(
+                    "INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)",
+                    user["id"],
+                    candidate,
+                    candidate_expires
+                )
+                await db.execute(
+                    "UPDATE users SET last_login_at = $1 WHERE id = $2",
+                    datetime.now(timezone.utc),
+                    user["id"]
+                )
+            refresh_token_str = candidate
+            expires_at = candidate_expires
+            break
+        except UniqueViolationError:
+            continue
+
+    if not refresh_token_str:
+        raise HTTPException(status_code=500, detail="Failed to create refresh token. Please try again.")
 
     # 4. 設定 HttpOnly Cookie
     response.set_cookie(

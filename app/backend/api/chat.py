@@ -1,107 +1,165 @@
 import time
 import uuid
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
-from datetime import datetime
+import json
+from fastapi import APIRouter
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from typing import List, Optional, Any
+from langchain_core.messages import HumanMessage
 
-# 導入 Agent 核心
 from app.backend.agent.chat import create_chat_agent
-from langchain_core.messages import HumanMessage, ToolMessage
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
-# --- 請求相關格式 (Request Schemas) ---
 
 class AgentConfig(BaseModel):
     enabled_tools: Optional[List[str]] = None
 
+
 class MessageRequest(BaseModel):
     query: str
-    chat_id: Optional[str] = None  # UUID string
+    chat_id: Optional[str] = None
     agent_config: Optional[AgentConfig] = None
 
-# --- 回應相關格式 (Response Schemas) ---
 
-class RouterTrace(BaseModel):
-    execution_time: float
-    tool_calls: List[Dict[str, Any]]
-    router_thought: str
-class MessageResponse(BaseModel):
-    status: str
-    chat_id: str
-    total_execution_time: float
-    steps: List[Dict[str, Any]] # 改為儲存所有步驟
-    final_content: str        # 最後的分析結果截讀
-    retrieval_sources: List[Dict[str, Any]]
-
-# --- 初始化 Agent ---
 agent_app = create_chat_agent()
 
-@router.post("/messages", response_model=MessageResponse)
+
+def _sse(event: str, data: Any) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+@router.post("/messages")
 async def get_ai_response(request: MessageRequest):
-    start_total = time.time()
-    
-    # 1. Session 隔離機制
+    """
+    SSE 串流端點：
+      thinking   — Router 思考文字（小型 pill）
+      tool_start — 工具開始執行
+      tool_done  — 工具執行完畢
+      token      — Analyst LLM 逐字輸出（只在 analyst 節點期間）
+      done       — 全部完成，含 steps / sources
+      error      — 例外
+    """
     current_chat_id = request.chat_id if request.chat_id else str(uuid.uuid4())
-    
-    # 2. 準備 Agent 初始狀態
-    enabled_tools = []
+    enabled_tools: List[str] = []
     if request.agent_config and request.agent_config.enabled_tools:
         enabled_tools = request.agent_config.enabled_tools
-        
+
     initial_state = {
         "messages": [HumanMessage(content=request.query)],
         "trace": {},
-        "retrieved_data": [], # 初始化結構化數據存儲
-        "enabled_tools": enabled_tools # 傳遞自選工具清單
+        "retrieved_data": [],
+        "enabled_tools": enabled_tools,
     }
-    
-    # 3. 配置 Thread
     config = {"configurable": {"thread_id": current_chat_id}}
-    
-    try:
-        # 4. 執行 Agent Graph
-        final_state = await agent_app.ainvoke(initial_state, config=config)
-        
-        # 5. 總結執行數據
-        end_total = time.time()
-        total_time = round(end_total - start_total, 3)
-        
-        # 6. 提取 Trace 資訊
-        trace_data = final_state.get("trace", {})
-        steps = trace_data.get("steps", [])
-        
-        # 找有工具調用的 Router 紀錄
-        router_info = next((s for s in steps if s["node"] == "router" and s.get("tool_calls")), {})
-        if not router_info and steps:
-            router_info = next((s for s in steps if s["node"] == "router"), 
-                               {"execution_time": 0, "tool_calls": [], "thought": ""})
-            
-        analyst_info = trace_data.get("final_analyst", {"execution_time": 0, "content": "No content generated."})
-        
-        # 7. 提取 檢索來源 (從新的 retrieved_data 欄位提取結構化 Metadata)
-        sources = []
-        raw_sources = final_state.get("retrieved_data", [])
-        for item in raw_sources:
-            sources.append({
-                "tool": item.get("source_tool"),
-                "title": item.get("title"),
-                "publishAt": item.get("publishAt"),
-                "url": item.get("url"),
-                "mongo_id": item.get("mongo_id"),
-                "content_preview": item.get("content", "")[:100] + "..." 
+
+    async def event_generator():
+        start_total = time.time()
+
+        # 備援累積資料（不依賴 final_state）
+        accumulated_steps: list = []
+        accumulated_retrieved: list = []
+        accumulated_final_analyst: dict = {}
+
+        # ── 關鍵：用 chain_start / chain_end 追蹤 analyst 節點是否正在執行 ──
+        in_analyst = False
+
+        try:
+            async for event in agent_app.astream_events(
+                initial_state,
+                config=config,
+                version="v1",
+            ):
+                kind = event.get("event", "")
+                name = event.get("name", "")
+                data = event.get("data", {})
+
+                # ── Analyst 節點開始執行 ─────────────────────────────
+                if kind == "on_chain_start" and name == "analyst":
+                    in_analyst = True
+
+                # ── Analyst 節點結束 ─────────────────────────────────
+                elif kind == "on_chain_end" and name == "analyst":
+                    in_analyst = False
+                    output = data.get("output", {})
+                    trace_frag = output.get("trace", {})
+                    if trace_frag.get("final_analyst"):
+                        accumulated_final_analyst = trace_frag["final_analyst"]
+                    for step in trace_frag.get("steps", []):
+                        if step not in accumulated_steps:
+                            accumulated_steps.append(step)
+
+                # ── Router 節點結束：tool_start / thinking ───────────
+                elif kind == "on_chain_end" and name == "router":
+                    output = data.get("output", {})
+                    trace_frag = output.get("trace", {})
+                    for step in trace_frag.get("steps", []):
+                        if step not in accumulated_steps:
+                            accumulated_steps.append(step)
+
+                    msgs = output.get("messages", [])
+                    for msg in msgs:
+                        tool_calls = getattr(msg, "tool_calls", None)
+                        if tool_calls:
+                            for tc in tool_calls:
+                                yield _sse("tool_start", {
+                                    "tool": tc["name"],
+                                    "query": tc.get("args", {}).get("query"),
+                                })
+                        elif getattr(msg, "content", ""):
+                            steps = trace_frag.get("steps", [])
+                            thought = steps[-1].get("thought", "") if steps else ""
+                            if thought:
+                                yield _sse("thinking", {"text": thought})
+
+                # ── Tools 節點結束：tool_done ────────────────────────
+                elif kind == "on_chain_end" and name == "tools":
+                    output = data.get("output", {})
+                    for item in output.get("retrieved_data", []):
+                        accumulated_retrieved.append(item)
+                    for msg in output.get("messages", []):
+                        tool_name = getattr(msg, "name", "unknown")
+                        yield _sse("tool_done", {"tool": tool_name})
+
+                # ── LLM token：只在 analyst 節點期間才轉發 ───────────
+                elif kind == "on_chat_model_stream" and in_analyst:
+                    chunk = data.get("chunk")
+                    if chunk:
+                        token = getattr(chunk, "content", "") or ""
+                        if token:
+                            yield _sse("token", {"text": token})
+
+            # ── async for 結束 = 圖已執行完畢，無條件送 done ─────────
+            total_time = round(time.time() - start_total, 3)
+            yield _sse("done", {
+                "status": "success",
+                "chat_id": current_chat_id,
+                "total_execution_time": total_time,
+                "steps": accumulated_steps,
+                "final_content": accumulated_final_analyst.get("content", ""),
+                "retrieval_sources": [
+                    {
+                        "tool": item.get("source_tool"),
+                        "title": item.get("title"),
+                        "publishAt": item.get("publishAt"),
+                        "url": item.get("url"),
+                        "mongo_id": item.get("mongo_id"),
+                        "content_preview": item.get("content", "")[:100] + "...",
+                    }
+                    for item in accumulated_retrieved
+                ],
             })
 
-        return {
-            "status": "success",
-            "chat_id": current_chat_id,
-            "total_execution_time": total_time,
-            "steps": steps, # 展示所有 ReAct 歷程
-            "final_content": analyst_info.get("content", ""),
-            "retrieval_sources": sources
-        }
-        
-    except Exception as e:
-        print(f"Agent Execution Error: {e}")
-        raise HTTPException(status_code=500, detail=f"Agent 執行失敗: {str(e)}")
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            yield _sse("error", {"message": f"Agent 執行失敗: {str(e)}"})
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )

@@ -12,8 +12,8 @@ from typing import Optional
 from datetime import datetime, timezone
 
 from app.backend.database.postgresql import get_db
-from app.backend.core.dependencies import get_current_user
-from app.backend.core.security import hash_password, verify_password
+from app.backend.module.dependencies import get_current_user
+from app.backend.module.security import hash_password, verify_password
 
 router = APIRouter(prefix="/user", tags=["User Management"])
 

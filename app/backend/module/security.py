@@ -1,6 +1,7 @@
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Union, Optional
+from uuid import uuid4
 from jose import jwt
 from passlib.context import CryptContext
 
@@ -44,9 +45,16 @@ def create_refresh_token(data: dict) -> str:
     """
     產生 Refresh Token (長效期)
     """
-    expire = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
     to_encode = data.copy()
-    to_encode.update({"exp": expire, "type": "refresh"})
+    # 加入 jti / iat，避免同秒產生相同 token 造成 unique constraint 撞擊
+    to_encode.update({
+        "exp": expire,
+        "iat": now,
+        "jti": str(uuid4()),
+        "type": "refresh",
+    })
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 

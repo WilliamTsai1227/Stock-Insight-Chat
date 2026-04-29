@@ -295,12 +295,11 @@ async def call_router(state: AgentState):
     return {"messages": [response], "trace": trace}
 
 async def call_analyst(state: AgentState):
-    """Analyst 節點：負責整合資料與產出研究報告"""
+    """Analyst 節點：負責整合資料與產出研究報告（支援 astream_events token 串流）"""
     start_time = time.time()
     messages = state["messages"]
     current_now = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
-    
-    # 使用 Gemini 風格：自然、具備層次感且充滿洞察力的投研報告
+
     analyst_prompt = f"""你是一位具備頂尖洞察力的資深分析師，擅長從碎片化的數據中提取最有價值的投資核心資訊。現在是 {current_now}。
 
     請將對話歷史中搜尋工具 (Tool Messages) 提供的一切資料，轉化為一封「清晰、優雅且具備專業點評」的分析報告。
@@ -314,7 +313,15 @@ async def call_analyst(state: AgentState):
     * **細節**：如有數據，像是股價、漲跌幅、成交量等，任何數據請務必列出。
     """
     full_messages = [SystemMessage(content=analyst_prompt)] + messages
-    response = await analyst_model.ainvoke(full_messages)
+
+    # 使用 astream 逐 chunk 累積，讓 astream_events 能在 analyst 節點期間
+    # 發出 on_chat_model_stream 事件供 API 層轉發 token
+    full_content = ""
+    async for chunk in analyst_model.astream(full_messages):
+        full_content += chunk.content or ""
+
+    from langchain_core.messages import AIMessage
+    response = AIMessage(content=full_content)
     
     execution_time = time.time() - start_time
     trace = state.get("trace", {})

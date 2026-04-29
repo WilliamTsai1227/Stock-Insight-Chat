@@ -13,10 +13,43 @@ Stock Insight Chat 是一套專為投資者設計的 AI 智能對話系統。它
 
 ##  快速開始 (Quick Start)
 
+### 0. 進入網站測試 (Frontend)
+本專案前端為 **純 HTML/CSS/JS**，由 Docker 內的 **Nginx** 提供服務（`frontend`，預設對外 `80` port）。
+
+- **登入頁**: [http://localhost/login.html](http://localhost/login.html)
+- **主頁**: [http://localhost/index.html](http://localhost/index.html)
+- **後端健康檢查**: [http://localhost:8000/](http://localhost:8000/)
+
+#### 測試帳號 (Development Only)
+> [!WARNING]
+> 以下帳號僅供本機/開發測試使用，請勿用於正式環境或公開部署。
+
+- **Username**: `test`
+- **Email**: `test@mail.com`
+- **Password**: `1qaz!QAZ`
+
 ### 1. 啟動基礎設施
 透過 Docker Compose 啟動 Qdrant 向量資料庫與 PostgreSQL：
 ```bash
 docker-compose -f ./deploy/docker-compose.yml up -d
+```
+
+#### 常用 Docker Compose 指令速查
+```bash
+# 啟動所有服務 (背景執行)
+docker-compose -f ./deploy/docker-compose.yml up -d
+
+# 重建並啟動所有服務 (程式碼有更新時使用)
+docker-compose -f ./deploy/docker-compose.yml up --build -d
+
+# 追蹤單一服務 logs
+docker-compose -f ./deploy/docker-compose.yml logs -f <service name>
+
+# 停止容器 (保留容器/資料)
+docker-compose -f ./deploy/docker-compose.yml stop
+
+# 停止並移除容器/網路 (volume 預設保留)
+docker-compose -f ./deploy/docker-compose.yml down
 ```
 
 ### 1-1. 重啟後端服務 (Restarting Backend)

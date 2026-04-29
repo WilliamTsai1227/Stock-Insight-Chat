@@ -13,7 +13,7 @@ from typing import Any
 from uuid import UUID
 
 from app.backend.database.postgresql import get_db
-from app.backend.core.security import SECRET_KEY, ALGORITHM
+from app.backend.module.security import SECRET_KEY, ALGORITHM
 
 # 定義 Token 取得方式 (從 Header 的 Authorization: Bearer <token>)
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/user/login")

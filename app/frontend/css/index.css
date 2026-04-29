@@ -1155,3 +1155,78 @@ textarea:focus {
 .danger-text strong {
     color: #ff6b6b;
 }
+
+/* ============================================
+   Streaming UI — Tool Status & Live Token
+   ============================================ */
+
+/* 工具狀態列 — 緊湊 pill 樣式 */
+.tool-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    background: rgba(176, 176, 176, 0.05);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    font-size: 0.74rem;
+    color: var(--text-dim);
+    width: fit-content;
+    max-width: 100%;
+    transition: opacity 0.4s;
+}
+
+/* thinking 事件：更細小的純文字提示 */
+.thinking-status {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    padding: 2px 4px;
+    font-style: italic;
+    opacity: 0.7;
+}
+
+.tool-status-icon {
+    display: inline-flex;
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+}
+
+/* 旋轉動畫（搜尋中） */
+.tool-status-icon.spinning svg,
+.tool-status-icon.spinning {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+}
+
+/* 工具名稱標籤 */
+.tool-status .tool-label {
+    color: var(--accent);
+    font-weight: 600;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 0.75rem;
+}
+
+/* 完成後淡出 */
+.tool-status.done {
+    opacity: 0.4;
+}
+
+/* 串流中的游標閃爍效果 */
+.stream-cursor {
+    display: inline-block;
+    width: 2px;
+    height: 1em;
+    background: var(--accent);
+    margin-left: 2px;
+    vertical-align: text-bottom;
+    animation: blink 0.8s step-end infinite;
+}
+
+@keyframes blink {
+    50% { opacity: 0; }
+}
