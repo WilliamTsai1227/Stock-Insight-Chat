@@ -17,8 +17,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY app/backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 複製整個 app 目錄到 /src/app
-COPY app ./app
+# 只複製 app/backend 目錄到 /src/app/backend
+COPY app/backend ./app/backend
 
 # 啟動命令：指向層級明確的 app.backend.app:app
 CMD ["uvicorn", "app.backend.app:app", "--host", "0.0.0.0", "--port", "8000"]
