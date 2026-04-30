@@ -1,3 +1,6 @@
+// --- 串流鎖定旗標（防止上一輪回答未完成時重複送出）---
+let isStreaming = false;
+
 // --- 全域狀態 ---
 let state = {
     projects: [
@@ -53,7 +56,7 @@ function initEventListeners() {
         if (e.isComposing || e.keyCode === 229) return;
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            sendMessage();
+            if (!isStreaming) sendMessage();
         }
     });
 
@@ -157,9 +160,27 @@ function clearChatMessages() {
 // ============================================================
 
 async function sendMessage() {
+    // ── 防止重複送出：旗標在任何邏輯之前立即佔位 ──
+    if (isStreaming) return;
+    isStreaming = true;
+
+    const sendBtn = document.getElementById('send-btn');
     const inputEl = document.getElementById('user-input');
+
+    // 立即鎖定 UI（雙重保險，防快速連按）
+    sendBtn.disabled = true;
+    inputEl.disabled = true;
+    inputEl.placeholder = '等待回覆中...';
+
     const query = inputEl.value.trim();
-    if (!query) return;
+    if (!query) {
+        // 空白輸入：解鎖後直接返回
+        isStreaming = false;
+        sendBtn.disabled = false;
+        inputEl.disabled = false;
+        inputEl.placeholder = '輸入您的問題...';
+        return;
+    }
 
     // 取得工具設定
     let enabled_tools = [];
@@ -176,28 +197,64 @@ async function sendMessage() {
     inputEl.value = '';
     inputEl.style.height = 'auto';
 
-    // 鎖定輸入
-    const sendBtn = document.getElementById('send-btn');
-    sendBtn.disabled = true;
-
     const statusBadge = document.getElementById('chat-status');
     statusBadge.textContent = 'Analyzing...';
 
     // 建立 AI 訊息容器（先放到畫面上，後續逐步填入）
-    const { msgDiv, toolStatusEl, bubble, streamCursor } = createStreamingMessageUI();
+    const { msgDiv, toolsContainer, bubble, streamCursor, initialPlaceholder } = createStreamingMessageUI();
     const container = document.getElementById('chat-messages');
     const welcome = container.querySelector('.welcome-hero');
     if (welcome) welcome.remove();
     container.appendChild(msgDiv);
     scrollToBottom();
 
-    // 暫存串流文字與最終 payload
+    // 暫存串流文字、工具行清單、思考計時器
     let rawStreamText = '';
     let donePayload = null;
+    let bubbleAdded = false;
+    const toolRows = [];       // { toolName, element, status }
+    let thinkingTimer = null;
+    let thinkingRow = null;
+
+    // 確保 bubble 已掛到 DOM（第一個 token 到來時才加入，避免空白灰框）
+    function addBubbleIfNeeded() {
+        if (!bubbleAdded) {
+            bubbleAdded = true;
+            msgDiv.appendChild(bubble);
+        }
+    }
+
+    // 在 toolsContainer 底部顯示「思考中....」波浪動畫
+    function showThinkingRow() {
+        if (thinkingRow) return;
+        thinkingRow = document.createElement('div');
+        thinkingRow.className = 'thinking-wave-row';
+        const text = document.createElement('span');
+        text.textContent = '思考中';
+        const dots = document.createElement('span');
+        dots.className = 'thinking-dots';
+        for (let i = 0; i < 3; i++) {
+            const dot = document.createElement('span');
+            dot.textContent = '.';
+            dots.appendChild(dot);
+        }
+        thinkingRow.appendChild(text);
+        thinkingRow.appendChild(dots);
+        toolsContainer.appendChild(thinkingRow);
+        scrollToBottom();
+    }
+
+    // 清除思考中指示
+    function hideThinkingRow() {
+        if (thinkingTimer) { clearTimeout(thinkingTimer); thinkingTimer = null; }
+        if (thinkingRow && thinkingRow.parentNode) { thinkingRow.remove(); }
+        thinkingRow = null;
+    }
 
     const cleanup = () => {
         streamCursor.remove();
-        if (toolStatusEl.parentNode) toolStatusEl.remove();
+        hideThinkingRow();
+        if (toolsContainer.parentNode) toolsContainer.remove();
     };
 
     try {
@@ -238,30 +295,79 @@ async function sendMessage() {
 
                 switch (eventType) {
 
-                    // Router 思考中（小型文字，不是大框）
+                    // Router 思考中（更新初始佔位文字）
                     case 'thinking': {
-                        updateToolStatus(toolStatusEl, payload.text || '思考中...', 'thinking');
+                        const txt = initialPlaceholder.querySelector('span:last-child');
+                        if (txt) txt.textContent = payload.text || '思考中...';
                         break;
                     }
 
-                    // 工具開始調用
+                    // 工具開始調用 → 移除初始佔位、新增一行 tool row
                     case 'tool_start': {
-                        updateToolStatus(toolStatusEl, formatToolName(payload.tool), 'running');
+                        if (initialPlaceholder.parentNode) initialPlaceholder.remove();
+                        hideThinkingRow();
+
+                        const row = document.createElement('div');
+                        row.className = 'tool-status';
+
+                        const iconSpan = document.createElement('span');
+                        iconSpan.className = 'tool-status-icon spinning';
+                        iconSpan.appendChild(makeSvgSpinner(12));
+
+                        const label = document.createElement('span');
+                        label.className = 'tool-label';
+                        label.textContent = formatToolName(payload.tool);
+
+                        const suffix = document.createElement('span');
+                        suffix.textContent = '...';
+
+                        row.appendChild(iconSpan);
+                        row.appendChild(label);
+                        row.appendChild(suffix);
+                        toolsContainer.appendChild(row);
+                        toolRows.push({ toolName: payload.tool, element: row, status: 'running' });
+                        scrollToBottom();
                         break;
                     }
 
-                    // 工具完成
+                    // 工具完成 → 更新對應行為勾選狀態，0.5s 後若無 token 則顯示思考中
                     case 'tool_done': {
-                        updateToolStatus(toolStatusEl, formatToolName(payload.tool), 'done');
+                        const entry = toolRows.find(r => r.toolName === payload.tool && r.status === 'running');
+                        if (entry) {
+                            entry.status = 'done';
+                            const row = entry.element;
+                            row.classList.add('done');
+                            while (row.firstChild) row.removeChild(row.firstChild);
+
+                            const iconSpan = document.createElement('span');
+                            iconSpan.className = 'tool-status-icon';
+                            iconSpan.appendChild(makeSvgCheck(12));
+
+                            const label = document.createElement('span');
+                            label.className = 'tool-label';
+                            label.textContent = formatToolName(payload.tool);
+
+                            const suffix = document.createElement('span');
+                            suffix.textContent = ' ✓';
+
+                            row.appendChild(iconSpan);
+                            row.appendChild(label);
+                            row.appendChild(suffix);
+                        }
+
+                        // 0.5s 後若後端還未開始串流則顯示「思考中...」
+                        if (thinkingTimer) clearTimeout(thinkingTimer);
+                        thinkingTimer = setTimeout(() => {
+                            thinkingTimer = null;
+                            showThinkingRow();
+                        }, 500);
                         break;
                     }
 
                     // LLM 逐字 token（僅 analyst 節點）
                     case 'token': {
-                        if (rawStreamText === '') {
-                            // 第一個 token：讓狀態列淡出
-                            toolStatusEl.style.opacity = '0.35';
-                        }
+                        hideThinkingRow();
+                        addBubbleIfNeeded();
                         rawStreamText += payload.text || '';
                         bubble.innerHTML = renderMarkdown(rawStreamText);
                         bubble.appendChild(streamCursor);
@@ -273,19 +379,20 @@ async function sendMessage() {
                     case 'done': {
                         donePayload = payload;
                         state.currentChatId = payload.chat_id;
-
+                        addBubbleIfNeeded();
                         cleanup();
-                        bubble.innerHTML = renderMarkdown(
-                            payload.final_content || rawStreamText
-                        );
-
+                        const finalText = payload.final_content || rawStreamText;
+                        bubble.innerHTML = renderMarkdown(finalText);
                         appendStepsAndSources(msgDiv, payload.steps, payload.retrieval_sources);
+                        appendCopyBar(msgDiv, finalText);
                         lucide.createIcons();
                         scrollToBottom();
                         break;
                     }
 
                     case 'error': {
+                        hideThinkingRow();
+                        addBubbleIfNeeded();
                         cleanup();
                         bubble.textContent = `錯誤：${payload.message}`;
                         break;
@@ -296,14 +403,54 @@ async function sendMessage() {
 
     } catch (err) {
         console.error('Streaming error:', err);
+        addBubbleIfNeeded();
         bubble.textContent = '伺服器連線失敗，請檢查 Docker 是否啟動。';
     } finally {
         // 確保游標與狀態列一定被清除，不管 done 有沒有成功收到
         cleanup();
+        isStreaming = false;
         sendBtn.disabled = false;
+        inputEl.disabled = false;
+        inputEl.placeholder = '輸入您的問題...';
         statusBadge.textContent = 'Ready';
         lucide.createIcons();
     }
+}
+
+// ============================================================
+// SVG 圖示輔助函式
+// ============================================================
+
+function makeSvgSpinner(size) {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('width', size);
+    svg.setAttribute('height', size);
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '2');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', 'M21 12a9 9 0 11-6.219-8.56');
+    svg.appendChild(path);
+    return svg;
+}
+
+function makeSvgCheck(size) {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('width', size);
+    svg.setAttribute('height', size);
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', '#00d68f');
+    svg.setAttribute('stroke-width', '2.5');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+    poly.setAttribute('points', '20 6 9 17 4 12');
+    svg.appendChild(poly);
+    return svg;
 }
 
 // ============================================================
@@ -314,39 +461,37 @@ function createStreamingMessageUI() {
     const msgDiv = document.createElement('div');
     msgDiv.className = 'message ai';
 
-    // 工具狀態列（初始：等待中）
-    const toolStatusEl = document.createElement('div');
-    toolStatusEl.className = 'tool-status';
+    // 工具列容器（多個 tool row 垂直堆疊）
+    const toolsContainer = document.createElement('div');
+    toolsContainer.className = 'tools-container';
 
-    const iconWrap = document.createElement('span');
-    iconWrap.className = 'tool-status-icon spinning';
-    // 用 inline SVG 的旋轉圈圈
-    iconWrap.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none"
-        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M21 12a9 9 0 11-6.219-8.56"/>
-    </svg>`;
+    // 初始佔位列（分析中...）
+    const initialPlaceholder = document.createElement('div');
+    initialPlaceholder.className = 'tool-status';
+    const initIconWrap = document.createElement('span');
+    initIconWrap.className = 'tool-status-icon spinning';
+    initIconWrap.appendChild(makeSvgSpinner(14));
+    const initText = document.createElement('span');
+    initText.textContent = '正在分析問題...';
+    initialPlaceholder.appendChild(initIconWrap);
+    initialPlaceholder.appendChild(initText);
+    toolsContainer.appendChild(initialPlaceholder);
 
-    const statusText = document.createElement('span');
-    statusText.textContent = '正在分析問題...';
+    msgDiv.appendChild(toolsContainer);
 
-    toolStatusEl.appendChild(iconWrap);
-    toolStatusEl.appendChild(statusText);
-    msgDiv.appendChild(toolStatusEl);
-
-    // 氣泡（空的，等 token 進來後逐步填入）
+    // 氣泡（先不加入 DOM，等第一個 token 進來才掛上去，避免空白灰框）
     const bubble = document.createElement('div');
     bubble.className = 'bubble';
-    msgDiv.appendChild(bubble);
 
     // 游標（串流時顯示）
     const streamCursor = document.createElement('span');
     streamCursor.className = 'stream-cursor';
 
-    return { msgDiv, toolStatusEl, bubble, streamCursor };
+    return { msgDiv, toolsContainer, bubble, streamCursor, initialPlaceholder };
 }
 
 // ============================================================
-// 更新工具狀態列文字
+// 工具名稱對照表
 // ============================================================
 
 const TOOL_DISPLAY_NAMES = {
@@ -357,62 +502,6 @@ const TOOL_DISPLAY_NAMES = {
 
 function formatToolName(tool) {
     return TOOL_DISPLAY_NAMES[tool] || tool;
-}
-
-function updateToolStatus(el, text, statusType) {
-    el.innerHTML = '';
-    el.classList.toggle('done', statusType === 'done');
-
-    if (statusType === 'thinking') {
-        // 小字斜體，不顯示圖示
-        el.style.fontStyle = 'italic';
-        el.style.fontSize = '0.72rem';
-        el.style.opacity = '0.65';
-        el.style.borderStyle = 'dashed';
-        const txt = document.createElement('span');
-        txt.textContent = text;
-        el.appendChild(txt);
-        return;
-    }
-
-    // 其他狀態恢復預設字型
-    el.style.fontStyle = '';
-    el.style.fontSize = '';
-    el.style.opacity = '';
-    el.style.borderStyle = '';
-
-    if (statusType === 'running') {
-        const icon = document.createElement('span');
-        icon.className = 'tool-status-icon spinning';
-        icon.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none"
-            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 12a9 9 0 11-6.219-8.56"/>
-        </svg>`;
-        const label = document.createElement('span');
-        label.className = 'tool-label';
-        label.textContent = text;
-        const suffix = document.createElement('span');
-        suffix.textContent = '...';
-        el.appendChild(icon);
-        el.appendChild(label);
-        el.appendChild(suffix);
-
-    } else if (statusType === 'done') {
-        const icon = document.createElement('span');
-        icon.className = 'tool-status-icon';
-        icon.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none"
-            stroke="#00d68f" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="20 6 9 17 4 12"/>
-        </svg>`;
-        const label = document.createElement('span');
-        label.className = 'tool-label';
-        label.textContent = text;
-        const suffix = document.createElement('span');
-        suffix.textContent = ' ✓';
-        el.appendChild(icon);
-        el.appendChild(label);
-        el.appendChild(suffix);
-    }
 }
 
 // ============================================================
@@ -614,4 +703,68 @@ function addMessageToUI(role, content) {
 function scrollToBottom() {
     const container = document.getElementById('chat-messages');
     container.scrollTop = container.scrollHeight;
+}
+
+// ============================================================
+// 複製按鈕列（回答完成後附加在氣泡下方）
+// ============================================================
+
+function appendCopyBar(msgDiv, rawText) {
+    const bar = document.createElement('div');
+    bar.className = 'copy-bar';
+
+    const btn = document.createElement('button');
+    btn.className = 'copy-btn';
+    btn.title = '複製回答';
+
+    const iconCopy = document.createElement('i');
+    iconCopy.setAttribute('data-lucide', 'copy');
+    iconCopy.setAttribute('size', '13');
+
+    const label = document.createElement('span');
+    label.textContent = '複製';
+
+    btn.appendChild(iconCopy);
+    btn.appendChild(label);
+    bar.appendChild(btn);
+    msgDiv.appendChild(bar);
+
+    btn.addEventListener('click', () => {
+        // 複製純文字（去除 markdown 符號）
+        const plainText = rawText
+            .replace(/#{1,6}\s+/g, '')
+            .replace(/\*\*(.+?)\*\*/g, '$1')
+            .replace(/\*(.+?)\*/g, '$1')
+            .replace(/`{1,3}[^`]*`{1,3}/g, '')
+            .replace(/\[(.+?)\]\(.+?\)/g, '$1')
+            .trim();
+
+        navigator.clipboard.writeText(plainText).then(() => {
+            // 短暫顯示「已複製」勾勾確認
+            btn.classList.add('copied');
+            while (btn.firstChild) btn.removeChild(btn.firstChild);
+
+            const iconCheck = document.createElement('i');
+            iconCheck.setAttribute('data-lucide', 'check');
+            iconCheck.setAttribute('size', '13');
+            const doneLabel = document.createElement('span');
+            doneLabel.textContent = '已複製';
+            btn.appendChild(iconCheck);
+            btn.appendChild(doneLabel);
+            lucide.createIcons();
+
+            setTimeout(() => {
+                btn.classList.remove('copied');
+                while (btn.firstChild) btn.removeChild(btn.firstChild);
+                const iconBack = document.createElement('i');
+                iconBack.setAttribute('data-lucide', 'copy');
+                iconBack.setAttribute('size', '13');
+                const labelBack = document.createElement('span');
+                labelBack.textContent = '複製';
+                btn.appendChild(iconBack);
+                btn.appendChild(labelBack);
+                lucide.createIcons();
+            }, 2000);
+        });
+    });
 }

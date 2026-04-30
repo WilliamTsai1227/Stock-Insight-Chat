@@ -743,6 +743,19 @@ textarea:focus {
     outline: none;
 }
 
+/* 串流回覆進行中：輸入框鎖定狀態 */
+textarea:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.input-container:has(textarea:disabled) {
+    border-color: var(--border);
+    box-shadow: none;
+    opacity: 0.75;
+    cursor: not-allowed;
+}
+
 .send-btn {
     background-color: var(--accent);
     color: #000;
@@ -1160,6 +1173,16 @@ textarea:focus {
    Streaming UI — Tool Status & Live Token
    ============================================ */
 
+/* 工具列容器 — 多個 tool row 垂直堆疊 */
+.tools-container {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-bottom: 6px;
+    width: fit-content;
+    max-width: 100%;
+}
+
 /* 工具狀態列 — 緊湊 pill 樣式 */
 .tool-status {
     display: inline-flex;
@@ -1176,13 +1199,37 @@ textarea:focus {
     transition: opacity 0.4s;
 }
 
-/* thinking 事件：更細小的純文字提示 */
-.thinking-status {
-    font-size: 0.72rem;
+/* 思考中... 波浪動畫列 */
+.thinking-wave-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 3px 10px;
+    font-size: 0.74rem;
     color: var(--text-dim);
-    padding: 2px 4px;
     font-style: italic;
-    opacity: 0.7;
+    opacity: 0.75;
+}
+
+.thinking-dots {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 1px;
+}
+
+.thinking-dots span {
+    display: inline-block;
+    animation: waveDot 1.2s ease-in-out infinite;
+    line-height: 1;
+}
+
+.thinking-dots span:nth-child(1) { animation-delay: 0s; }
+.thinking-dots span:nth-child(2) { animation-delay: 0.18s; }
+.thinking-dots span:nth-child(3) { animation-delay: 0.36s; }
+
+@keyframes waveDot {
+    0%, 60%, 100% { transform: translateY(0); }
+    30%            { transform: translateY(-4px); }
 }
 
 .tool-status-icon {
@@ -1229,4 +1276,41 @@ textarea:focus {
 
 @keyframes blink {
     50% { opacity: 0; }
+}
+
+/* ============================================================
+   複製按鈕列
+   ============================================================ */
+
+.copy-bar {
+    display: flex;
+    justify-content: flex-start;
+    margin-top: 6px;
+    padding-left: 2px;
+}
+
+.copy-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px 3px 8px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    color: var(--text-dim);
+    font-size: 0.72rem;
+    cursor: pointer;
+    transition: color 0.2s, border-color 0.2s, background 0.2s;
+}
+
+.copy-btn:hover {
+    color: var(--text-main);
+    border-color: rgba(176, 176, 176, 0.4);
+    background: rgba(176, 176, 176, 0.06);
+}
+
+.copy-btn.copied {
+    color: #00d68f;
+    border-color: rgba(0, 214, 143, 0.4);
+    background: rgba(0, 214, 143, 0.06);
 }
