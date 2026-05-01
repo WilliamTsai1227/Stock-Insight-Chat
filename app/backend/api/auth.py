@@ -33,7 +33,7 @@ from app.backend.module.security import (
     REFRESH_TOKEN_EXPIRE_DAYS
 )
 
-router = APIRouter(prefix="/user", tags=["User Authentication"])
+router = APIRouter(tags=["User Authentication"])
 
 
 # --- Request/Response Schemas ---
@@ -62,7 +62,7 @@ class LoginResponse(BaseModel):
 
 # --- API Endpoints ---
 
-@router.post("/register", status_code=status.HTTP_201_CREATED)
+@router.post("/api/user/register", status_code=status.HTTP_201_CREATED)
 async def register(
     request: RegisterRequest,
     db: asyncpg.Connection = Depends(get_db)
@@ -118,7 +118,7 @@ async def register(
     }
 
 
-@router.post("/login", response_model=LoginResponse)
+@router.post("/api/user/login", response_model=LoginResponse)
 async def login(
     request: LoginRequest,
     response: Response,
@@ -201,7 +201,7 @@ async def login(
     }
 
 
-@router.post("/logout")
+@router.post("/api/user/logout")
 async def logout(
     response: Response,
     refresh_token: Optional[str] = Cookie(None),
@@ -218,7 +218,7 @@ async def logout(
     return {"status": "success", "message": "Logged out successfully"}
 
 
-@router.post("/refresh")
+@router.post("/api/user/refresh")
 async def refresh_access_token(
     response: Response,
     refresh_token: Optional[str] = Cookie(None),

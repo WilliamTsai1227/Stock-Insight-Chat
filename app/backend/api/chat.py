@@ -9,7 +9,7 @@ from langchain_core.messages import HumanMessage
 
 from app.backend.agent.chat import create_chat_agent
 
-router = APIRouter(prefix="/chat", tags=["Chat"])
+router = APIRouter(tags=["Chat"])
 
 
 class AgentConfig(BaseModel):
@@ -29,7 +29,7 @@ def _sse(event: str, data: Any) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-@router.post("/messages")
+@router.post("/api/chat/messages")
 async def get_ai_response(request: MessageRequest):
     """
     SSE 串流端點：

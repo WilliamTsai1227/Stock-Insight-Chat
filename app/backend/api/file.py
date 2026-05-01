@@ -4,9 +4,9 @@ from ..models import FileModel
 from typing import List
 
 # 這裡不再需要寫 prefix="/api/files"，因為 __init__.py 已經幫你處理好了
-router = APIRouter(prefix="/files", tags=["Files"])
+router = APIRouter(tags=["Files"])
 
-@router.post("/upload")
+@router.post("/api/files/upload")
 async def upload_file(
     project_id: UUID = Form(...),
     chat_id: UUID = Form(None),
@@ -49,7 +49,7 @@ async def upload_file(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.delete("/{file_id}")
+@router.delete("/api/files/{file_id}")
 async def delete_file(file_id: UUID):
     """
     根據 file_id 刪除指定檔案

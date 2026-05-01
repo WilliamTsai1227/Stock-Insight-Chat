@@ -15,7 +15,7 @@ from app.backend.database.postgresql import get_db
 from app.backend.module.dependencies import get_current_user
 from app.backend.module.security import hash_password, verify_password
 
-router = APIRouter(prefix="/user", tags=["User Management"])
+router = APIRouter(tags=["User Management"])
 
 
 # --- Request/Response Schemas ---
@@ -37,7 +37,7 @@ class UserProfile(BaseModel):
 
 # --- API Endpoints ---
 
-@router.get("", response_model=UserProfile)
+@router.get("/api/user", response_model=UserProfile)
 async def get_my_profile(
     current_user: asyncpg.Record = Depends(get_current_user)
 ):
@@ -54,7 +54,7 @@ async def get_my_profile(
     }
 
 
-@router.patch("", response_model=UserProfile)
+@router.patch("/api/user", response_model=UserProfile)
 async def update_my_profile(
     update_data: UserUpdate,
     db: asyncpg.Connection = Depends(get_db),
@@ -84,7 +84,7 @@ async def update_my_profile(
     }
 
 
-@router.patch("/password")
+@router.patch("/api/user/password")
 async def change_password(
     data: PasswordChange,
     db: asyncpg.Connection = Depends(get_db),
@@ -120,7 +120,7 @@ async def change_password(
     }
 
 
-@router.delete("")
+@router.delete("/api/user")
 async def delete_account(
     db: asyncpg.Connection = Depends(get_db),
     current_user: asyncpg.Record = Depends(get_current_user)
