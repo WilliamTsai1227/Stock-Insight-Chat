@@ -1,14 +1,49 @@
 // ============================================
-// Auth Module (共用認證管理)
-// 用途: 管理登入狀態、Token 刷新、使用者選單
-// 在 index.html 中引入使用
+// Auth Module v2（共用認證管理）
+//
+// 三重 Token 刷新機制：
+//   機制 A：主動 Timer  → 提前 60 秒靜默背景換 AT（零等待，主要路徑）
+//   機制 B：Request Interceptor → 事前檢查 90s + 401 Fallback 重試
+//   機制 C：並發鎖 → 防止多個 401 同時觸發 /refresh → RT Reuse Attack
 // ============================================
 
 const AUTH_API = 'http://localhost:8000/api';
 
-// --- Token 管理 ---
+// ─── 機制 C：並發鎖 ──────────────────────────────────────────────
+// 若多個請求同時收到 401，確保只有一個 /refresh 被執行
+// 其餘等待同一個 Promise resolve，共用同一次換 Token 的結果
+// 若不加鎖：兩個並發 401 → 觸發兩次 /refresh → 第二次用已旋轉的舊 RT
+//          → 後端判定 Reuse Attack → 所有 Session 被撤銷 → 用戶被踢下線
+let _isRefreshing = false;
+let _refreshPromise = null;
+
+// ─── AT 存入 JS 記憶體（防 XSS）─────────────────────────────────
+// AT 不寫入 localStorage / sessionStorage（XSS 腳本無法讀取 JS 變數）
+// RT 由後端設定為 HttpOnly Cookie，JS 完全無法讀取
+// 代價：頁面刷新後記憶體清空，需靠 RT Cookie 自動補 AT（見 DOMContentLoaded）
+let _accessToken = null;
+
+// ─── 機制 A：主動 Timer 控制代碼 ────────────────────────────────
+let _refreshTimer = null;
+
+
+// ─── Token 管理 API ──────────────────────────────────────────────
+
+function setAccessToken(token) {
+    _accessToken = token;
+    _scheduleProactiveRefresh(token);   // 同時重設 Timer
+}
+
 function getAccessToken() {
-    return localStorage.getItem('access_token');
+    return _accessToken;
+}
+
+function clearAccessToken() {
+    _accessToken = null;
+    if (_refreshTimer) {
+        clearTimeout(_refreshTimer);
+        _refreshTimer = null;
+    }
 }
 
 function getUser() {
@@ -20,24 +55,105 @@ function getUser() {
 }
 
 function isLoggedIn() {
-    return !!getAccessToken();
+    return !!_accessToken;
 }
 
-// 解碼 JWT payload (Base64Url 解碼)
+// 解碼 JWT Payload（Base64Url → JSON，不驗簽）
 function decodeJwtPayload(token) {
     try {
         const base64Url = token.split('.')[1];
         const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-        const jsonPayload = decodeURIComponent(atob(base64).split('').map(function (c) {
-            return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-        }).join(''));
+        const jsonPayload = decodeURIComponent(
+            atob(base64).split('').map(c =>
+                '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)
+            ).join('')
+        );
         return JSON.parse(jsonPayload);
-    } catch (e) {
+    } catch {
         return null;
     }
 }
 
-// 帶有認證的 fetch 封裝
+
+// ─── 機制 A：主動 Timer ──────────────────────────────────────────
+// 每次取得新 AT 後，計算 exp-60s 的時間點，設定 setTimeout
+// Timer 到期時在背景靜默呼叫 /refresh，用戶完全感知不到
+// 若分頁在背景被瀏覽器節流，Timer 可能延誤 → 靠機制 B 補位
+
+function _scheduleProactiveRefresh(token) {
+    // 清除舊 Timer（避免多個 Timer 同時跑）
+    if (_refreshTimer) {
+        clearTimeout(_refreshTimer);
+        _refreshTimer = null;
+    }
+    if (!token) return;
+
+    const payload = decodeJwtPayload(token);
+    if (!payload || !payload.exp) return;
+
+    const nowMs = Date.now();
+    const expMs = payload.exp * 1000;
+    const refreshAtMs = expMs - 60 * 1000;  // 到期前 60 秒觸發
+    const delayMs = refreshAtMs - nowMs;
+
+    if (delayMs <= 0) {
+        // 已在 60 秒緩衝內或已過期，立刻觸發靜默換 AT
+        _silentRefresh();
+        return;
+    }
+
+    _refreshTimer = setTimeout(() => {
+        _refreshTimer = null;
+        _silentRefresh();
+    }, delayMs);
+}
+
+async function _silentRefresh() {
+    const ok = await tryRefreshToken();
+    if (!ok) {
+        // RT 也失效（過期或 Reuse Attack 被撤銷），強制登出
+        logout();
+    }
+}
+
+
+// ─── 機制 C：tryRefreshToken（帶並發鎖）──────────────────────────
+// 若已有一個 /refresh 進行中，後續呼叫直接等待同一個 Promise
+// 保證每個 RT 只被後端消費一次（配合後端 DELETE...RETURNING 原子操作）
+
+async function tryRefreshToken() {
+    if (_isRefreshing) {
+        return _refreshPromise;     // 等待進行中的那次，不重複發請求
+    }
+
+    _isRefreshing = true;
+    _refreshPromise = (async () => {
+        try {
+            const res = await fetch(`${AUTH_API}/user/refresh`, {
+                method: 'POST',
+                credentials: 'include'  // 瀏覽器自動帶上 HttpOnly RT Cookie
+            });
+
+            if (!res.ok) return false;
+
+            const data = await res.json();
+            setAccessToken(data.access_token);  // 存入記憶體 + 重設 Timer A
+            return true;
+        } catch {
+            return false;
+        } finally {
+            _isRefreshing = false;
+            _refreshPromise = null;
+        }
+    })();
+
+    return _refreshPromise;
+}
+
+
+// ─── 機制 B：authFetch（事前檢查 + 401 Fallback）────────────────
+// 所有需要認證的 API 請求都透過此函式發送
+
 async function authFetch(url, options = {}) {
     let token = getAccessToken();
     if (!token) {
@@ -45,15 +161,14 @@ async function authFetch(url, options = {}) {
         return;
     }
 
-    // 無縫更新 (事前檢查 AT 剩餘期限)
+    // 事前檢查：AT 在 90 秒內到期 → 先換 AT 再發請求（比 Timer 更保守的防線）
     const payload = decodeJwtPayload(token);
     if (payload && payload.exp) {
         const currentTime = Math.floor(Date.now() / 1000);
-        // 若過期時間小於等於 90 秒，則先發送 refresh 拿新 AT
         if (payload.exp - currentTime <= 90) {
             const refreshed = await tryRefreshToken();
             if (refreshed) {
-                token = getAccessToken(); // 更新為新的 token
+                token = getAccessToken();
             } else {
                 logout();
                 return;
@@ -69,7 +184,7 @@ async function authFetch(url, options = {}) {
 
     let res = await fetch(url, { ...options, headers, credentials: 'include' });
 
-    // AT 過期 → 嘗試用 RT 刷新
+    // 401 Fallback：AT 已過期（Timer/事前檢查未及時），嘗試換 AT 後重試一次
     if (res.status === 401) {
         const refreshed = await tryRefreshToken();
         if (refreshed) {
@@ -84,45 +199,30 @@ async function authFetch(url, options = {}) {
     return res;
 }
 
-// 嘗試刷新 Access Token
-async function tryRefreshToken() {
-    try {
-        const res = await fetch(`${AUTH_API}/user/refresh`, {
-            method: 'POST',
-            credentials: 'include' // 帶上 HttpOnly Cookie
-        });
 
-        if (!res.ok) return false;
+// ─── 登出 ────────────────────────────────────────────────────────
 
-        const data = await res.json();
-        localStorage.setItem('access_token', data.access_token);
-        return true;
-    } catch {
-        return false;
-    }
-}
-
-// 登出
 async function logout() {
+    clearAccessToken();     // 清記憶體 AT + 取消 Timer
     try {
         await fetch(`${AUTH_API}/user/logout`, {
             method: 'POST',
-            credentials: 'include'
+            credentials: 'include'  // 後端會清除 RT Cookie
         });
     } catch {
-        // 靜默失敗
+        // 靜默失敗（離線登出也要能清本地狀態）
     }
-    localStorage.removeItem('access_token');
     localStorage.removeItem('user');
     window.location.href = 'login.html';
 }
 
-// --- 使用者選單初始化 ---
+
+// ─── 使用者選單初始化 ─────────────────────────────────────────────
+
 function initUserMenu() {
     const user = getUser();
     if (!user) return;
 
-    // 更新頭像文字
     const avatarEl = document.getElementById('user-avatar');
     const nameEl = document.getElementById('user-display-name');
     if (avatarEl) {
@@ -132,7 +232,6 @@ function initUserMenu() {
         nameEl.textContent = user.username || user.email;
     }
 
-    // 下拉選單開關
     const trigger = document.getElementById('user-menu-trigger');
     const dropdown = document.getElementById('user-dropdown');
     if (trigger && dropdown) {
@@ -146,7 +245,6 @@ function initUserMenu() {
         dropdown.addEventListener('click', (e) => e.stopPropagation());
     }
 
-    // 登出按鈕
     const logoutBtn = document.getElementById('menu-logout');
     if (logoutBtn) {
         logoutBtn.addEventListener('click', (e) => {
@@ -155,7 +253,6 @@ function initUserMenu() {
         });
     }
 
-    // 會員資料按鈕
     const profileBtn = document.getElementById('menu-profile');
     if (profileBtn) {
         profileBtn.addEventListener('click', (e) => {
@@ -164,7 +261,6 @@ function initUserMenu() {
         });
     }
 
-    // 修改密碼按鈕
     const passwordBtn = document.getElementById('menu-password');
     if (passwordBtn) {
         passwordBtn.addEventListener('click', (e) => {
@@ -173,7 +269,6 @@ function initUserMenu() {
         });
     }
 
-    // 刪除帳號按鈕
     const deleteBtn = document.getElementById('menu-delete');
     if (deleteBtn) {
         deleteBtn.addEventListener('click', (e) => {
@@ -183,13 +278,14 @@ function initUserMenu() {
     }
 }
 
-// --- 個人資料 Modal ---
+
+// ─── 個人資料 Modal ──────────────────────────────────────────────
+
 async function openProfileModal() {
     closeAllModals();
     const modal = document.getElementById('profile-modal');
     modal.classList.add('show');
 
-    // 撈取最新資料
     try {
         const res = await authFetch(`${AUTH_API}/user`);
         if (!res || !res.ok) return;
@@ -200,14 +296,12 @@ async function openProfileModal() {
         document.getElementById('profile-status').textContent = user.status || 'active';
         document.getElementById('profile-tier').textContent = user.tier_id || 'Free';
 
-        // 更新 localStorage
         localStorage.setItem('user', JSON.stringify(user));
     } catch (err) {
         console.error('Failed to fetch profile:', err);
     }
 }
 
-// 儲存個人資料
 async function saveProfile() {
     const username = document.getElementById('profile-username').value.trim();
     const msgEl = document.getElementById('profile-msg');
@@ -234,13 +328,11 @@ async function saveProfile() {
         const updated = await res.json();
         localStorage.setItem('user', JSON.stringify(updated));
 
-        // 更新頂部頭像
         const avatarEl = document.getElementById('user-avatar');
         const nameEl = document.getElementById('user-display-name');
         if (avatarEl) avatarEl.textContent = updated.username.charAt(0).toUpperCase();
         if (nameEl) nameEl.textContent = updated.username;
 
-        // 更新側邊欄
         const sidebarName = document.querySelector('.sidebar-footer .user-profile span');
         const sidebarAvatar = document.querySelector('.sidebar-footer .avatar');
         if (sidebarName) sidebarName.textContent = updated.username;
@@ -254,7 +346,9 @@ async function saveProfile() {
     }
 }
 
-// --- 修改密碼 Modal ---
+
+// ─── 修改密碼 Modal ──────────────────────────────────────────────
+
 function openPasswordModal() {
     closeAllModals();
     document.getElementById('password-modal').classList.add('show');
@@ -297,8 +391,6 @@ async function savePassword() {
 
         msgEl.textContent = '密碼已更新，請重新登入';
         msgEl.className = 'modal-msg success';
-
-        // 2 秒後自動登出
         setTimeout(() => logout(), 2000);
     } catch {
         msgEl.textContent = '無法連線至伺服器';
@@ -306,7 +398,9 @@ async function savePassword() {
     }
 }
 
-// --- 刪除帳號 Modal ---
+
+// ─── 刪除帳號 Modal ──────────────────────────────────────────────
+
 function openDeleteModal() {
     closeAllModals();
     document.getElementById('delete-modal').classList.add('show');
@@ -337,7 +431,7 @@ async function confirmDeleteAccount() {
         msgEl.className = 'modal-msg success';
 
         setTimeout(() => {
-            localStorage.removeItem('access_token');
+            clearAccessToken();
             localStorage.removeItem('user');
             window.location.href = 'login.html';
         }, 2000);
@@ -347,39 +441,43 @@ async function confirmDeleteAccount() {
     }
 }
 
-// --- Modal 管理 ---
+
+// ─── Modal 管理 ──────────────────────────────────────────────────
+
 function closeAllModals() {
     document.querySelectorAll('.modal-overlay').forEach(m => m.classList.remove('show'));
-    // 清除訊息
     document.querySelectorAll('.modal-msg').forEach(m => {
         m.textContent = '';
         m.className = 'modal-msg';
     });
 }
 
-// 點擊遮罩關閉
 document.addEventListener('click', (e) => {
     if (e.target.classList.contains('modal-overlay')) {
         closeAllModals();
     }
 });
 
-// ESC 關閉 Modal
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeAllModals();
 });
 
-// --- 頁面初始化 ---
-window.addEventListener('DOMContentLoaded', () => {
-    // 檢查登入狀態
-    if (!isLoggedIn()) {
+
+// ─── 頁面初始化 ──────────────────────────────────────────────────
+// 頁面刷新後記憶體 AT 消失，優先用 RT Cookie 靜默換取新 AT
+// 若 RT 也失效（過期/被撤銷），導向登入頁
+
+window.addEventListener('DOMContentLoaded', async () => {
+    const ok = await tryRefreshToken();
+    if (!ok) {
+        // 清除 user，防止 login.html 看到 localStorage.user 又自動 redirect 回來（無限迴圈）
+        localStorage.removeItem('user');
         window.location.href = 'login.html';
         return;
     }
 
     initUserMenu();
 
-    // 更新側邊欄使用者資訊
     const user = getUser();
     if (user) {
         const sidebarName = document.querySelector('.sidebar-footer .user-profile span');

@@ -11,6 +11,7 @@ asyncpg 語法注意事項：
 - 多個寫入需原子性時，用 async with db.transaction()
 """
 
+import os
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, status, Response, Cookie
 from pydantic import BaseModel, EmailStr
@@ -18,6 +19,10 @@ from typing import Optional
 from uuid import UUID
 from datetime import datetime, timezone, timedelta
 from asyncpg.exceptions import UniqueViolationError
+
+# secure=True 只在 HTTPS 下 Cookie 才會被瀏覽器送出
+# 本機 HTTP 開發時必須設為 False，否則 RT Cookie 永遠不會被帶回來
+COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
 
 from app.backend.database.postgresql import get_db
 from app.backend.module.security import (
@@ -179,7 +184,7 @@ async def login(
         key="refresh_token",
         value=refresh_token_str,
         httponly=True,
-        secure=True,
+        secure=COOKIE_SECURE,   # 本機 HTTP: False；正式 HTTPS: True
         samesite="lax",
         max_age=REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600
     )
@@ -319,7 +324,7 @@ async def refresh_access_token(
         key="refresh_token",
         value=new_refresh_token_str,
         httponly=True,
-        secure=True,
+        secure=COOKIE_SECURE,   # 本機 HTTP: False；正式 HTTPS: True
         samesite="lax",
         max_age=REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600
     )

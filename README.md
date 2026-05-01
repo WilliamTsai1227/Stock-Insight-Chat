@@ -316,6 +316,44 @@ flowchart TD
 
 ---
 
+### 前端無縫換 Token 三機制（`auth.js`）
+
+為確保用戶在發送聊天時不因 Token 驗證而感受到等待，前端實作三重機制：
+
+```
+機制 A（主要路徑）─────────────────────────────────────────────────
+ 取得新 AT 後立即計算 exp - 60s
+ → 設定 setTimeout(_silentRefresh, delay)
+ → Timer 到期時在背景靜默呼叫 /refresh
+ → 取得新 AT 存入記憶體，並重設下一輪 Timer
+ → 用戶發聊天時 AT 已是新的，零等待
+
+機制 B（Fallback）──────────────────────────────────────────────────
+ authFetch 每次發請求前檢查 AT 剩餘秒數：
+   ├─ exp - now ≤ 90s → 先呼叫 tryRefreshToken()，換完再發
+   └─ 若 API 回傳 401（Timer 延遲未及換） → tryRefreshToken() → 重送請求
+ 瀏覽器分頁在背景被節流時 Timer 可能延誤，機制 B 作為補位防線
+
+機制 C（並發鎖）────────────────────────────────────────────────────
+ _isRefreshing flag + _refreshPromise 共用同一個 Promise
+   ├─ 第一個觸發 /refresh 的請求：設 _isRefreshing = true，執行並記下 Promise
+   └─ 同時間其他請求：等待同一個 Promise，共用換 Token 結果
+
+ ⚠️ 無此鎖的風險：
+   兩個並發 401 → 同時呼叫 /refresh（兩次）
+   → 第一次：RT 旋轉成功，DB 舊 RT 被刪
+   → 第二次：拿著已被消費的舊 RT → 後端判定 Reuse Attack
+   → 後端撤銷所有 Session → 用戶被強制登出所有裝置
+```
+
+| 機制 | 實作位置 | 觸發條件 | 用戶感知 |
+| :--- | :--- | :--- | :--- |
+| A 主動 Timer | `_scheduleProactiveRefresh()` | AT exp - 60s | 無感知（背景執行） |
+| B Request Interceptor | `authFetch()` | exp ≤ 90s 或收到 401 | 輕微等待（~200ms） |
+| C 並發鎖 | `tryRefreshToken()` | 多個請求同時觸發 | 無影響（共用結果） |
+
+---
+
 ### 流程一：登入（Login）
 
 ```mermaid

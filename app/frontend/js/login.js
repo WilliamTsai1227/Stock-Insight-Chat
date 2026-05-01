@@ -103,8 +103,8 @@ document.getElementById('login-btn').addEventListener('click', async () => {
             return;
         }
 
-        // 儲存 Access Token 到 localStorage
-        localStorage.setItem('access_token', data.access_token);
+        // AT 不寫入 localStorage（防 XSS）
+        // index.html 載入時 auth.js 會用 RT Cookie 靜默換取 AT 存入記憶體
         localStorage.setItem('user', JSON.stringify(data.user));
 
         // 導向主頁
@@ -215,9 +215,12 @@ function setLoading(btn, isLoading) {
 }
 
 // --- Auto-redirect if already logged in ---
+// AT 已改為記憶體儲存，無法在 login 頁直接讀取
+// 改用 localStorage.user 做 UX 判斷（若有 user 資料，嘗試導向主頁）
+// 真正的認證由 index.html 載入時 auth.js 的 tryRefreshToken() 完成
 window.addEventListener('DOMContentLoaded', () => {
-    const token = localStorage.getItem('access_token');
-    if (token) {
+    const user = localStorage.getItem('user');
+    if (user) {
         window.location.href = 'index.html';
     }
 });
