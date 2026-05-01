@@ -1,16 +1,19 @@
-from fastapi import APIRouter, File, UploadFile, Form, HTTPException
+import asyncpg
+from fastapi import APIRouter, Depends, File, UploadFile, Form, HTTPException
 from uuid import UUID
 from ..models import FileModel
 from typing import List
 
-# 這裡不再需要寫 prefix="/api/files"，因為 __init__.py 已經幫你處理好了
+from app.backend.module.jwt import get_current_user
+
 router = APIRouter(tags=["Files"])
 
 @router.post("/api/files/upload")
 async def upload_file(
     project_id: UUID = Form(...),
     chat_id: UUID = Form(None),
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
+    current_user: asyncpg.Record = Depends(get_current_user),
 ):
     """
     實作規格書 ## 1. 檔案上傳接口
@@ -50,7 +53,10 @@ async def upload_file(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/api/files/{file_id}")
-async def delete_file(file_id: UUID):
+async def delete_file(
+    file_id: UUID,
+    current_user: asyncpg.Record = Depends(get_current_user),
+):
     """
     根據 file_id 刪除指定檔案
     """

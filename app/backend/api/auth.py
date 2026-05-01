@@ -25,12 +25,12 @@ from asyncpg.exceptions import UniqueViolationError
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
 
 from app.backend.database.postgresql import get_db
-from app.backend.module.security import (
+from app.backend.module.jwt import (
     hash_password,
     verify_password,
     create_access_token,
     create_refresh_token,
-    REFRESH_TOKEN_EXPIRE_DAYS
+    REFRESH_TOKEN_EXPIRE_DAYS,
 )
 
 router = APIRouter(tags=["User Authentication"])
@@ -239,12 +239,19 @@ async def refresh_access_token(
             detail="Refresh token missing"
         )
 
-    # 1. 驗證 JWT 簽名與過期（不查 DB，pure stateless 驗證）
-    from app.backend.module.security import decode_token
+    # 1. 純 Stateless 驗證 RT 簽名與 exp（不查 DB）。
+    #    對偽造或已過期的 token 在此快速失敗，避免浪費 DB 連線。
+    #    同時驗證 type == "refresh"，防止用 AT 冒充 RT。
+    from app.backend.module.jwt import decode_token
     payload = decode_token(refresh_token)
+    if not payload or payload.get("type") != "refresh":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token invalid or expired. Please login again."
+        )
 
-    # 2. 原子消費：DELETE...RETURNING（只有一個 concurrent request 能成功）
-    #    asyncpg 單一 statement 自動 commit，不需包在 transaction 裡
+    # 2. 原子消費：DELETE...RETURNING（只有一個 concurrent request 能成功）。
+    #    此時 payload 已驗證有效，DB 若找不到 → 表示 RT 已被消費 → Reuse 攻擊。
     consumed = await db.fetchrow(
         """
         DELETE FROM refresh_tokens
@@ -255,31 +262,23 @@ async def refresh_access_token(
     )
 
     if not consumed:
-        # 區分兩種情境：
-        # (A) payload 有效但 DB 找不到 → RT 已被消費 → Token Reuse 攻擊
-        # (B) payload 無效（過期/簽名錯誤）→ 單純的非法請求
-        if payload and payload.get("type") == "refresh":
-            # 情境 A：撤銷該 user 所有 Session
-            user_id_str = payload.get("sub")
-            if user_id_str:
-                try:
-                    uid = UUID(user_id_str)
-                    await db.execute(
-                        "DELETE FROM refresh_tokens WHERE user_id = $1",
-                        uid
-                    )
-                except Exception:
-                    pass
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Security alert: Token reuse detected. All sessions have been revoked. Please login again."
-            )
-        else:
-            # 情境 B：過期或非法 token
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Refresh token invalid or expired. Please login again."
-            )
+        # payload 有效（JWT 簽名 + exp 均通過），DB 卻無此紀錄 →
+        # 此 RT 已被消費過（正常 Rotation 已刪除），判定為 Token Reuse 攻擊。
+        # 立刻撤銷該 user 所有 Session，駭客與正常用戶同時被踢下線。
+        user_id_str = payload.get("sub")
+        if user_id_str:
+            try:
+                uid = UUID(user_id_str)
+                await db.execute(
+                    "DELETE FROM refresh_tokens WHERE user_id = $1",
+                    uid
+                )
+            except Exception:
+                pass
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Security alert: Token reuse detected. All sessions have been revoked. Please login again."
+        )
 
     # 3. 取得使用者資料
     user = await db.fetchrow(

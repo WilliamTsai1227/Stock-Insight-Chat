@@ -1,13 +1,15 @@
 import time
 import uuid
 import json
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional, Any
+from uuid import UUID
 from langchain_core.messages import HumanMessage
 
 from app.backend.agent.chat import create_chat_agent
+from app.backend.module.jwt import get_current_user_id
 
 router = APIRouter(tags=["Chat"])
 
@@ -30,7 +32,10 @@ def _sse(event: str, data: Any) -> str:
 
 
 @router.post("/api/chat/messages")
-async def get_ai_response(request: MessageRequest):
+async def get_ai_response(
+    request: MessageRequest,
+    current_user_id: UUID = Depends(get_current_user_id),
+):
     """
     SSE 串流端點：
       thinking   — Router 思考文字（小型 pill）

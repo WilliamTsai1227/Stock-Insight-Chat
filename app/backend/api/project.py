@@ -9,21 +9,21 @@ asyncpg 語法注意事項：
 - 取單值：await db.fetchval(sql, *args)
 - 寫入/更新/刪除：await db.execute(sql, *args)
 
-外鍵約束說明：
-- projects.user_id 參考 users(id)
-- 若 user_id 不存在，PostgreSQL 會拋出 ForeignKeyViolationError
-- 後端統一捕獲並回傳 HTTP 404，附帶明確錯誤訊息給前端
+安全設計：
+- 所有端點均需通過 JWT Access Token 驗證（get_current_user）
+- user_id 從驗證後的 JWT 中取得，前端不需也不應傳遞
+- project name 經白名單正則過濾，防止 XSS / Injection
 """
 
 import re
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from uuid import UUID
 from datetime import datetime, timezone
 from asyncpg.exceptions import ForeignKeyViolationError
 
 from app.backend.database.postgresql import get_db
+from app.backend.module.jwt import get_current_user
 
 router = APIRouter(tags=["Project"])
 
@@ -42,7 +42,7 @@ router = APIRouter(tags=["Project"])
 #   ()（）【】「」  → 括號（ASCII + 全形）
 #
 # 禁止（不在白名單內）：
-#   < > ' " ` ; = / \ & % $ # @ ! ^ * + | ~ , ？ 等危險字符
+#   < > ' " ` ; = / \ & % $ # @ ! ^ * + | ~ 等危險字符
 #   → 防止 XSS、HTML Injection、SQL 符號注入、Shell 注入
 # ─────────────────────────────────────────────────────────────────────────────
 _VALID_NAME_PATTERN = re.compile(
@@ -99,7 +99,7 @@ def _validate_name(name: str) -> str:
 
 class CreateProjectRequest(BaseModel):
     name: str
-    user_id: UUID
+    # user_id 由後端從 JWT 取得，前端無需傳遞
 
 
 # --- API Endpoint ---
@@ -107,28 +107,34 @@ class CreateProjectRequest(BaseModel):
 @router.post("/api/project", status_code=status.HTTP_201_CREATED)
 async def create_project(
     request: CreateProjectRequest,
-    db: asyncpg.Connection = Depends(get_db)
+    db: asyncpg.Connection = Depends(get_db),
+    current_user: asyncpg.Record = Depends(get_current_user),
 ):
     """
-    建立新專案。
+    建立新專案。（需登入）
 
     前端必要欄位：
-    - name     (str)  : 專案名稱，由後端正則過濾非法字串
-    - user_id  (UUID) : 所屬使用者 ID
+    - name (str) : 專案名稱，由後端正則過濾非法字串
 
     後端自動帶入：
-    - created_at : UTC+0 標準時間，前端不需傳入
+    - user_id    : 從 JWT Access Token 解析，前端無需傳遞
+    - created_at : UTC+0 標準時間
 
-    錯誤回傳：
-    - 422 : name 包含非法字符、過長或為空
-    - 404 : user_id 不存在於 users 表（PostgreSQL FK 違反）
-    - 500 : 其他未預期的資料庫錯誤
+    HTTP 回應：
+    - 201 Created  : 建立成功，回傳專案資料
+    - 401          : JWT 驗證失敗或 Token 已過期
+    - 403          : 帳號已停用
+    - 422          : name 包含非法字符、過長或為空
+    - 500          : 其他未預期的資料庫錯誤
     """
 
     # 1. 正則過濾 name
     clean_name = _validate_name(request.name)
 
-    # 2. 由後端注入 UTC+0 建立時間
+    # 2. user_id 從已驗證的 JWT 取得（無需信任前端傳入）
+    user_id = current_user["id"]
+
+    # 3. 由後端注入 UTC+0 建立時間
     now_utc = datetime.now(timezone.utc)
 
     try:
@@ -139,16 +145,14 @@ async def create_project(
             RETURNING id, name, user_id, created_at
             """,
             clean_name,
-            request.user_id,
-            now_utc
+            user_id,
+            now_utc,
         )
 
     except ForeignKeyViolationError:
-        # PostgreSQL FK 約束：user_id 不存在於 users 表時觸發
-        # asyncpg.exceptions.ForeignKeyViolationError
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"User with id '{request.user_id}' does not exist."
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unexpected referential integrity error. Please contact support."
         )
 
     except asyncpg.PostgresError as e:

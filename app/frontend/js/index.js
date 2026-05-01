@@ -14,6 +14,7 @@ let state = {
     },
     currentProjectId: 'p1',
     currentChatId: 'c1',
+    expandedProjects: new Set(['p1']),  // 預設展開第一個專案
     apiBase: 'http://localhost:8000/api'
 };
 
@@ -39,7 +40,7 @@ function renderMarkdown(raw) {
 // --- 初始化 ---
 document.addEventListener('DOMContentLoaded', () => {
     renderProjects();
-    renderChats('p1');
+    renderRecentChats();
     initEventListeners();
 });
 
@@ -79,69 +80,281 @@ function initEventListeners() {
         };
     }
 
-    document.getElementById('new-project-btn').addEventListener('click', () => {
-        const name = prompt('請輸入專案名稱:');
-        if (name) {
-            const id = 'p' + Date.now();
-            state.projects.push({ id, name });
-            state.chats[id] = [];
-            renderProjects();
-        }
-    });
-
     document.getElementById('new-chat-btn').addEventListener('click', () => {
-        const title = 'New Chat ' + (state.chats[state.currentProjectId].length + 1);
-        const id = 'c' + Date.now();
-        state.chats[state.currentProjectId].push({ id, title });
-        state.currentChatId = null;
-        renderChats(state.currentProjectId);
+        showChatView();
         clearChatMessages();
     });
 }
 
 // --- 渲染 UI ---
+
+/**
+ * 渲染專案列表（頂端固定「新增專案」項目，下方為可展開的專案列表）
+ */
 function renderProjects() {
     const list = document.getElementById('project-list');
-    list.innerHTML = '';
+    while (list.firstChild) list.removeChild(list.firstChild);
+
+    // ── 「新增專案」固定首項 ──
+    const newLi = document.createElement('li');
+    newLi.className = 'new-project-item';
+
+    const newIcon = document.createElement('i');
+    newIcon.setAttribute('data-lucide', 'folder-plus');
+
+    const newText = document.createElement('span');
+    newText.textContent = '新增專案';
+
+    newLi.appendChild(newIcon);
+    newLi.appendChild(newText);
+    newLi.addEventListener('click', openCreateProjectModal);
+    list.appendChild(newLi);
+
+    // ── 各專案 ──
     state.projects.forEach(p => {
         const li = document.createElement('li');
-        const icon = document.createElement('i');
-        icon.setAttribute('data-lucide', 'folder');
-        const span = document.createElement('span');
-        span.textContent = p.name;
-        li.appendChild(icon);
-        li.appendChild(span);
-        if (p.id === state.currentProjectId) li.classList.add('active');
-        li.onclick = () => {
+        const isExpanded = state.expandedProjects.has(p.id);
+        const isActive   = p.id === state.currentProjectId;
+
+        // 專案行
+        const row = document.createElement('div');
+        row.className = 'project-row'
+            + (isActive   ? ' active'   : '')
+            + (isExpanded ? ' expanded' : '');
+
+        const folderIcon = document.createElement('i');
+        folderIcon.setAttribute('data-lucide', 'folder');
+        folderIcon.className = 'project-row-icon';
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'project-row-name';
+        nameSpan.textContent = p.name;
+
+        const chevron = document.createElement('i');
+        chevron.setAttribute('data-lucide', 'chevron-right');
+        chevron.className = 'project-row-chevron';
+
+        row.appendChild(folderIcon);
+        row.appendChild(nameSpan);
+        row.appendChild(chevron);
+
+        row.addEventListener('click', () => {
+            if (state.expandedProjects.has(p.id)) {
+                state.expandedProjects.delete(p.id);
+            } else {
+                state.expandedProjects.add(p.id);
+            }
             state.currentProjectId = p.id;
+            state.currentChatId = null;
             renderProjects();
-            renderChats(p.id);
-        };
+            renderRecentChats();
+            lucide.createIcons();
+            showProjectView(p);
+        });
+
+        // 對話子列表（展開後顯示）
+        const chatList = document.createElement('ul');
+        chatList.className = 'project-chats' + (isExpanded ? ' open' : '');
+
+        const projectChats = state.chats[p.id] || [];
+        projectChats.forEach(c => {
+            const chatLi = document.createElement('li');
+            chatLi.className = 'project-chat-item'
+                + (c.id === state.currentChatId ? ' active' : '');
+
+            const msgIcon = document.createElement('i');
+            msgIcon.setAttribute('data-lucide', 'message-square');
+
+            const titleSpan = document.createElement('span');
+            titleSpan.textContent = c.title;
+
+            chatLi.appendChild(msgIcon);
+            chatLi.appendChild(titleSpan);
+
+            chatLi.addEventListener('click', (e) => {
+                e.stopPropagation();
+                state.currentChatId = c.id;
+                state.currentProjectId = p.id;
+                renderProjects();
+                renderRecentChats();
+                lucide.createIcons();
+                showChatView();
+            });
+
+            chatList.appendChild(chatLi);
+        });
+
+        li.appendChild(row);
+        li.appendChild(chatList);
         list.appendChild(li);
     });
+
     lucide.createIcons();
 }
 
-function renderChats(projectId) {
-    const list = document.getElementById('chat-list');
-    list.innerHTML = '';
-    const projectChats = state.chats[projectId] || [];
-    projectChats.forEach(c => {
+/**
+ * 渲染最近對話（彙整所有專案的 chats，依加入順序由新到舊）
+ */
+function renderRecentChats() {
+    const list = document.getElementById('recent-chat-list');
+    while (list.firstChild) list.removeChild(list.firstChild);
+
+    // 收集所有 chats，並記錄所屬 project
+    const allChats = [];
+    state.projects.forEach(p => {
+        (state.chats[p.id] || []).forEach(c => {
+            allChats.push({ ...c, projectId: p.id });
+        });
+    });
+
+    // 反轉：最新加入的排在最前面
+    allChats.reverse().forEach(c => {
         const li = document.createElement('li');
-        const icon = document.createElement('i');
-        icon.setAttribute('data-lucide', 'message-square');
-        const span = document.createElement('span');
-        span.textContent = c.title;
-        li.appendChild(icon);
-        li.appendChild(span);
-        if (c.id === state.currentChatId) li.classList.add('active');
-        li.onclick = () => {
+        li.className = 'recent-chat-item'
+            + (c.id === state.currentChatId ? ' active' : '');
+
+        const msgIcon = document.createElement('i');
+        msgIcon.setAttribute('data-lucide', 'message-square');
+
+        const titleSpan = document.createElement('span');
+        titleSpan.textContent = c.title;
+
+        li.appendChild(msgIcon);
+        li.appendChild(titleSpan);
+
+        li.addEventListener('click', () => {
             state.currentChatId = c.id;
-            renderChats(projectId);
-        };
+            state.currentProjectId = c.projectId;
+            renderProjects();
+            renderRecentChats();
+            lucide.createIcons();
+        });
+
         list.appendChild(li);
     });
+
     lucide.createIcons();
+}
+
+// ============================================================
+// 建立專案 Modal
+// ============================================================
+
+function openCreateProjectModal() {
+    const modal = document.getElementById('create-project-modal');
+    const input = document.getElementById('create-project-name');
+    const submitBtn = document.getElementById('create-project-submit-btn');
+    const msg = document.getElementById('create-project-msg');
+
+    // 重置狀態（包含按鈕文字，防止上次「建立中…」殘留）
+    input.value = '';
+    submitBtn.disabled = true;
+    submitBtn.textContent = '建立專案';
+    msg.className = 'modal-msg';
+    msg.textContent = '';
+
+    modal.classList.add('show');
+    setTimeout(() => input.focus(), 100);
+}
+
+function closeCreateProjectModal() {
+    document.getElementById('create-project-modal').classList.remove('show');
+}
+
+/** input 即時驗證：有字才啟用「建立專案」按鈕 */
+function onProjectNameInput() {
+    const val = document.getElementById('create-project-name').value.trim();
+    document.getElementById('create-project-submit-btn').disabled = val.length === 0;
+}
+
+/**
+ * 點擊「建立專案」— 呼叫後端 POST /api/project
+ *
+ * user_id 由後端從 JWT 解析，前端只需傳 name。
+ * authFetch 自動帶上 Authorization: Bearer <AT>。
+ */
+async function submitCreateProject() {
+    const nameInput = document.getElementById('create-project-name');
+    const submitBtn = document.getElementById('create-project-submit-btn');
+    const msg       = document.getElementById('create-project-msg');
+
+    const name = nameInput.value.trim();
+    if (!name) return;
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = '建立中…';
+    msg.className = 'modal-msg';
+    msg.textContent = '';
+
+    try {
+        const res = await authFetch(`${state.apiBase}/project`, {
+            method: 'POST',
+            body: JSON.stringify({ name })   // user_id 由後端從 JWT 取得
+        });
+
+        if (!res) return;   // authFetch 已處理 401 → 跳轉 login
+
+        const data = await res.json();
+
+        if (!res.ok) {
+            // 後端回傳 422（名稱非法）/ 401 / 403 / 500 等
+            const detail = data.detail || '建立失敗，請稍後再試。';
+            msg.textContent = detail;
+            msg.className = 'modal-msg error';
+            submitBtn.disabled = false;
+            submitBtn.textContent = '建立專案';   // ← 復原按鈕文字
+            return;
+        }
+
+        // ── 成功 ──
+        // 按鈕文字先復原，再關閉 modal（視覺上更流暢）
+        submitBtn.textContent = '建立專案';
+
+        const newProject = { id: data.data.id, name: data.data.name };
+        state.projects.unshift(newProject);
+        state.chats[newProject.id] = [];
+        state.expandedProjects.add(newProject.id);
+        state.currentProjectId = newProject.id;
+        state.currentChatId    = null;
+
+        closeCreateProjectModal();
+        renderProjects();
+        renderRecentChats();
+        lucide.createIcons();
+        showProjectView(newProject);
+
+    } catch (err) {
+        msg.textContent = `網路錯誤：${err.message}`;
+        msg.className = 'modal-msg error';
+        submitBtn.disabled = false;
+        submitBtn.textContent = '建立專案';   // ← 復原按鈕文字
+    }
+}
+
+// ============================================================
+// 主內容區：chat view ⇆ project view 切換
+// ============================================================
+
+/** 顯示專案視圖（選擇專案但尚無對話時） */
+function showProjectView(project) {
+    document.querySelector('.chat-header').style.display    = 'none';
+    document.getElementById('chat-messages').style.display = 'none';
+    document.querySelector('.chat-input-area').style.display = 'none';
+
+    const pv = document.getElementById('project-view');
+    pv.style.display = 'flex';
+
+    document.getElementById('pv-project-name').textContent  = project.name;
+    document.getElementById('pv-new-chat-text').textContent  = `在 ${project.name} 的新聊天`;
+    document.getElementById('pv-empty-subtitle').textContent = `${project.name} 中的聊天將顯示在此處`;
+}
+
+/** 切回聊天視圖 */
+function showChatView() {
+    document.getElementById('project-view').style.display   = 'none';
+    document.querySelector('.chat-header').style.display    = '';
+    document.getElementById('chat-messages').style.display  = '';
+    document.querySelector('.chat-input-area').style.display = '';
 }
 
 function clearChatMessages() {
@@ -258,9 +471,12 @@ async function sendMessage() {
     };
 
     try {
-        const response = await fetch(`${state.apiBase}/chat/messages`, {
+        // authFetch 自動注入 Authorization: Bearer AT，
+        // 並在 AT 即將過期（≤ 90s）時先靜默換 Token 再送請求（機制 B）。
+        // AT 已過期且換 Token 失敗時回傳 undefined 並導向登入頁，
+        // 此時直接 return 以結束函式，finally 區塊仍會負責解鎖 UI。
+        const response = await authFetch(`${state.apiBase}/chat/messages`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 query,
                 chat_id: (state.currentChatId && !state.currentChatId.startsWith('c'))
@@ -269,6 +485,7 @@ async function sendMessage() {
             })
         });
 
+        if (!response) return;  // authFetch 已處理 401 → 跳轉 login.html
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         if (!response.body) throw new Error('瀏覽器不支援 Streaming');
 

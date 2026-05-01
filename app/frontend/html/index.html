@@ -14,33 +14,40 @@
 </head>
 <body class="dark-theme">
     <div class="app-container">
-        <!-- 左側側欄: 專案與聊天列表 -->
+        <!-- 左側側欄 -->
         <aside class="sidebar">
             <div class="sidebar-header">
                 <div class="logo">
                     <i data-lucide="trending-up"></i>
                     <span>StockInsight</span>
                 </div>
-                <button id="new-project-btn" class="icon-btn" title="新增專案">
-                    <i data-lucide="folder-plus"></i>
-                </button>
-            </div>
-            
-            <div class="project-list-container">
-                <h3>PROJECTS</h3>
-                <ul id="project-list" class="sidebar-list">
-                    <!-- 專案項目動態插入 -->
-                </ul>
             </div>
 
-            <div class="chat-list-container">
-                <h3>CHATS</h3>
-                <ul id="chat-list" class="sidebar-list">
-                    <!-- 聊天項目動態插入 -->
-                </ul>
-                <button id="new-chat-btn" class="new-entry-btn">
-                    <i data-lucide="plus"></i> New Chat
-                </button>
+            <!-- 新對話 -->
+            <button id="new-chat-btn" class="new-chat-btn">
+                <i data-lucide="plus"></i>
+                <span>新對話</span>
+            </button>
+
+            <!-- 可捲動列表區 -->
+            <div class="sidebar-scroll">
+
+                <!-- 專案區塊 -->
+                <div class="sidebar-section">
+                    <div class="section-header">
+                        <span class="section-label">專案</span>
+                    </div>
+                    <ul id="project-list" class="sidebar-list"></ul>
+                </div>
+
+                <!-- 最近區塊 -->
+                <div class="sidebar-section">
+                    <div class="section-header">
+                        <span class="section-label">最近</span>
+                    </div>
+                    <ul id="recent-chat-list" class="sidebar-list"></ul>
+                </div>
+
             </div>
 
             <div class="sidebar-footer">
@@ -111,6 +118,28 @@
                 </div>
             </div>
 
+            <!-- 專案視圖（選擇/建立專案、尚無對話時顯示） -->
+            <div id="project-view" class="project-view">
+                <div class="pv-hero">
+                    <i data-lucide="folder" class="pv-folder-icon"></i>
+                    <h1 id="pv-project-name"></h1>
+                </div>
+                <div class="pv-new-chat-wrap">
+                    <button id="pv-new-chat-btn" class="pv-new-chat-btn">
+                        <i data-lucide="plus"></i>
+                        <span id="pv-new-chat-text">在專案中開始新聊天</span>
+                    </button>
+                </div>
+                <div class="pv-tabs">
+                    <button class="pv-tab active">聊天</button>
+                    <button class="pv-tab">資料來源</button>
+                </div>
+                <div class="pv-empty">
+                    <p class="pv-empty-title">沒有聊天</p>
+                    <p id="pv-empty-subtitle" class="pv-empty-subtitle"></p>
+                </div>
+            </div>
+
             <!-- 輸入區塊 -->
             <footer class="chat-input-area">
                 <div class="input-container">
@@ -141,6 +170,43 @@
     </div>
 
     <!-- ========== Modals ========== -->
+
+    <!-- 建立專案 Modal -->
+    <div class="modal-overlay" id="create-project-modal">
+        <div class="modal-card create-project-card">
+            <div class="modal-header">
+                <h3><i data-lucide="folder-plus"></i> 建立專案</h3>
+                <div class="modal-header-actions">
+                    <button class="modal-close" onclick="closeCreateProjectModal()">
+                        <i data-lucide="x"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="modal-body">
+                <div class="modal-field">
+                    <label>專案名稱</label>
+                    <div class="project-name-input-wrap">
+                        <i data-lucide="folder" class="input-prefix-icon"></i>
+                        <input type="text" id="create-project-name"
+                               placeholder="輸入專案名稱…"
+                               autocomplete="off"
+                               maxlength="100"
+                               oninput="onProjectNameInput()">
+                    </div>
+                </div>
+                <div class="create-project-tip">
+                    <i data-lucide="lightbulb" class="tip-icon"></i>
+                    <p>專案將對話和檔案保存在同一個地方，將它們用於正在進行的工作，或只是為了保持整潔。</p>
+                </div>
+                <div id="create-project-msg" class="modal-msg"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="modal-btn secondary" onclick="closeCreateProjectModal()">取消</button>
+                <button class="modal-btn primary" id="create-project-submit-btn"
+                        onclick="submitCreateProject()" disabled>建立專案</button>
+            </div>
+        </div>
+    </div>
 
     <!-- 個人資料 Modal -->
     <div class="modal-overlay" id="profile-modal">
