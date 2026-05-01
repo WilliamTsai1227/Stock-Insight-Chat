@@ -168,7 +168,13 @@ async def login(
     if not refresh_token_str:
         raise HTTPException(status_code=500, detail="Failed to create refresh token. Please try again.")
 
-    # 4. 設定 HttpOnly Cookie
+    # 4. 清理該用戶自己的過期 RT（fire-and-forget）
+    await db.execute(
+        "DELETE FROM refresh_tokens WHERE user_id = $1 AND expires_at <= NOW()",
+        user["id"]
+    )
+
+    # 5. 設定 HttpOnly Cookie
     response.set_cookie(
         key="refresh_token",
         value=refresh_token_str,
@@ -209,56 +215,113 @@ async def logout(
 
 @router.post("/refresh")
 async def refresh_access_token(
+    response: Response,
     refresh_token: Optional[str] = Cookie(None),
     db: asyncpg.Connection = Depends(get_db)
 ):
-    """使用 Refresh Token 換取新的 Access Token"""
+    """
+    RT Rotation：使用 Refresh Token 換取新的 AT + 新的 RT。
+
+    安全機制：
+    - 使用 DELETE...RETURNING 原子操作消費舊 RT，確保同一 RT 只能被使用一次。
+    - 若 RT 不在 DB（已被消費）但簽名仍有效 → 判定為 Token Reuse 攻擊，
+      立刻撤銷該 user 所有 Session，駭客與正常用戶同時被踢下線。
+    - 若 RT 簽名無效或已過期 → 直接 401，不查 DB。
+    """
     if not refresh_token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Refresh token missing"
         )
 
-    # 1. 查詢 Refresh Token
-    db_token = await db.fetchrow(
-        "SELECT user_id, expires_at FROM refresh_tokens WHERE token = $1",
+    # 1. 驗證 JWT 簽名與過期（不查 DB，pure stateless 驗證）
+    from app.backend.module.security import decode_token
+    payload = decode_token(refresh_token)
+
+    # 2. 原子消費：DELETE...RETURNING（只有一個 concurrent request 能成功）
+    #    asyncpg 單一 statement 自動 commit，不需包在 transaction 裡
+    consumed = await db.fetchrow(
+        """
+        DELETE FROM refresh_tokens
+        WHERE token = $1 AND expires_at > NOW()
+        RETURNING user_id
+        """,
         refresh_token
     )
 
-    if not db_token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid refresh token"
-        )
+    if not consumed:
+        # 區分兩種情境：
+        # (A) payload 有效但 DB 找不到 → RT 已被消費 → Token Reuse 攻擊
+        # (B) payload 無效（過期/簽名錯誤）→ 單純的非法請求
+        if payload and payload.get("type") == "refresh":
+            # 情境 A：撤銷該 user 所有 Session
+            user_id_str = payload.get("sub")
+            if user_id_str:
+                try:
+                    uid = UUID(user_id_str)
+                    await db.execute(
+                        "DELETE FROM refresh_tokens WHERE user_id = $1",
+                        uid
+                    )
+                except Exception:
+                    pass
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Security alert: Token reuse detected. All sessions have been revoked. Please login again."
+            )
+        else:
+            # 情境 B：過期或非法 token
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Refresh token invalid or expired. Please login again."
+            )
 
-    # 2. 檢查是否過期
-    # asyncpg 從 TIMESTAMPTZ 欄位回傳的 datetime 已帶有 UTC 時區資訊，
-    # 不可使用 .replace() 覆蓋（會破壞原有時區）。直接與 now(UTC) 比較即可。
-    expires_at = db_token["expires_at"]
-    if expires_at < datetime.now(timezone.utc):
-        await db.execute(
-            "DELETE FROM refresh_tokens WHERE token = $1",
-            refresh_token
-        )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Refresh token expired. Please login again."
-        )
-
-    # 3. 取得使用者並產生新 Access Token
+    # 3. 取得使用者資料
     user = await db.fetchrow(
         "SELECT id, email FROM users WHERE id = $1",
-        db_token["user_id"]
+        consumed["user_id"]
     )
-
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found"
         )
 
-    new_access_token = create_access_token(
-        data={"sub": str(user["id"]), "email": user["email"]}
+    # 4. 產生新 AT
+    user_data = {"sub": str(user["id"]), "email": user["email"]}
+    new_access_token = create_access_token(data=user_data)
+
+    # 5. RT Rotation：產生新 RT 並存入 DB（含 jti 碰撞重試）
+    new_refresh_token_str = None
+    new_expires_at = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    for _ in range(3):
+        candidate = create_refresh_token(data=user_data)
+        try:
+            await db.execute(
+                "INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)",
+                user["id"],
+                candidate,
+                new_expires_at
+            )
+            new_refresh_token_str = candidate
+            break
+        except UniqueViolationError:
+            continue
+
+    if not new_refresh_token_str:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to rotate refresh token. Please login again."
+        )
+
+    # 6. 設定新 RT Cookie（舊 RT 已在步驟 2 被原子刪除）
+    response.set_cookie(
+        key="refresh_token",
+        value=new_refresh_token_str,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600
     )
 
     return {

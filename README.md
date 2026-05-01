@@ -138,19 +138,31 @@ pytest test/backend/tools/test_ai_analysis_tool.py -s
 python test/backend/tools/test_recommendations_tool.py
 # 4. Agent 綜合對話測試
 python app/backend/agent/chat.py
+```
 
 ---
 
-##  向量儲存結構 (Qdrant Schema)
+## 向量儲存結構 (Qdrant Schema)
 
 系統採用 **Qdrant** 作為核心向量資料庫，支援高效的語義搜尋與動態過濾。以下是目前規劃的 Collection 結構設計：
 
-### 1. 通用規格
-*   **向量模型 (Embedding)**: OpenAI `text-embedding-3-small` (1536 維)
-*   **距離計算法 (Distance Metric)**: `Cosine Similarity`
-*   **時區規範**: `Asia/Taipei (UTC+8)`
+### Collections 總覽
 
-### 2. Collection: `news` (股市新聞)
+| Collection | 中文名稱 | 內容摘要 |
+| :--- | :--- | :--- |
+| `news` | 股市新聞 | 爬蟲新聞依語意段落切分後入庫 |
+| `ai_analysis` | AI 產業分析 | LLM 產出之統整／趨勢分析，依語意角色拆成多向量 |
+
+### 1. 通用規格
+
+| 項目 | 設定值 |
+| :--- | :--- |
+| 向量模型 (Embedding) | OpenAI `text-embedding-3-small`（1536 維） |
+| 距離計算法 (Distance Metric) | `Cosine Similarity` |
+| 時區規範 | `Asia/Taipei`（UTC+8） |
+
+### 2. Collection: `news`（股市新聞）
+
 收錄每日爬蟲抓取的最新股市動態，依語意段落進行精細切分。
 
 | 欄位 (Payload Key) | 資料型態 | 索引類型 | 說明 |
@@ -171,7 +183,8 @@ python app/backend/agent/chat.py
 | `url` | String | - | 原始新聞連結 |
 | `collection_type` | String | Keyword | 固定為 `news` |
 
-### 3. Collection: `ai_analysis` (AI 產業分析)
+### 3. Collection: `ai_analysis`（AI 產業分析）
+
 收錄由 LLM 產出的深度統整與產業趨勢分析，按欄位語意角色拆分為多個向量。
 
 | 欄位 (Payload Key) | 資料型態 | 索引類型 | 說明 |
@@ -194,6 +207,91 @@ python app/backend/agent/chat.py
 
 ---
 
+## 🔍 Tool 搜尋流程圖 (Search Flow)
+
+以下流程圖說明每個 LangChain Tool 如何與 Qdrant 資料庫互動，包含 Filter 條件、向量搜尋方式與回傳欄位。
+
+> ⚠️ **注意**：`news.type`（`must` 精確匹配）與 `ai_analysis.industry_list`（`must` 精確匹配）為高風險過濾欄位；若 LLM 傳入的值與資料庫實際儲存字串不一致，將導致零結果。
+
+### Tool 1：`search_stock_news` → Qdrant `news`
+
+```mermaid
+flowchart TD
+    A([使用者問題]) --> B[Router\ngpt-5-mini]
+    B -->|決定呼叫| C[search_stock_news]
+
+    C --> D[OpenAI Embeddings\ntext-embedding-3-small\nquery → 1536 維向量]
+    D --> E{組建 Qdrant Filter}
+
+    E --> F[must 條件\n全部必須滿足]
+    E --> G[should 條件\n至少一個滿足 OR]
+
+    F --> F1["publishAt\nDatetimeRange\nstart_date ~ end_date"]
+    F --> F2["type MatchValue\n⚠️ 精確匹配\n'台股新聞' / '國際新聞'"]
+
+    G --> G1["stock_codes MatchValue\n如 '2330'"]
+    G --> G2["keywords MatchValue\n如 '台積電'"]
+    G --> G3["stock_names MatchValue\n如 '台積電'"]
+
+    F1 & F2 & G1 & G2 & G3 --> H["Qdrant search_groups\nCollection: news\ngroup_by: mongo_id\ngroup_size: 2\nlimit: top_k=10"]
+
+    H --> I{score >= 0.3?}
+    I -- 否 --> J[捨棄低分 chunk]
+    I -- 是 --> K["合併同篇文章\n最多 2 個 chunks 的 content"]
+
+    K --> L["回傳欄位\ntitle · content · url\nstock_codes · keywords\nstock_names · publishAt · score"]
+    L --> M[Analyst\ngpt-5\n生成報告]
+```
+
+### Tool 2：`search_market_ai_analysis` → Qdrant `ai_analysis`
+
+```mermaid
+flowchart TD
+    A([使用者問題]) --> B[Router\ngpt-5-mini]
+    B -->|決定呼叫| C[search_market_ai_analysis]
+
+    C --> D[OpenAI Embeddings\ntext-embedding-3-small\nquery → 1536 維向量]
+    D --> E{組建 Qdrant Filter\n全部為 must 條件}
+
+    E --> E1["publishAt\nDatetimeRange\nstart_date ~ end_date"]
+    E --> E2["sentiment_label MatchValue\n'positive' / 'negative' / 'neutral'"]
+    E --> E3["industry_list MatchValue\n⚠️ 精確匹配產業字串\n如 '半導體'"]
+    E --> E4["chunk_type\n❌ Tool 層未傳入\n永遠不過濾"]
+
+    E1 & E2 & E3 & E4 --> F["Qdrant search_groups\nCollection: ai_analysis\ngroup_by: mongo_id\ngroup_size: 2\nlimit: top_k=10"]
+
+    F --> G{score >= 0.3?}
+    G -- 否 --> H[捨棄]
+    G -- 是 --> I["合併同篇分析\n最多 2 個 chunks\n可能為 summary + key_news"]
+
+    I --> J["回傳欄位\ntitle · content · publishAt\nsentiment_label · industry_list\nstock_list · source_news_titles\nchunk_types · score"]
+    J --> K[Analyst\ngpt-5\n生成報告]
+```
+
+### Tool 3：`get_market_recommendations` → Qdrant `ai_analysis`
+
+```mermaid
+flowchart TD
+    A([使用者詢問推薦股 / 產業]) --> B[Router\ngpt-5-mini]
+    B -->|決定呼叫| C[get_market_recommendations]
+
+    C --> D["固定 Query 向量\n'推薦股票、強勢產業\n潛力標的、看好板塊'\ntext-embedding-3-small"]
+
+    D --> E[must 條件 Filter]
+    E --> E1["publishAt DatetimeRange\nstart_date ~ end_date"]
+    E --> E2["chunk_type = 'stock_insight'\n⚠️ Hardcoded，不可由 LLM 更改"]
+
+    E1 & E2 --> F["Qdrant search\nCollection: ai_analysis\n無 group_by 聚合\nlimit: top_k=10"]
+
+    F --> G["逐筆解析 stock_list\n格式: list of lists\n如 ['tw', '6515', '穎崴']"]
+    G --> H["彙整去重\nrecommended_stocks set\nrecommended_industries set"]
+
+    H --> I["回傳結構化結果\nstocks: list 推薦股票\nindustries: list 關注產業\nsources: list 來源報告詳情\n含 sentiment · source_news_titles"]
+    I --> J[Analyst\ngpt-5\n生成推薦報告]
+```
+
+---
+
 ## 🛠️ 技術架構 (System Stack)
 
 *   **後端系統**: Python FastAPI (非同步架構)
@@ -202,6 +300,118 @@ python app/backend/agent/chat.py
 *   **AI 核心**: OpenAI GPT-5 & GPT-5 mini (雙模型架構)
 *   **工作排程**: LangGraph (Agent 邏輯編排與狀態隔離)
 *   **文本切分**: LangChain `RecursiveCharacterTextSplitter` (語意段落感知)
+
+---
+
+## 🔐 JWT 認證架構 (Authentication Flow)
+
+### Token 儲存位置
+
+| Token | 前端儲存位置 | 說明 |
+| :--- | :--- | :--- |
+| **AT** (Access Token, 15 分鐘) | **JavaScript 記憶體變數** | 不寫入 localStorage / sessionStorage，防止 XSS 竊取；頁面刷新後消失，需靠 RT 重新換發 |
+| **RT** (Refresh Token, 7 天) | **HttpOnly Cookie** | 瀏覽器自動帶上，JavaScript 無法讀取，防 XSS；`SameSite=Lax` 防 CSRF |
+
+> **jti（JWT ID）**：每個 RT 在產生時都內嵌一個 `jti` 欄位，值為 `uuid4()` 隨機 UUID（128-bit，碰撞機率 ≈ 1/2¹²²）。後端以 RT 字串本身為 DB key，`DELETE ... RETURNING` 原子消費確保唯一性，jti 同時提供稽核索引能力。
+
+---
+
+### 流程一：登入（Login）
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant User as 前端瀏覽器
+    participant API as 後端 API
+    participant DB as PostgreSQL
+
+    Note over User, DB: 登入階段
+    User->>API: POST /user/login（帳密）
+    API->>API: 驗證密碼（Argon2）
+    API->>API: 產生 AT（15min, HS256）
+    API->>API: 產生 RT（7天, HS256, 含 jti=uuid4）
+    API->>DB: INSERT refresh_tokens (user_id, token, expires_at)
+    API->>DB: UPDATE users SET last_login_at = NOW()
+    API-->>User: Body: { access_token } ＋ Set-Cookie: refresh_token (HttpOnly)
+
+    Note over User: AT 存入 JS 記憶體變數
+    Note over User: RT 由瀏覽器自動存入 HttpOnly Cookie
+```
+
+---
+
+### 流程二：一般 API 請求（Stateless AT 驗證）
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant User as 前端瀏覽器
+    participant API as 後端 API
+
+    Note over User, API: 一般請求（高頻率，不查資料庫）
+    User->>API: 任意受保護 API（Authorization: Bearer AT）
+    API->>API: 驗證 AT 簽名（HS256）與 exp
+    API-->>User: 200 OK，回傳資料
+```
+
+---
+
+### 流程三：RT Rotation（AT 過期後換發）
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant User as 前端瀏覽器
+    participant API as 後端 API
+    participant DB as PostgreSQL
+
+    Note over User, DB: AT 過期，發起 Refresh 請求
+    User->>API: 受保護 API（帶過期 AT）
+    API-->>User: 401 Unauthorized
+
+    User->>API: POST /user/refresh（Cookie 自動帶 RT）
+    API->>API: 1. 驗證 RT 簽名與 exp（pure stateless，不查 DB）
+
+    API->>DB: 2. DELETE FROM refresh_tokens WHERE token = RT AND expires_at > NOW() RETURNING user_id
+    Note right of DB: 原子操作：同時只有一個 request 能刪到這行
+
+    alt DELETE 成功（正常刷新）
+        DB-->>API: 回傳 user_id（舊 RT 已從 DB 刪除）
+        API->>API: 3. 產生新 AT ＋ 新 RT（含新 jti）
+        API->>DB: 4. INSERT 新 RT 進 refresh_tokens
+        API-->>User: Body: { 新 AT } ＋ Set-Cookie: 新 RT（HttpOnly）
+        Note over User: 前端更新記憶體中的 AT，RT 由瀏覽器自動更新
+    else DELETE 回傳 0 rows，但 RT 簽名仍有效（Token Reuse 攻擊！）
+        DB-->>API: 0 rows
+        API->>DB: 5. DELETE FROM refresh_tokens WHERE user_id = X（撤銷所有 Session）
+        API-->>User: 401 Security Alert：偵測到 Token 重用，所有裝置已登出
+        Note over User: 駭客與正常用戶同時被踢下線，需重新登入
+    else DELETE 回傳 0 rows，且 RT 簽名已失效（過期或偽造）
+        DB-->>API: 0 rows
+        API-->>User: 401 Refresh token invalid or expired
+    end
+```
+
+---
+
+### 流程四：登出（單裝置）
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant User as 前端瀏覽器
+    participant API as 後端 API
+    participant DB as PostgreSQL
+
+    Note over User, DB: 登出（只撤銷目前這台裝置的 RT）
+    User->>API: POST /user/logout（Cookie 自動帶 RT）
+    API->>DB: DELETE FROM refresh_tokens WHERE token = RT
+    DB-->>API: 刪除成功（此 RT 永久失效）
+    API-->>User: Set-Cookie: refresh_token（Max-Age=0 清除） ＋ 200 OK
+    Note over User: 清除記憶體中的 AT，導向登入頁
+```
+
+> **多裝置支援**：每次登入都 INSERT 一筆獨立 RT，登出只刪自己那筆，其他裝置不受影響。若要強制登出所有裝置，可呼叫 `DELETE FROM refresh_tokens WHERE user_id = X`。
 
 ---
 

@@ -135,9 +135,17 @@ class FileModel(BaseModel):
 class RefreshTokenModel(BaseModel):
     """
     JWT 刷新權杖 (refresh_tokens table)
+
+    RT Rotation 機制說明：
+    - token：完整 JWT 字串，作為 DB 主查詢 key（含 jti claim 在 payload 內）
+    - jti：JWT ID，即 token payload 中的 `jti` 欄位（uuid4），供稽核/索引用
+    - 每次 /refresh 均原子消費（DELETE...RETURNING）舊 token 並插入新 token
+    - 若同一 token 被二次使用（Reuse Attack），DELETE 回傳 0 rows，
+      後端立刻撤銷該 user 所有 Session
     """
     id: UUID = Field(default_factory=uuid4)
     user_id: UUID
-    token: str
+    token: str                          # 完整 RT JWT 字串（UNIQUE）
+    jti: Optional[str] = None           # 從 token payload 提取的 UUID，供索引
     expires_at: datetime
     created_at: datetime = Field(default_factory=datetime.now)
