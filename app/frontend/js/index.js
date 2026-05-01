@@ -2,19 +2,18 @@
 let isStreaming = false;
 
 // --- 全域狀態 ---
+// 注意：所有資料皆從後端載入，不放任何假資料
+//   projects   : { id, name, created_at }[]   ← /api/project/all 載入
+//   chats      : { [projectId]: { id, title }[] }       ← /api/project?project_id=... 載入
+//   files      : { [projectId]: File[] }                ← 同上
+//   pendingDeleteProject : 暫存「刪除確認 modal」要刪除的專案物件
 let state = {
-    projects: [
-        { id: 'p1', name: '半導體研究' },
-        { id: 'p2', name: '能源產業追蹤' }
-    ],
-    chats: {
-        'p1': [
-            { id: 'c1', title: '台積電供應商分析' }
-        ]
-    },
-    currentProjectId: 'p1',
-    currentChatId: 'c1',
-    expandedProjects: new Set(['p1']),  // 預設展開第一個專案
+    projects: [],
+    chats: {},
+    files: {},
+    currentProjectId: null,
+    currentChatId: null,
+    pendingDeleteProject: null,
     apiBase: 'http://localhost:8000/api'
 };
 
@@ -38,10 +37,21 @@ function renderMarkdown(raw) {
 }
 
 // --- 初始化 ---
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+    // 先渲染空白骨架（確保「新增專案」按鈕立刻可見）
     renderProjects();
     renderRecentChats();
     initEventListeners();
+    initProjectViewTabs();
+
+    // auth.js 的 DOMContentLoaded 會觸發 tryRefreshToken() 取得 AT；
+    // 這裡再呼叫一次（受 _isRefreshing 並發鎖保護，會共用同一個 Promise，
+    // 不會重複打 /refresh），確保我們在 AT 就緒後才載入專案列表。
+    if (typeof tryRefreshToken === 'function') {
+        await tryRefreshToken();
+    }
+
+    await loadProjectsFromServer();
 });
 
 function initEventListeners() {
@@ -86,6 +96,96 @@ function initEventListeners() {
     });
 }
 
+// ============================================================
+// 後端整合：載入 / 重新整理專案列表與詳情
+// ============================================================
+
+/**
+ * 從後端載入目前登入使用者的所有專案，並重新渲染左側列表。
+ * 對應端點：GET /api/project/all
+ *
+ * 若 user 還沒有任何專案，state.projects 會是空陣列，
+ * 左側只會剩下「新增專案」按鈕（符合需求：不顯示假資料）。
+ */
+async function loadProjectsFromServer() {
+    try {
+        const res = await authFetch(`${state.apiBase}/project/all`);
+        if (!res) return;                  // authFetch 401 → 已導向 login
+
+        if (!res.ok) {
+            console.error('載入專案列表失敗：', res.status);
+            return;
+        }
+
+        const json = await res.json();
+        const projects = (json && json.data) ? json.data : [];
+
+        // 替換 state.projects
+        state.projects = projects.map(p => ({
+            id: p.id,
+            name: p.name,
+            created_at: p.created_at,
+        }));
+
+        // 清掉已不存在的 chats / files 快取
+        const validIds = new Set(state.projects.map(p => p.id));
+        for (const id of Object.keys(state.chats)) {
+            if (!validIds.has(id)) delete state.chats[id];
+        }
+        for (const id of Object.keys(state.files)) {
+            if (!validIds.has(id)) delete state.files[id];
+        }
+
+        renderProjects();
+        renderRecentChats();
+        lucide.createIcons();
+    } catch (err) {
+        console.error('載入專案列表時發生錯誤：', err);
+    }
+}
+
+/**
+ * 載入指定專案詳情（含 chats / files），更新 state 並回傳 detail 物件。
+ * 對應端點：GET /api/project?project_id=xxx
+ *
+ * 失敗（404 / 500）回傳 null。
+ */
+async function loadProjectDetail(projectId) {
+    try {
+        const url = `${state.apiBase}/project?project_id=${encodeURIComponent(projectId)}`;
+        const res = await authFetch(url);
+        if (!res) return null;
+
+        if (!res.ok) {
+            console.error('載入專案詳情失敗：', res.status);
+            return null;
+        }
+
+        const json = await res.json();
+        const detail = json && json.data ? json.data : null;
+        if (!detail) return null;
+
+        // 同步寫回 state，以便其他地方（例如最近聊天）能讀到
+        state.chats[detail.id] = (detail.chats || []).map(c => ({
+            id: c.id,
+            title: c.title,
+        }));
+        state.files[detail.id] = (detail.files || []).map(f => ({
+            id: f.id,
+            file_name: f.file_name,
+            s3_url: f.s3_url,
+            file_type: f.file_type,
+            status: f.status,
+            created_at: f.created_at,
+        }));
+
+        return detail;
+    } catch (err) {
+        console.error('載入專案詳情時發生錯誤：', err);
+        return null;
+    }
+}
+
 // --- 渲染 UI ---
 
 /**
@@ -111,16 +211,20 @@ function renderProjects() {
     list.appendChild(newLi);
 
     // ── 各專案 ──
+    // 點擊專案行 → 直接進入專案視圖（不再下拉展開，因為視圖內已能看到所有 chats / files）
+    // 滑鼠 hover / 該專案 active 時，右側會出現三點按鈕，點下開啟操作選單（目前只有「刪除專案」）
     state.projects.forEach(p => {
         const li = document.createElement('li');
-        const isExpanded = state.expandedProjects.has(p.id);
-        const isActive   = p.id === state.currentProjectId;
+        li.id = `project-li-${p.id}`;
+        li.dataset.projectId = p.id;
+
+        const isActive = p.id === state.currentProjectId;
 
         // 專案行
         const row = document.createElement('div');
-        row.className = 'project-row'
-            + (isActive   ? ' active'   : '')
-            + (isExpanded ? ' expanded' : '');
+        row.className = 'project-row' + (isActive ? ' active' : '');
+        row.id = `project-row-${p.id}`;
+        row.dataset.projectId = p.id;
 
         const folderIcon = document.createElement('i');
         folderIcon.setAttribute('data-lucide', 'folder');
@@ -130,62 +234,46 @@ function renderProjects() {
         nameSpan.className = 'project-row-name';
         nameSpan.textContent = p.name;
 
-        const chevron = document.createElement('i');
-        chevron.setAttribute('data-lucide', 'chevron-right');
-        chevron.className = 'project-row-chevron';
+        // 三點選單按鈕（hover / active 時顯示）
+        const menuBtn = document.createElement('button');
+        menuBtn.type = 'button';
+        menuBtn.className = 'project-row-menu-btn';
+        menuBtn.id = `project-menu-btn-${p.id}`;
+        menuBtn.setAttribute('aria-label', '專案操作選單');
+        menuBtn.dataset.projectId = p.id;
+        const dotsIcon = document.createElement('i');
+        dotsIcon.setAttribute('data-lucide', 'more-horizontal');
+        menuBtn.appendChild(dotsIcon);
+
+        menuBtn.addEventListener('click', (e) => {
+            e.stopPropagation();   // 不要觸發 row 的點擊（避免進入 project view）
+            openProjectMenu(p, menuBtn);
+        });
 
         row.appendChild(folderIcon);
         row.appendChild(nameSpan);
-        row.appendChild(chevron);
+        row.appendChild(menuBtn);
 
-        row.addEventListener('click', () => {
-            if (state.expandedProjects.has(p.id)) {
-                state.expandedProjects.delete(p.id);
-            } else {
-                state.expandedProjects.add(p.id);
-            }
+        row.addEventListener('click', async () => {
             state.currentProjectId = p.id;
             state.currentChatId = null;
+
+            // 先打開 project view（顯示 hero）並標記載入中
+            showProjectView(p, { loading: true });
+
+            // 抓取最新詳情，再渲染 chats / files
+            const detail = await loadProjectDetail(p.id);
+
+            // 若使用者在請求過程中已切到別的專案，就不覆蓋畫面
+            if (state.currentProjectId !== p.id) return;
+
             renderProjects();
             renderRecentChats();
             lucide.createIcons();
-            showProjectView(p);
-        });
-
-        // 對話子列表（展開後顯示）
-        const chatList = document.createElement('ul');
-        chatList.className = 'project-chats' + (isExpanded ? ' open' : '');
-
-        const projectChats = state.chats[p.id] || [];
-        projectChats.forEach(c => {
-            const chatLi = document.createElement('li');
-            chatLi.className = 'project-chat-item'
-                + (c.id === state.currentChatId ? ' active' : '');
-
-            const msgIcon = document.createElement('i');
-            msgIcon.setAttribute('data-lucide', 'message-square');
-
-            const titleSpan = document.createElement('span');
-            titleSpan.textContent = c.title;
-
-            chatLi.appendChild(msgIcon);
-            chatLi.appendChild(titleSpan);
-
-            chatLi.addEventListener('click', (e) => {
-                e.stopPropagation();
-                state.currentChatId = c.id;
-                state.currentProjectId = p.id;
-                renderProjects();
-                renderRecentChats();
-                lucide.createIcons();
-                showChatView();
-            });
-
-            chatList.appendChild(chatLi);
+            showProjectView(p, { detail });
         });
 
         li.appendChild(row);
-        li.appendChild(chatList);
         list.appendChild(li);
     });
 
@@ -212,6 +300,9 @@ function renderRecentChats() {
         const li = document.createElement('li');
         li.className = 'recent-chat-item'
             + (c.id === state.currentChatId ? ' active' : '');
+        li.id = `recent-chat-${c.id}`;
+        li.dataset.chatId = c.id;
+        li.dataset.projectId = c.projectId;
 
         const msgIcon = document.createElement('i');
         msgIcon.setAttribute('data-lucide', 'message-square');
@@ -228,6 +319,7 @@ function renderRecentChats() {
             renderProjects();
             renderRecentChats();
             lucide.createIcons();
+            showChatView();
         });
 
         list.appendChild(li);
@@ -235,6 +327,259 @@ function renderRecentChats() {
 
     lucide.createIcons();
 }
+
+// ============================================================
+// 專案右鍵 Popover 選單（三點按鈕）
+// ============================================================
+
+let _activeProjectPopover = null;   // 目前顯示中的 popover element
+let _activePopoverAnchor  = null;   // 觸發 popover 的按鈕（用於切換 .open class）
+
+/**
+ * 打開「專案操作」popover。
+ * 以 fixed 定位貼在 anchor（三點按鈕）右下方，超出視窗邊界時會自動翻到左側 / 上方。
+ */
+function openProjectMenu(project, anchor) {
+    // 切換：點同一個按鈕第二次 → 關閉
+    if (_activeProjectPopover && _activePopoverAnchor === anchor) {
+        closeProjectMenu();
+        return;
+    }
+    closeProjectMenu();
+
+    const pop = document.createElement('div');
+    pop.className = 'project-popover';
+    pop.id = `project-popover-${project.id}`;
+
+    // 「刪除專案」
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'project-popover-item danger';
+    const trashIcon = document.createElement('i');
+    trashIcon.setAttribute('data-lucide', 'trash-2');
+    const delLabel = document.createElement('span');
+    delLabel.textContent = '刪除專案';
+    delBtn.appendChild(trashIcon);
+    delBtn.appendChild(delLabel);
+    delBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeProjectMenu();
+        openDeleteProjectModal(project);
+    });
+    pop.appendChild(delBtn);
+
+    // 計算位置：先放在按鈕右下，超出視窗則翻到左 / 上
+    document.body.appendChild(pop);
+    const rect = anchor.getBoundingClientRect();
+    const popRect = pop.getBoundingClientRect();
+    const margin = 6;
+
+    let left = rect.right + margin;
+    let top  = rect.bottom + margin;
+    if (left + popRect.width > window.innerWidth - 8) {
+        left = rect.left - popRect.width - margin;     // 翻到左側
+        if (left < 8) left = 8;
+    }
+    if (top + popRect.height > window.innerHeight - 8) {
+        top = rect.top - popRect.height - margin;      // 翻到上方
+        if (top < 8) top = 8;
+    }
+    pop.style.left = `${left}px`;
+    pop.style.top  = `${top}px`;
+
+    anchor.classList.add('open');
+    _activeProjectPopover = pop;
+    _activePopoverAnchor  = anchor;
+
+    lucide.createIcons();
+}
+
+function closeProjectMenu() {
+    if (_activeProjectPopover && _activeProjectPopover.parentNode) {
+        _activeProjectPopover.parentNode.removeChild(_activeProjectPopover);
+    }
+    if (_activePopoverAnchor) {
+        _activePopoverAnchor.classList.remove('open');
+    }
+    _activeProjectPopover = null;
+    _activePopoverAnchor  = null;
+}
+
+// 點擊其他地方 / Esc / 視窗大小改變時關閉 popover
+document.addEventListener('click', (e) => {
+    if (!_activeProjectPopover) return;
+    // 點到 popover 內 or anchor 不算外部
+    if (_activeProjectPopover.contains(e.target)) return;
+    if (_activePopoverAnchor && _activePopoverAnchor.contains(e.target)) return;
+    closeProjectMenu();
+});
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeProjectMenu();
+});
+window.addEventListener('resize',  () => closeProjectMenu());
+window.addEventListener('scroll',  () => closeProjectMenu(), true);
+
+
+// ============================================================
+// 刪除專案 Modal + API
+// ============================================================
+
+/**
+ * 開啟「確認刪除專案」modal。
+ *   - 因為刪除會 CASCADE 連帶清掉所有底下的 chats / messages / files，
+ *     這裡多一道確認，避免使用者誤點。
+ *   - state.pendingDeleteProject 暫存目標專案，confirmDeleteProject() 會用到。
+ */
+function openDeleteProjectModal(project) {
+    state.pendingDeleteProject = project;
+
+    const modal = document.getElementById('delete-project-modal');
+    const btn   = document.getElementById('delete-project-confirm-btn');
+    const msg   = document.getElementById('delete-project-msg');
+
+    btn.disabled = false;
+    btn.textContent = '刪除';
+    msg.className = 'modal-msg';
+    msg.textContent = '';
+
+    closeAllModals();              // 關掉其它 modal
+    modal.classList.add('show');
+    lucide.createIcons();
+}
+
+/**
+ * 點擊「刪除」→ 呼叫 DELETE /api/project?project_id=xxx
+ *
+ * 端點需求（見 app/backend/api/project.py:342）：
+ *   - Header : Authorization: Bearer <AT>     ← authFetch 自動處理
+ *   - Query  : project_id=<UUID>              ← 必填
+ *   - 失敗回應：401 / 403 / 404 / 500，以 detail 字串說明原因
+ */
+async function confirmDeleteProject() {
+    const project = state.pendingDeleteProject;
+    if (!project) return;
+
+    const btn = document.getElementById('delete-project-confirm-btn');
+    const msg = document.getElementById('delete-project-msg');
+
+    btn.disabled = true;
+    btn.textContent = '刪除中…';
+    msg.className = 'modal-msg';
+    msg.textContent = '';
+
+    try {
+        const url = `${state.apiBase}/project?project_id=${encodeURIComponent(project.id)}`;
+        const res = await authFetch(url, { method: 'DELETE' });
+
+        if (!res) return;          // authFetch 已導向 login
+
+        if (!res.ok) {
+            // 嘗試解析後端 detail；有些錯誤可能不是 JSON
+            let detail = `刪除失敗（HTTP ${res.status}）`;
+            try {
+                const data = await res.json();
+                if (data && data.detail) detail = data.detail;
+            } catch { /* ignore JSON parse error */ }
+
+            // Modal 內顯示錯誤；Toast 也彈一個（雙保險，使用者一定看得到）
+            msg.textContent = detail;
+            msg.className = 'modal-msg error';
+            showToast(`刪除失敗：${detail}`, 'error');
+
+            btn.disabled = false;
+            btn.textContent = '刪除';
+            return;
+        }
+
+        // ── 成功 ──
+        // 1. 從本地 state 移除（避免重新 fetch 前畫面殘留）
+        state.projects = state.projects.filter(p => p.id !== project.id);
+        delete state.chats[project.id];
+        delete state.files[project.id];
+
+        // 2. 若刪掉的是目前顯示中的專案，回到歡迎畫面
+        if (state.currentProjectId === project.id) {
+            state.currentProjectId = null;
+            state.currentChatId    = null;
+            showChatView();
+            clearChatMessages();
+        }
+
+        closeAllModals();
+        state.pendingDeleteProject = null;
+
+        // 3. 重新從後端載入專案列表（與真相同步），同時更新 UI
+        await loadProjectsFromServer();
+
+        showToast(`已刪除專案「${project.name}」`, 'success');
+
+    } catch (err) {
+        const detail = err && err.message ? err.message : '網路錯誤，請稍後再試';
+        msg.textContent = detail;
+        msg.className = 'modal-msg error';
+        showToast(`刪除失敗：${detail}`, 'error');
+        btn.disabled = false;
+        btn.textContent = '刪除';
+    }
+}
+
+
+// ============================================================
+// Toast 工具（成功 / 失敗 / 一般訊息）
+// ============================================================
+
+/**
+ * 在右上角顯示一個會自動消失的小框提示。
+ * @param {string} message
+ * @param {'error'|'success'|'info'} type
+ * @param {number} duration  毫秒，預設 4000
+ */
+function showToast(message, type = 'info', duration = 4000) {
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.setAttribute('role', type === 'error' ? 'alert' : 'status');
+
+    const icon = document.createElement('i');
+    const iconName = type === 'error'   ? 'alert-circle'
+                  : type === 'success' ? 'check-circle-2'
+                  : 'info';
+    icon.setAttribute('data-lucide', iconName);
+
+    const msgEl = document.createElement('span');
+    msgEl.className = 'toast-msg';
+    msgEl.textContent = message;
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'toast-close';
+    closeBtn.setAttribute('aria-label', '關閉');
+    const xIcon = document.createElement('i');
+    xIcon.setAttribute('data-lucide', 'x');
+    xIcon.setAttribute('width', '14');
+    xIcon.setAttribute('height', '14');
+    closeBtn.appendChild(xIcon);
+
+    const dismiss = () => {
+        if (!toast.parentNode) return;
+        toast.classList.add('fading');
+        setTimeout(() => toast.remove(), 200);
+    };
+    closeBtn.addEventListener('click', dismiss);
+
+    toast.appendChild(icon);
+    toast.appendChild(msgEl);
+    toast.appendChild(closeBtn);
+    container.appendChild(toast);
+    lucide.createIcons();
+
+    if (duration > 0) {
+        setTimeout(dismiss, duration);
+    }
+}
+
 
 // ============================================================
 // 建立專案 Modal
@@ -310,18 +655,25 @@ async function submitCreateProject() {
         // 按鈕文字先復原，再關閉 modal（視覺上更流暢）
         submitBtn.textContent = '建立專案';
 
-        const newProject = { id: data.data.id, name: data.data.name };
-        state.projects.unshift(newProject);
-        state.chats[newProject.id] = [];
-        state.expandedProjects.add(newProject.id);
+        const newProject = {
+            id: data.data.id,
+            name: data.data.name,
+            created_at: data.data.created_at,
+        };
         state.currentProjectId = newProject.id;
         state.currentChatId    = null;
 
         closeCreateProjectModal();
+
+        // 依使用者要求：重新呼叫 GET /api/project/all 並重新渲染左側
+        await loadProjectsFromServer();
+
+        // 進入剛建立的專案視圖（新專案沒有 chats / files，會顯示空態）
+        const detail = await loadProjectDetail(newProject.id);
+        showProjectView(newProject, { detail });
         renderProjects();
         renderRecentChats();
         lucide.createIcons();
-        showProjectView(newProject);
 
     } catch (err) {
         msg.textContent = `網路錯誤：${err.message}`;
@@ -335,18 +687,201 @@ async function submitCreateProject() {
 // 主內容區：chat view ⇆ project view 切換
 // ============================================================
 
-/** 顯示專案視圖（選擇專案但尚無對話時） */
-function showProjectView(project) {
+/**
+ * 顯示專案視圖。
+ *
+ * @param {{id:string,name:string}} project   專案基本資料
+ * @param {{loading?:boolean, detail?:object|null}} options
+ *   - loading=true       : 第一次點開、詳情還沒回來時，先顯示骨架（清空舊列表）
+ *   - detail=<object>    : 已拿到後端回傳的 detail，渲染 chats / files
+ *   - 兩者皆未提供時      : 退化為僅顯示 hero（向後相容）
+ */
+function showProjectView(project, options = {}) {
     document.querySelector('.chat-header').style.display    = 'none';
-    document.getElementById('chat-messages').style.display = 'none';
+    document.getElementById('chat-messages').style.display  = 'none';
     document.querySelector('.chat-input-area').style.display = 'none';
 
     const pv = document.getElementById('project-view');
     pv.style.display = 'flex';
 
-    document.getElementById('pv-project-name').textContent  = project.name;
+    document.getElementById('pv-project-name').textContent   = project.name;
     document.getElementById('pv-new-chat-text').textContent  = `在 ${project.name} 的新聊天`;
     document.getElementById('pv-empty-subtitle').textContent = `${project.name} 中的聊天將顯示在此處`;
+    const filesEmptySub = document.getElementById('pv-files-empty-subtitle');
+    if (filesEmptySub) {
+        filesEmptySub.textContent = `${project.name} 中的資料來源將顯示在此處`;
+    }
+
+    // 重置為「聊天」分頁
+    setActivePvTab('chats');
+
+    if (options.loading) {
+        // 載入中：先清掉舊列表，避免閃爍上一個專案的資料
+        clearPvLists();
+        return;
+    }
+
+    if (options.detail) {
+        renderPvChats(options.detail.chats || [], project.id);
+        renderPvFiles(options.detail.files || [], project.id);
+    } else {
+        clearPvLists();
+    }
+
+    lucide.createIcons();
+}
+
+/** 清空聊天 / 資料來源列表（顯示空態） */
+function clearPvLists() {
+    const chatList  = document.getElementById('pv-chat-list');
+    const fileList  = document.getElementById('pv-file-list');
+    while (chatList.firstChild) chatList.removeChild(chatList.firstChild);
+    while (fileList.firstChild) fileList.removeChild(fileList.firstChild);
+    document.getElementById('pv-chats-empty').style.display = '';
+    document.getElementById('pv-files-empty').style.display = '';
+}
+
+/**
+ * 渲染專案視圖的聊天列表。
+ * 每個 <li> 都帶有 id (`pv-chat-${chat.id}`) 與 dataset.chatId，
+ * 點擊後 state.currentChatId 設為該 UUID 並切回 chat view。
+ */
+function renderPvChats(chats, projectId) {
+    const list  = document.getElementById('pv-chat-list');
+    const empty = document.getElementById('pv-chats-empty');
+
+    while (list.firstChild) list.removeChild(list.firstChild);
+
+    if (!chats || chats.length === 0) {
+        empty.style.display = '';
+        return;
+    }
+    empty.style.display = 'none';
+
+    chats.forEach(c => {
+        const li = document.createElement('li');
+        li.className = 'pv-list-item';
+        li.id = `pv-chat-${c.id}`;
+        li.dataset.chatId = c.id;
+        li.dataset.projectId = projectId;
+
+        const main = document.createElement('div');
+        main.className = 'pv-list-item-main';
+
+        const titleEl = document.createElement('div');
+        titleEl.className = 'pv-list-item-title';
+        titleEl.textContent = c.title || '(未命名聊天)';
+
+        main.appendChild(titleEl);
+        li.appendChild(main);
+
+        li.addEventListener('click', () => {
+            state.currentChatId    = c.id;
+            state.currentProjectId = projectId;
+            renderProjects();
+            renderRecentChats();
+            lucide.createIcons();
+            showChatView();
+        });
+
+        list.appendChild(li);
+    });
+}
+
+/**
+ * 渲染專案視圖的資料來源列表。
+ * 每個 <li> 都帶有 id (`pv-file-${file.id}`) 與 dataset.fileId，
+ * 顯示 file_name / file_type / status / created_at。
+ */
+function renderPvFiles(files, projectId) {
+    const list  = document.getElementById('pv-file-list');
+    const empty = document.getElementById('pv-files-empty');
+
+    while (list.firstChild) list.removeChild(list.firstChild);
+
+    if (!files || files.length === 0) {
+        empty.style.display = '';
+        return;
+    }
+    empty.style.display = 'none';
+
+    files.forEach(f => {
+        const li = document.createElement('li');
+        li.className = 'pv-list-item';
+        li.id = `pv-file-${f.id}`;
+        li.dataset.fileId = f.id;
+        li.dataset.projectId = projectId;
+
+        // 主體：檔名 + 類型
+        const main = document.createElement('div');
+        main.className = 'pv-list-item-main';
+
+        const titleEl = document.createElement('div');
+        titleEl.className = 'pv-list-item-title';
+        titleEl.textContent = f.file_name || '(未命名檔案)';
+
+        const subEl = document.createElement('div');
+        subEl.className = 'pv-list-item-sub';
+        subEl.textContent = f.file_type || '';
+
+        main.appendChild(titleEl);
+        main.appendChild(subEl);
+
+        // 右側：狀態 pill + 建立時間
+        const meta = document.createElement('div');
+        meta.className = 'pv-list-item-meta';
+
+        if (f.status) {
+            const statusEl = document.createElement('span');
+            statusEl.className = `pv-file-status ${f.status}`;
+            statusEl.textContent = f.status;
+            meta.appendChild(statusEl);
+        }
+
+        if (f.created_at) {
+            const dateEl = document.createElement('span');
+            const d = new Date(f.created_at);
+            dateEl.textContent = isNaN(d.getTime())
+                ? f.created_at
+                : d.toLocaleDateString('zh-TW', { month: 'numeric', day: 'numeric' }) + '日';
+            meta.appendChild(dateEl);
+        }
+
+        li.appendChild(main);
+        li.appendChild(meta);
+
+        li.addEventListener('click', () => {
+            // 後續可導向「檔案詳情」頁；目前先記錄並 console
+            console.log('Open file detail:', f.id);
+        });
+
+        list.appendChild(li);
+    });
+}
+
+/**
+ * 初始化專案視圖的分頁切換（聊天 ⇆ 資料來源）。
+ * 只需註冊一次（在 DOMContentLoaded）。
+ */
+function initProjectViewTabs() {
+    document.querySelectorAll('.pv-tab').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const tab = btn.dataset.tab;   // 'chats' | 'files'
+            if (!tab) return;
+            setActivePvTab(tab);
+        });
+    });
+}
+
+/** 切換目前作用中的 pv tab */
+function setActivePvTab(tab) {
+    document.querySelectorAll('.pv-tab').forEach(b => {
+        b.classList.toggle('active', b.dataset.tab === tab);
+    });
+    const chatsPanel = document.getElementById('pv-chats-panel');
+    const filesPanel = document.getElementById('pv-files-panel');
+    if (chatsPanel) chatsPanel.classList.toggle('hidden', tab !== 'chats');
+    if (filesPanel) filesPanel.classList.toggle('hidden', tab !== 'files');
 }
 
 /** 切回聊天視圖 */

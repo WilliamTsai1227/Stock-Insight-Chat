@@ -131,12 +131,26 @@
                     </button>
                 </div>
                 <div class="pv-tabs">
-                    <button class="pv-tab active">聊天</button>
-                    <button class="pv-tab">資料來源</button>
+                    <button class="pv-tab active" data-tab="chats">聊天</button>
+                    <button class="pv-tab" data-tab="files">資料來源</button>
                 </div>
-                <div class="pv-empty">
-                    <p class="pv-empty-title">沒有聊天</p>
-                    <p id="pv-empty-subtitle" class="pv-empty-subtitle"></p>
+
+                <!-- 聊天分頁 -->
+                <div id="pv-chats-panel" class="pv-panel">
+                    <ul id="pv-chat-list" class="pv-list"></ul>
+                    <div id="pv-chats-empty" class="pv-empty">
+                        <p class="pv-empty-title">沒有聊天</p>
+                        <p id="pv-empty-subtitle" class="pv-empty-subtitle"></p>
+                    </div>
+                </div>
+
+                <!-- 資料來源分頁 -->
+                <div id="pv-files-panel" class="pv-panel hidden">
+                    <ul id="pv-file-list" class="pv-list"></ul>
+                    <div id="pv-files-empty" class="pv-empty">
+                        <p class="pv-empty-title">沒有資料來源</p>
+                        <p id="pv-files-empty-subtitle" class="pv-empty-subtitle"></p>
+                    </div>
                 </div>
             </div>
 
@@ -269,6 +283,26 @@
             </div>
         </div>
     </div>
+
+    <!-- 刪除專案 Modal（簡潔風格，視覺上不過度警告）-->
+    <div class="modal-overlay" id="delete-project-modal">
+        <div class="modal-card delete-project-card">
+            <div class="modal-body">
+                <h3 class="dp-title">刪除專案？</h3>
+                <p class="dp-text">
+                    這將永久刪除所有專案檔案和聊天。若要儲存聊天，請在刪除之前將其移至聊天清單或其他專案。
+                </p>
+                <div id="delete-project-msg" class="modal-msg"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="modal-btn secondary" onclick="closeAllModals()">取消</button>
+                <button class="modal-btn danger" id="delete-project-confirm-btn" onclick="confirmDeleteProject()">刪除</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 全域 Toast 容器（成功/失敗提示）-->
+    <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
     <!-- 刪除帳號 Modal -->
     <div class="modal-overlay" id="delete-modal">
