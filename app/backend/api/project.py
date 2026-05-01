@@ -17,7 +17,8 @@ asyncpg 語法注意事項：
 
 import re
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException, status
+from uuid import UUID
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from datetime import datetime, timezone
 from asyncpg.exceptions import ForeignKeyViolationError
@@ -169,4 +170,228 @@ async def create_project(
             "user_id": str(row["user_id"]),
             "created_at": row["created_at"].isoformat()
         }
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/project/all
+# ─────────────────────────────────────────────────────────────────────────────
+# 注意：必須註冊在 GET /api/project 之前，避免 FastAPI 路由解析歧義
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/api/project/all")
+async def list_all_projects(
+    db: asyncpg.Connection = Depends(get_db),
+    current_user: asyncpg.Record = Depends(get_current_user),
+):
+    """
+    讀取目前登入使用者建立的所有專案。
+
+    安全設計：
+    - user_id 由 JWT 取得，前端不需也不應傳遞
+    - SQL 以 user_id 過濾，確保只回傳本人擁有的資料
+
+    HTTP 回應：
+    - 200 OK   : 回傳專案陣列（可能為空）
+    - 401      : JWT 驗證失敗或 Token 已過期
+    - 403      : 帳號已停用
+    - 500      : 其他未預期的資料庫錯誤
+    """
+    user_id = current_user["id"]
+
+    try:
+        rows = await db.fetch(
+            """
+            SELECT id, name, created_at
+            FROM projects
+            WHERE user_id = $1
+            ORDER BY created_at DESC
+            """,
+            user_id,
+        )
+    except asyncpg.PostgresError as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database error: {str(e)}"
+        )
+
+    return {
+        "status": "success",
+        "data": [
+            {
+                "id": str(row["id"]),
+                "name": row["name"],
+                "created_at": row["created_at"].isoformat(),
+            }
+            for row in rows
+        ],
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/project
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/api/project")
+async def get_project_detail(
+    project_id: UUID = Query(..., description="要查詢的 project id"),
+    db: asyncpg.Connection = Depends(get_db),
+    current_user: asyncpg.Record = Depends(get_current_user),
+):
+    """
+    讀取指定專案的詳細資訊，包含其底下的 chats 與 files 列表。
+
+    回傳結構：
+    - project: id / name / created_at
+    - chats[]: id / title
+    - files[]: id / file_name / s3_url / file_type / status / created_at
+
+    安全設計：
+    - 同時以 (id, user_id) 過濾，確保使用者無法讀取他人的 project
+    - 找不到（不存在或不屬於本人）一律回 404，不洩漏資源是否存在
+
+    HTTP 回應：
+    - 200 OK   : 回傳專案詳細資料
+    - 401      : JWT 驗證失敗或 Token 已過期
+    - 403      : 帳號已停用
+    - 404      : 找不到專案或無權存取
+    - 500      : 其他未預期的資料庫錯誤
+    """
+    user_id = current_user["id"]
+
+    try:
+        # 1. 查專案本身（同時驗證 ownership）
+        project_row = await db.fetchrow(
+            """
+            SELECT id, name, created_at
+            FROM projects
+            WHERE id = $1 AND user_id = $2
+            """,
+            project_id,
+            user_id,
+        )
+
+        if project_row is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found or you don't have permission to access it."
+            )
+
+        # 2. 查關聯的 chats
+        chat_rows = await db.fetch(
+            """
+            SELECT id, title
+            FROM chats
+            WHERE project_id = $1
+            ORDER BY created_at DESC
+            """,
+            project_id,
+        )
+
+        # 3. 查關聯的 files
+        file_rows = await db.fetch(
+            """
+            SELECT id, file_name, s3_url, file_type, status, created_at
+            FROM files
+            WHERE project_id = $1
+            ORDER BY created_at DESC
+            """,
+            project_id,
+        )
+
+    except HTTPException:
+        raise
+    except asyncpg.PostgresError as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database error: {str(e)}"
+        )
+
+    return {
+        "status": "success",
+        "data": {
+            "id": str(project_row["id"]),
+            "name": project_row["name"],
+            "created_at": project_row["created_at"].isoformat(),
+            "chats": [
+                {
+                    "id": str(c["id"]),
+                    "title": c["title"],
+                }
+                for c in chat_rows
+            ],
+            "files": [
+                {
+                    "id": str(f["id"]),
+                    "file_name": f["file_name"],
+                    "s3_url": f["s3_url"],
+                    "file_type": f["file_type"],
+                    "status": f["status"],
+                    "created_at": f["created_at"].isoformat(),
+                }
+                for f in file_rows
+            ],
+        },
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DELETE /api/project
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.delete("/api/project")
+async def delete_project(
+    project_id: UUID = Query(..., description="要刪除的 project id"),
+    db: asyncpg.Connection = Depends(get_db),
+    current_user: asyncpg.Record = Depends(get_current_user),
+):
+    """
+    刪除指定專案。
+
+    Cascade 行為（由 PostgreSQL schema 保證）：
+    - chats.project_id  ON DELETE CASCADE  → 刪 project 會連帶刪所有 chats
+    - messages.chat_id  ON DELETE CASCADE  → 刪 chats 會連帶刪所有 messages
+    - files.project_id  ON DELETE CASCADE  → 刪 project 會連帶刪所有 files
+    因此一句 DELETE FROM projects 即可清掉整個 project 子樹。
+
+    安全設計：
+    - 以 (id, user_id) 同時過濾，確保使用者無法刪除他人的 project
+    - asyncpg.execute 對 DELETE 會回傳 'DELETE n'，n=0 表示沒匹配到
+
+    HTTP 回應：
+    - 200 OK   : 刪除成功
+    - 401      : JWT 驗證失敗或 Token 已過期
+    - 403      : 帳號已停用
+    - 404      : 找不到專案或無權刪除
+    - 500      : 其他未預期的資料庫錯誤
+    """
+    user_id = current_user["id"]
+
+    try:
+        result = await db.execute(
+            """
+            DELETE FROM projects
+            WHERE id = $1 AND user_id = $2
+            """,
+            project_id,
+            user_id,
+        )
+    except asyncpg.PostgresError as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database error: {str(e)}"
+        )
+
+    if result == "DELETE 0":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found or you don't have permission to delete it."
+        )
+
+    return {
+        "status": "success",
+        "message": "Project and all related chats / messages / files have been deleted.",
+        "data": {
+            "id": str(project_id),
+        },
     }
