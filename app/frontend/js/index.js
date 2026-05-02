@@ -1136,7 +1136,7 @@ async function sendMessage() {
                         const finalText = payload.final_content || rawStreamText;
                         bubble.innerHTML = renderMarkdown(finalText);
                         appendStepsAndSources(msgDiv, payload.steps, payload.retrieval_sources);
-                        appendCopyBar(msgDiv, finalText);
+                        appendCopyBar(msgDiv, finalText, payload.retrieval_sources);
                         lucide.createIcons();
                         scrollToBottom();
                         break;
@@ -1461,7 +1461,13 @@ function scrollToBottom() {
 // 複製按鈕列（回答完成後附加在氣泡下方）
 // ============================================================
 
-function appendCopyBar(msgDiv, rawText) {
+/**
+ * 在 AI 訊息底部附加複製按鈕列。
+ * @param {HTMLElement} msgDiv   訊息容器
+ * @param {string}      rawText  原始 Markdown 回答
+ * @param {Array}       sources  參考來源陣列（可選），格式：{ tool, title, publishAt, url }[]
+ */
+function appendCopyBar(msgDiv, rawText, sources) {
     const bar = document.createElement('div');
     bar.className = 'copy-bar';
 
@@ -1482,7 +1488,7 @@ function appendCopyBar(msgDiv, rawText) {
     msgDiv.appendChild(bar);
 
     btn.addEventListener('click', () => {
-        // 複製純文字（去除 markdown 符號）
+        // 回答本文：去除 Markdown 符號，轉為純文字
         const plainText = rawText
             .replace(/#{1,6}\s+/g, '')
             .replace(/\*\*(.+?)\*\*/g, '$1')
@@ -1491,7 +1497,26 @@ function appendCopyBar(msgDiv, rawText) {
             .replace(/\[(.+?)\]\(.+?\)/g, '$1')
             .trim();
 
-        navigator.clipboard.writeText(plainText).then(() => {
+        // 參考來源：格式化為純文字附加到回答後方
+        let sourcesText = '';
+        if (sources && sources.length > 0) {
+            const lines = sources.map((src, idx) => {
+                const num    = idx + 1;
+                const title  = src.title  || '(無標題)';
+                const date   = src.publishAt
+                    ? new Date(src.publishAt).toLocaleDateString() : '';
+                const url    = src.url    || '';
+                const parts  = [`${num}. ${title}`];
+                if (date) parts.push(`   日期：${date}`);
+                if (url)  parts.push(`   連結：${url}`);
+                return parts.join('\n');
+            });
+            sourcesText = '\n\n---\n參考來源\n' + lines.join('\n\n');
+        }
+
+        const fullText = plainText + sourcesText;
+
+        navigator.clipboard.writeText(fullText).then(() => {
             // 短暫顯示「已複製」勾勾確認
             btn.classList.add('copied');
             while (btn.firstChild) btn.removeChild(btn.firstChild);
