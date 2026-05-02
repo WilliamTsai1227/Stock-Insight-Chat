@@ -3,7 +3,7 @@
 // Handles: 登入、註冊、表單切換、密碼強度
 // ============================================
 
-const API_BASE = 'http://localhost:8000/api';
+const API_BASE = resolveStockInsightApiBase();
 
 // --- DOM Elements ---
 const loginForm = document.getElementById('login-form');

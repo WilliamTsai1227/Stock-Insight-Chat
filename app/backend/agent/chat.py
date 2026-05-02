@@ -183,6 +183,10 @@ router_model_base = ChatOpenAI(model="gpt-5-mini", temperature=1)
 # 2. 分析模型 (Analyst): 深度思考、文筆詳盡
 analyst_model = ChatOpenAI(model="gpt-5", temperature=1)
 
+# Router / 檢索反覆上限（與 trace 裡 node=="router" 筆數對齊）
+# 前 N 次進入 router 可綁定工具；自第 N+1 次起卸除工具強制收斂（N = 此常數）。
+ROUTER_MAX_CYCLES = 3
+
 # --- 3. 定義節點 (Nodes) ---
 
 async def call_router(state: AgentState):
@@ -243,12 +247,11 @@ async def call_router(state: AgentState):
     # 萃取目前的 trace 紀錄，計算已經走過幾次 router 節點
     trace = state.get("trace", {})
     router_cycles = sum(1 for step in trace.get("steps", []) if step.get("node") == "router")
-    MAX_CYCLES = 5 # 限制一個問題最多只能進行 5 次檢索循環
 
-    if router_cycles >= MAX_CYCLES:
+    if router_cycles >= ROUTER_MAX_CYCLES:
         # 達到上限：清空可用工具，並在 prompt 加上強制終止指令
         current_tools_to_bind = []
-        system_prompt += f"\n\n[系統通知 - 極重要] 檢索次數已達上限 ({MAX_CYCLES}次)。請立刻根據你目前手邊已獲取的所有資料進行總結與回覆。"
+        system_prompt += f"\n\n[系統通知 - 極重要] 檢索次數已達上限 ({ROUTER_MAX_CYCLES}次)。請立刻根據你目前手邊已獲取的所有資料進行總結與回覆。"
         # 不綁定工具，強迫產出純文字
         dynamic_router = router_model_base
     else:
@@ -460,9 +463,8 @@ async def retry_check(state: AgentState):
 
     trace = state.get("trace", {})
     router_cycles = sum(1 for s in trace.get("steps", []) if s.get("node") == "router")
-    MAX_CYCLES = 5
 
-    if router_cycles < MAX_CYCLES:
+    if router_cycles < ROUTER_MAX_CYCLES:
         # 檢查最近的 Tool Messages 是否全為空結果
         tool_msgs = [m for m in state["messages"] if isinstance(m, ToolMessage)]
         if tool_msgs:

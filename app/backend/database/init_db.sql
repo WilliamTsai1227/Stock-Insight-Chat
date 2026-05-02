@@ -146,6 +146,11 @@ CREATE INDEX IF NOT EXISTS idx_chats_created_at ON chats(created_at);
 CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id);
 CREATE INDEX IF NOT EXISTS idx_messages_parent_id ON messages(parent_id);
 CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
+-- Cursor-based 歷史訊息分頁的主要熱點查詢：
+--   WHERE chat_id = $1 AND created_at < $2 ORDER BY created_at DESC LIMIT N
+-- (chat_id, created_at DESC) 複合索引可一次走完 filter + sort，避免 in-memory sort
+CREATE INDEX IF NOT EXISTS idx_messages_chat_id_created_at_desc
+    ON messages(chat_id, created_at DESC);
 
 -- 文件管理
 CREATE INDEX IF NOT EXISTS idx_files_project_id ON files(project_id);

@@ -1,5 +1,238 @@
-// --- 串流鎖定旗標（防止上一輪回答未完成時重複送出）---
-let isStreaming = false;
+// --- 多對話 SSE：同一頁可有不同 chat_id 並行串流 ---
+// streamingChatIds   : Set<string chatId> — 已發出 POST /chat/messages（await fetch 中）或 reader 仍在 read() 的對話，供離開視圖時 park 避免 loadHistory 拆掉 DOM
+// parkedPaneByChatId : Map<chatId, HTMLElement> — 離開對話視景時將 #chat-messages 整段暫存在隱藏區，回來再接回
+const streamingChatIds = new Set();
+const parkedPaneByChatId = new Map();
+// 每個並行 SSE 對應的 AbortController — parked 超標剔除或刪除專案 CASCADE 時可中止 fetch
+const streamAbortByChatId = new Map();
+
+/** parked 區最多保留幾段（FIFO：超過則剔除最舊封存並 abort 其串流） */
+const MAX_PARKED_STAGING_CHATS = 8;
+
+let newChatComposeLock = false;
+
+function getStreamStagingRoot() {
+    let el = document.getElementById('stream-staging');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'stream-staging';
+        el.className = 'stream-staging';
+        el.setAttribute('aria-hidden', 'true');
+        document.body.appendChild(el);
+    }
+    return el;
+}
+
+/** 強制釋放某段 parked：拆 DOM、中止尚未結束的 SSE（若有）。 */
+function evictParkedPane(chatId) {
+    if (!chatId) return;
+    const abort = streamAbortByChatId.get(chatId);
+    if (abort) {
+        try { abort.abort(); } catch (_) { /* noop */ }
+        streamAbortByChatId.delete(chatId);
+    }
+    streamingChatIds.delete(chatId);
+
+    const wrapper = parkedPaneByChatId.get(chatId);
+    if (wrapper && wrapper.parentNode) {
+        wrapper.parentNode.removeChild(wrapper);
+    }
+    parkedPaneByChatId.delete(chatId);
+}
+
+/**
+ * Map 依插入順序保存 parked；最舊佔用者為 keys().next()。
+ * 超過上限時反覆剔除最舊，直到 ≤ MAX_PARKED_STAGING_CHATS。
+ */
+function enforceParkedStagingLimit() {
+    while (parkedPaneByChatId.size > MAX_PARKED_STAGING_CHATS) {
+        const oldest = parkedPaneByChatId.keys().next().value;
+        if (oldest === undefined) break;
+        evictParkedPane(oldest);
+    }
+    updateSendButtonForStreamingState();
+}
+
+/** 離開對話視景時將目前聊天區封存到 staging（稍後再接回 DOM，SSE 對仍掛載的節點仍可更新） */
+function parkViewportFor(chatId) {
+    if (parkedPaneByChatId.has(chatId)) return;
+    const container = document.getElementById('chat-messages');
+    if (!container || !container.firstChild) return;
+
+    const root = getStreamStagingRoot();
+    const wrapper = document.createElement('div');
+    wrapper.className = 'parked-chat-viewport';
+    wrapper.dataset.parkedChatId = chatId;
+    while (container.firstChild) {
+        wrapper.appendChild(container.firstChild);
+    }
+    root.appendChild(wrapper);
+    parkedPaneByChatId.set(chatId, wrapper);
+    enforceParkedStagingLimit();
+}
+
+/** 回到某個對話：若封存中有 UI（串流進行中或離開後剛結束未完成 unpark），接回 #chat-messages */
+function unparkViewportFor(chatId) {
+    const wrapper = parkedPaneByChatId.get(chatId);
+    if (!wrapper) return;
+    const container = document.getElementById('chat-messages');
+    while (container.firstChild) container.removeChild(container.firstChild);
+    while (wrapper.firstChild) {
+        container.appendChild(wrapper.firstChild);
+    }
+    wrapper.remove();
+    parkedPaneByChatId.delete(chatId);
+}
+
+/** 離開對話（切到其他 chat / 進專案 / 開新對話）時若此 chat 仍有進行中串流（含 fetch 尚未回應），封存畫面以防 loadHistory 拆掉 DOM */
+function maybeParkViewportForLeavingChat(chatId) {
+    if (!chatId) return;
+    if (!streamingChatIds.has(chatId)) return;
+    parkViewportFor(chatId);
+}
+
+// --- RWD：平板／手機側欄抽屜（與 CSS `(max-width: 1024px)` 對齊）---
+const mqSidebarDrawer = typeof window.matchMedia !== 'undefined'
+    ? window.matchMedia('(max-width: 1024px)')
+    : { matches: false, addEventListener: null, addListener: null };
+
+function sidebarDrawerActive() {
+    return mqSidebarDrawer.matches;
+}
+
+function setSidebarToggleExpanded(open) {
+    const btn = document.getElementById('sidebar-toggle-btn');
+    if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+function closeSidebarDrawer() {
+    const app = document.querySelector('.app-container');
+    const bd = document.getElementById('sidebar-backdrop');
+    if (!app || !app.classList.contains('sidebar-open')) return;
+    app.classList.remove('sidebar-open');
+    if (bd) bd.setAttribute('aria-hidden', 'true');
+    setSidebarToggleExpanded(false);
+}
+
+function toggleSidebarDrawer() {
+    if (!sidebarDrawerActive()) return;
+    const app = document.querySelector('.app-container');
+    const bd = document.getElementById('sidebar-backdrop');
+    if (!app) return;
+    const open = app.classList.toggle('sidebar-open');
+    if (bd) bd.setAttribute('aria-hidden', open ? 'false' : 'true');
+    setSidebarToggleExpanded(open);
+}
+
+function initMobileSidebar() {
+    const app = document.querySelector('.app-container');
+    const btn = document.getElementById('sidebar-toggle-btn');
+    const bd = document.getElementById('sidebar-backdrop');
+    if (!app || !btn || !bd) return;
+
+    btn.addEventListener('click', () => toggleSidebarDrawer());
+    bd.addEventListener('click', () => closeSidebarDrawer());
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeSidebarDrawer();
+    });
+
+    const onBreak = () => {
+        if (!sidebarDrawerActive()) closeSidebarDrawer();
+    };
+    if (typeof mqSidebarDrawer.addEventListener === 'function') {
+        mqSidebarDrawer.addEventListener('change', onBreak);
+    } else if (typeof mqSidebarDrawer.addListener === 'function') {
+        mqSidebarDrawer.addListener(onBreak);
+    }
+}
+
+/**
+ * 點側欄進入某一則對話（含封存還原 + GET /api/chat 載入）。
+ * 若在別的對話離開後「完成」並封存在 staging，unpark 即顯示，不再打 API。
+ */
+async function navigateToChat(chatId) {
+    closeSidebarDrawer();
+    const prevId = state.currentChatId;
+    if (prevId === chatId) return;
+
+    if (prevId && prevId !== chatId) {
+        maybeParkViewportForLeavingChat(prevId);
+    }
+
+    state.currentChatId = chatId;
+    renderProjects();
+    renderRecentChats();
+    lucide.createIcons();
+    showChatView();
+    setMainChatTitle(resolveChatTitleForId(chatId));
+
+    if (parkedPaneByChatId.has(chatId)) {
+        unparkViewportFor(chatId);
+        scrollToBottom();
+        lucide.createIcons();
+        updateSendButtonForStreamingState();
+        return;
+    }
+
+    await loadChatHistoryIntoView(chatId);
+    updateSendButtonForStreamingState();
+}
+
+/** 一般聊天視圖（非專案頁）輸入框 placeholder，需與 index.html 預設文案一致 */
+const CHAT_INPUT_PLACEHOLDER_MAIN = '問問台積電的供應商風險...';
+
+function isProjectViewVisible() {
+    const pv = document.getElementById('project-view');
+    if (!pv) return false;
+    return getComputedStyle(pv).display !== 'none';
+}
+
+function getPvComposePlaceholder() {
+    const p = state.projects.find(x => x.id === state.currentProjectId);
+    const name = (p && p.name) ? p.name : '此專案';
+    return `在 ${name} 的新聊天`;
+}
+
+/** 非串流鎖定時，依目前畫面（專案頁 / 聊天頁）套用對應 placeholder */
+function applyIdleInputPlaceholder() {
+    const inputEl = document.getElementById('user-input');
+    if (!inputEl) return;
+    inputEl.placeholder = isProjectViewVisible()
+        ? getPvComposePlaceholder()
+        : CHAT_INPUT_PLACEHOLDER_MAIN;
+}
+
+function setMainChatTitle(text) {
+    const el = document.getElementById('current-chat-title');
+    if (el) el.textContent = text || '歡迎回來';
+}
+
+function resolveChatTitleForId(chatId) {
+    const sid = String(chatId);
+    const r = (state.recentChats || []).find(c => String(c.id) === sid);
+    if (r && r.title) return r.title;
+    for (const pid of Object.keys(state.chats || {})) {
+        const found = (state.chats[pid] || []).find(c => String(c.id) === sid);
+        if (found && found.title) return found.title;
+    }
+    return '對話';
+}
+
+/** 發送／輸入欄鎖：只鎖「當前對話若在串流中」*/
+function updateSendButtonForStreamingState() {
+    const sendBtn = document.getElementById('send-btn');
+    const inputEl = document.getElementById('user-input');
+    if (!sendBtn || !inputEl) return;
+
+    const cur = state.currentChatId;
+    const busy = !!(cur && streamingChatIds.has(cur));
+
+    sendBtn.disabled = busy;
+    inputEl.disabled = busy;
+    inputEl.placeholder = busy ? '等待回覆中...' : '';
+    if (!busy) applyIdleInputPlaceholder();
+}
 
 // --- 全域狀態 ---
 // 注意：所有資料皆從後端載入，不放任何假資料
@@ -16,7 +249,7 @@ let state = {
     currentProjectId: null,
     currentChatId: null,
     pendingDeleteProject: null,
-    apiBase: 'http://localhost:8000/api'
+    apiBase: resolveStockInsightApiBase(),
 };
 
 // --- Marked.js 設定 ---
@@ -58,6 +291,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         loadProjectsFromServer(),
         loadRecentChatsFromServer(),
     ]);
+    updateSendButtonForStreamingState();
 });
 
 function initEventListeners() {
@@ -73,7 +307,10 @@ function initEventListeners() {
         if (e.isComposing || e.keyCode === 229) return;
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            if (!isStreaming) sendMessage();
+            const cur = state.currentChatId;
+            if (cur && streamingChatIds.has(cur)) return;
+            if (!cur && newChatComposeLock) return;
+            sendMessage();
         }
     });
 
@@ -102,6 +339,7 @@ function initEventListeners() {
         //   - currentProjectId = null → sidebar 的「新對話」屬於全域層級，不歸任何 project
         // 若不清這兩個值，從歷史 chat 切過來再按「新對話」會繼續沿用舊 chat_id，
         // 訊息會被塞進舊 chat，新 chat 也永遠不會被建立。
+        maybeParkViewportForLeavingChat(state.currentChatId);
         state.currentChatId = null;
         state.currentProjectId = null;
 
@@ -112,7 +350,12 @@ function initEventListeners() {
         renderProjects();
         renderRecentChats();
         lucide.createIcons();
+        setMainChatTitle('歡迎回來');
+        updateSendButtonForStreamingState();
+        closeSidebarDrawer();
     });
+
+    initMobileSidebar();
 }
 
 // ============================================================
@@ -274,6 +517,9 @@ function renderProjects() {
         row.appendChild(menuBtn);
 
         row.addEventListener('click', async () => {
+            closeSidebarDrawer();
+            maybeParkViewportForLeavingChat(state.currentChatId);
+
             state.currentProjectId = p.id;
             state.currentChatId = null;
 
@@ -289,6 +535,7 @@ function renderProjects() {
             renderProjects();
             renderRecentChats();
             lucide.createIcons();
+            updateSendButtonForStreamingState();
             showProjectView(p, { detail });
         });
 
@@ -356,14 +603,10 @@ function renderRecentChats() {
         li.appendChild(msgIcon);
         li.appendChild(titleSpan);
 
-        li.addEventListener('click', () => {
-            state.currentChatId = c.id;
+        li.addEventListener('click', async () => {
             // recent chat 不一定屬於某個 project，這裡不主動切換 currentProjectId；
             // 後續若需要可再從後端查 project_id 補上
-            renderProjects();
-            renderRecentChats();
-            lucide.createIcons();
-            showChatView();
+            await navigateToChat(c.id);
         });
 
         list.appendChild(li);
@@ -511,6 +754,8 @@ async function confirmDeleteProject() {
     msg.className = 'modal-msg';
     msg.textContent = '';
 
+    const cascadeChatIds = (state.chats[project.id] || []).map(c => String(c.id));
+
     try {
         const url = `${state.apiBase}/project?project_id=${encodeURIComponent(project.id)}`;
         const res = await authFetch(url, { method: 'DELETE' });
@@ -541,6 +786,14 @@ async function confirmDeleteProject() {
         delete state.chats[project.id];
         delete state.files[project.id];
 
+        for (const cid of cascadeChatIds) evictParkedPane(cid);
+
+        if (state.currentChatId && cascadeChatIds.includes(String(state.currentChatId))) {
+            state.currentChatId = null;
+            showChatView();
+            clearChatMessages();
+        }
+
         // 2. 若刪掉的是目前顯示中的專案，回到歡迎畫面
         if (state.currentProjectId === project.id) {
             state.currentProjectId = null;
@@ -548,6 +801,8 @@ async function confirmDeleteProject() {
             showChatView();
             clearChatMessages();
         }
+
+        updateSendButtonForStreamingState();
 
         closeAllModals();
         state.pendingDeleteProject = null;
@@ -708,6 +963,13 @@ async function submitCreateProject() {
             name: data.data.name,
             created_at: data.data.created_at,
         };
+        // 若正在某則對話的 SSE／await fetch 中途去建立新專案，必須先 park，
+        // 否則 currentChatId 被清掉後無法封存主視區，回該對話會 loadHistory 拆掉串流 DOM。
+        const suspendChatId = state.currentChatId;
+        if (suspendChatId) {
+            maybeParkViewportForLeavingChat(suspendChatId);
+        }
+
         state.currentProjectId = newProject.id;
         state.currentChatId    = null;
 
@@ -745,15 +1007,17 @@ async function submitCreateProject() {
  *   - 兩者皆未提供時      : 退化為僅顯示 hero（向後相容）
  */
 function showProjectView(project, options = {}) {
-    document.querySelector('.chat-header').style.display    = 'none';
+    const main = document.querySelector('.main-content');
+    if (main) main.classList.add('project-view-mode');
     document.getElementById('chat-messages').style.display  = 'none';
-    document.querySelector('.chat-input-area').style.display = 'none';
+    document.querySelector('.chat-input-area').style.display = '';
 
     const pv = document.getElementById('project-view');
     pv.style.display = 'flex';
 
+    setMainChatTitle(project.name);
+
     document.getElementById('pv-project-name').textContent   = project.name;
-    document.getElementById('pv-new-chat-text').textContent  = `在 ${project.name} 的新聊天`;
     document.getElementById('pv-empty-subtitle').textContent = `${project.name} 中的聊天將顯示在此處`;
     const filesEmptySub = document.getElementById('pv-files-empty-subtitle');
     if (filesEmptySub) {
@@ -766,6 +1030,8 @@ function showProjectView(project, options = {}) {
     if (options.loading) {
         // 載入中：先清掉舊列表，避免閃爍上一個專案的資料
         clearPvLists();
+        lucide.createIcons();
+        updateSendButtonForStreamingState();
         return;
     }
 
@@ -777,6 +1043,7 @@ function showProjectView(project, options = {}) {
     }
 
     lucide.createIcons();
+    updateSendButtonForStreamingState();
 }
 
 /** 清空聊天 / 資料來源列表（顯示空態） */
@@ -823,13 +1090,9 @@ function renderPvChats(chats, projectId) {
         main.appendChild(titleEl);
         li.appendChild(main);
 
-        li.addEventListener('click', () => {
-            state.currentChatId    = c.id;
+        li.addEventListener('click', async () => {
             state.currentProjectId = projectId;
-            renderProjects();
-            renderRecentChats();
-            lucide.createIcons();
-            showChatView();
+            await navigateToChat(c.id);
         });
 
         list.appendChild(li);
@@ -935,7 +1198,8 @@ function setActivePvTab(tab) {
 /** 切回聊天視圖 */
 function showChatView() {
     document.getElementById('project-view').style.display   = 'none';
-    document.querySelector('.chat-header').style.display    = '';
+    const main = document.querySelector('.main-content');
+    if (main) main.classList.remove('project-view-mode');
     document.getElementById('chat-messages').style.display  = '';
     document.querySelector('.chat-input-area').style.display = '';
 }
@@ -951,31 +1215,120 @@ function clearChatMessages() {
     container.appendChild(hero);
 }
 
+/**
+ * 從後端載入指定 chat 的訊息歷史並渲染主視窗（對應 GET /api/chat）。
+ * API 回傳已按時間舊→新排序，這裡依序繪成一問一答。
+ */
+async function loadChatHistoryIntoView(chatId) {
+    const statusBadge = document.getElementById('chat-status');
+    const container = document.getElementById('chat-messages');
+
+    if (statusBadge) statusBadge.textContent = '載入對話…';
+
+    try {
+        const url =
+            `${state.apiBase}/chat?chat_id=${encodeURIComponent(chatId)}`;
+        const res = await authFetch(url);
+        if (!res) return;
+        if (!res.ok) {
+            let detail = `HTTP ${res.status}`;
+            try {
+                const err = await res.json();
+                detail = err.detail || detail;
+            } catch { /* ignore */ }
+            showToast(`載入對話紀錄失敗：${detail}`, 'error');
+            return;
+        }
+        const json = await res.json();
+        const data = json && json.data ? json.data : {};
+        const msgs = Array.isArray(data.messages) ? data.messages : [];
+
+        // 請求過程中使用者若已切到別則對話，不可再覆寫目前主視窗（避免歷史互串）
+        if (String(state.currentChatId) !== String(chatId)) return;
+
+        while (container.firstChild) {
+            container.removeChild(container.firstChild);
+        }
+
+        if (msgs.length === 0) {
+            clearChatMessages();
+            return;
+        }
+
+        msgs.forEach(m => {
+            const role = m.role || '';
+            if (role === 'user') {
+                addMessageToUI('user', m.content || '', { skipScroll: true });
+            } else if (role === 'assistant') {
+                appendAssistantHistoryMessage(m);
+            }
+        });
+        scrollToBottom();
+        lucide.createIcons();
+    } catch (err) {
+        console.error(err);
+        showToast(`載入對話紀錄失敗：${err.message}`, 'error');
+    } finally {
+        if (statusBadge) statusBadge.textContent = 'Ready';
+        updateSendButtonForStreamingState();
+    }
+}
+
+/**
+ * 將一則後端 assistant 紀錄掛入主訊息列（Markdown + 軌跡/來源/複製列，與即時 SSE 結束態一致）。
+ */
+function appendAssistantHistoryMessage(record) {
+    const container = document.getElementById('chat-messages');
+    const msgDiv = document.createElement('div');
+    msgDiv.className = 'message assistant';
+    if (record.id) msgDiv.dataset.messageId = record.id;
+
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    bubble.innerHTML = renderMarkdown(record.content || '');
+    msgDiv.appendChild(bubble);
+
+    const meta = record.metadata;
+    const steps = meta && Array.isArray(meta.steps) ? meta.steps : [];
+    const sources = Array.isArray(record.context_refs) ? record.context_refs : [];
+
+    appendStepsAndSources(msgDiv, steps.length ? steps : null, sources.length ? sources : null);
+    appendCopyBar(msgDiv, record.content || '', sources.length ? sources : []);
+
+    container.appendChild(msgDiv);
+}
+
 // ============================================================
 // 核心：支援 SSE 串流的 sendMessage
 // ============================================================
 
 async function sendMessage() {
-    // ── 防止重複送出：旗標在任何邏輯之前立即佔位 ──
-    if (isStreaming) return;
-    isStreaming = true;
+    const curSid = state.currentChatId;
+    if (curSid && streamingChatIds.has(curSid)) {
+        showToast('此對話正在生成回覆，請稍候…', 'info');
+        return;
+    }
+    if (!curSid && newChatComposeLock) return;
 
     const sendBtn = document.getElementById('send-btn');
     const inputEl = document.getElementById('user-input');
 
-    // 立即鎖定 UI（雙重保險，防快速連按）
     sendBtn.disabled = true;
     inputEl.disabled = true;
     inputEl.placeholder = '等待回覆中...';
 
     const query = inputEl.value.trim();
     if (!query) {
-        // 空白輸入：解鎖後直接返回
-        isStreaming = false;
         sendBtn.disabled = false;
         inputEl.disabled = false;
-        inputEl.placeholder = '輸入您的問題...';
+        updateSendButtonForStreamingState();
         return;
+    }
+
+    if (isProjectViewVisible()) {
+        showChatView();
+        clearChatMessages();
+        setMainChatTitle('新對話');
     }
 
     // 取得工具設定
@@ -1000,6 +1353,7 @@ async function sendMessage() {
     // 後端會回傳 placeholder title（截斷 query），LLM 正式 title 在
     // 後續 /api/chat/messages 並行產生，透過 SSE 'title_update' 回推
     if (!state.currentChatId) {
+        newChatComposeLock = true;
         try {
             const createRes = await authFetch(`${state.apiBase}/chat`, {
                 method: 'POST',
@@ -1008,16 +1362,22 @@ async function sendMessage() {
                     project_id: state.currentProjectId || null,
                 }),
             });
-            if (!createRes) return;     // authFetch 已導向 login
+            if (!createRes) {
+                newChatComposeLock = false;
+                sendBtn.disabled = false;
+                inputEl.disabled = false;
+                updateSendButtonForStreamingState();
+                return;
+            }
             if (!createRes.ok) {
                 const errData = await createRes.json().catch(() => ({}));
                 const detail = errData.detail || `HTTP ${createRes.status}`;
                 showToast(`建立聊天失敗：${detail}`, 'error');
                 statusBadge.textContent = 'Ready';
-                isStreaming = false;
+                newChatComposeLock = false;
                 sendBtn.disabled = false;
                 inputEl.disabled = false;
-                inputEl.placeholder = '輸入您的問題...';
+                updateSendButtonForStreamingState();
                 return;
             }
             const createJson = await createRes.json();
@@ -1044,13 +1404,16 @@ async function sendMessage() {
             renderProjects();
             renderRecentChats();
             lucide.createIcons();
+
+            setMainChatTitle(newChat.title || '新對話');
+            if (pid) renderPvChats(state.chats[pid] || [], pid);
         } catch (err) {
             showToast(`網路錯誤：${err.message}`, 'error');
             statusBadge.textContent = 'Ready';
-            isStreaming = false;
+            newChatComposeLock = false;
             sendBtn.disabled = false;
             inputEl.disabled = false;
-            inputEl.placeholder = '輸入您的問題...';
+            updateSendButtonForStreamingState();
             return;
         }
     }
@@ -1062,6 +1425,9 @@ async function sendMessage() {
     if (welcome) welcome.remove();
     container.appendChild(msgDiv);
     scrollToBottom();
+
+    // 這次 SSE 對應的 chat（發送完成後若在別的對話視景，不要被 done 又把 state.currentChatId 搶回去）
+    const streamTargetChatId = state.currentChatId;
 
     // 暫存串流文字、工具行清單、思考計時器
     let rawStreamText = '';
@@ -1112,6 +1478,12 @@ async function sendMessage() {
         if (toolsContainer.parentNode) toolsContainer.remove();
     };
 
+    const streamAbortCtrl = new AbortController();
+    streamAbortByChatId.set(streamTargetChatId, streamAbortCtrl);
+    // fetch 一回應前就允許離開對話並 park，否則 loadHistory 會拆掉尚未加入 Set 的串流 DOM。
+    streamingChatIds.add(streamTargetChatId);
+    updateSendButtonForStreamingState();
+
     try {
         // authFetch 自動注入 Authorization: Bearer AT，
         // 並在 AT 即將過期（≤ 90s）時先靜默換 Token 再送請求（機制 B）。
@@ -1119,9 +1491,10 @@ async function sendMessage() {
         // 此時直接 return 以結束函式，finally 區塊仍會負責解鎖 UI。
         const response = await authFetch(`${state.apiBase}/chat/messages`, {
             method: 'POST',
+            signal: streamAbortCtrl.signal,
             body: JSON.stringify({
                 query,
-                chat_id: state.currentChatId,   // 一定是 UUID（上方已確保）
+                chat_id: streamTargetChatId,   // 與發送瞬間鎖定，勿用 state.currentChatId（使用者可能 await 時已換對話）
                 agent_config: { enabled_tools }
             })
         });
@@ -1129,6 +1502,9 @@ async function sendMessage() {
         if (!response) return;  // authFetch 已處理 401 → 跳轉 login.html
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         if (!response.body) throw new Error('瀏覽器不支援 Streaming');
+
+        newChatComposeLock = false;
+        updateSendButtonForStreamingState();
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -1236,7 +1612,10 @@ async function sendMessage() {
                     // 全部完成
                     case 'done': {
                         donePayload = payload;
-                        state.currentChatId = payload.chat_id;
+                        // 使用者若已切到別個 chat，不要覆寫 currentChatId（避免狀態與畫面錯位）
+                        if (state.currentChatId === streamTargetChatId) {
+                            state.currentChatId = payload.chat_id;
+                        }
                         addBubbleIfNeeded();
                         cleanup();
                         const finalText = payload.final_content || rawStreamText;
@@ -1258,7 +1637,7 @@ async function sendMessage() {
 
                         // 1. 更新 state.chats 各 project 中對應的 chat
                         for (const pid of Object.keys(state.chats)) {
-                            const found = (state.chats[pid] || []).find(c => c.id === cid);
+                            const found = (state.chats[pid] || []).find(c => String(c.id) === String(cid));
                             if (found) {
                                 found.title = newTitle;
                                 break;
@@ -1266,8 +1645,21 @@ async function sendMessage() {
                         }
 
                         // 2. 更新 state.recentChats 對應的 chat
-                        const recent = state.recentChats.find(c => c.id === cid);
+                        const recent = state.recentChats.find(c => String(c.id) === String(cid));
                         if (recent) recent.title = newTitle;
+
+                        // 3. 若正在檢視該對話，同步頂標；若在專案頁且有該專案列表，順便刷新列表標題
+                        if (String(state.currentChatId) === String(cid)) {
+                            setMainChatTitle(newTitle);
+                        }
+                        for (const pid of Object.keys(state.chats || {})) {
+                            const list = state.chats[pid] || [];
+                            if (!list.some(c => String(c.id) === String(cid))) continue;
+                            if (isProjectViewVisible() && state.currentProjectId === pid) {
+                                renderPvChats(list, pid);
+                            }
+                            break;
+                        }
 
                         renderProjects();
                         renderRecentChats();
@@ -1291,14 +1683,18 @@ async function sendMessage() {
         addBubbleIfNeeded();
         bubble.textContent = '伺服器連線失敗，請檢查 Docker 是否啟動。';
     } finally {
-        // 確保游標與狀態列一定被清除，不管 done 有沒有成功收到
-        cleanup();
-        isStreaming = false;
+        try {
+            cleanup();
+        } catch (_) { /* 串流節點可能已不在文件樹 */ }
+        streamingChatIds.delete(streamTargetChatId);
+        newChatComposeLock = false;
+        streamAbortByChatId.delete(streamTargetChatId);
+
         sendBtn.disabled = false;
         inputEl.disabled = false;
-        inputEl.placeholder = '輸入您的問題...';
         statusBadge.textContent = 'Ready';
         lucide.createIcons();
+        updateSendButtonForStreamingState();
     }
 }
 
@@ -1568,7 +1964,10 @@ function appendStepsAndSources(msgDiv, steps, sources) {
 // 使用者訊息 UI（不變）
 // ============================================================
 
-function addMessageToUI(role, content) {
+function addMessageToUI(role, content, options) {
+    const opt = options || {};
+    const skipScroll = !!opt.skipScroll;
+
     const container = document.getElementById('chat-messages');
     const welcome = container.querySelector('.welcome-hero');
     if (welcome) welcome.remove();
@@ -1582,7 +1981,7 @@ function addMessageToUI(role, content) {
     msgDiv.appendChild(bubble);
 
     container.appendChild(msgDiv);
-    scrollToBottom();
+    if (!skipScroll) scrollToBottom();
 }
 
 function scrollToBottom() {

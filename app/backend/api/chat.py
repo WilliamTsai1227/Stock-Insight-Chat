@@ -4,10 +4,10 @@ import json
 import asyncio
 import asyncpg
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Dict
 from uuid import UUID
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
@@ -53,6 +53,70 @@ def _make_placeholder_title(query: str) -> str:
     if len(stripped) <= _PLACEHOLDER_LEN:
         return stripped
     return stripped[:_PLACEHOLDER_LEN] + "…"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 訊息持久化 helpers
+# ─────────────────────────────────────────────────────────────────────────────
+# 設計原則：
+# - user 訊息：在 agent 開跑前 INSERT，失敗 → 回 500，避免進到 SSE 才出問題
+# - assistant 訊息：在 SSE 'done' / 'error' 時 INSERT，使用 pool 取新連線（避免
+#   依賴 Depends 注入連線在 StreamingResponse 期間的生命週期）
+# - parent_id 設計：assistant.parent_id = user_message_id，方便前端把問答配對
+#   user 訊息 parent_id 一律 NULL（對話樹起點）
+
+
+async def _insert_user_message(
+    db: asyncpg.Connection,
+    chat_id: UUID,
+    content: str,
+) -> UUID:
+    """在 agent 跑之前同步寫入 user 訊息，回傳新插入的 message id。"""
+    row = await db.fetchrow(
+        """
+        INSERT INTO messages (chat_id, parent_id, role, content)
+        VALUES ($1, NULL, 'user', $2)
+        RETURNING id
+        """,
+        chat_id,
+        content,
+    )
+    return row["id"]
+
+
+async def _insert_assistant_message(
+    chat_id: UUID,
+    parent_id: Optional[UUID],
+    content: str,
+    context_refs: Optional[List[Dict[str, Any]]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Optional[UUID]:
+    """
+    在 SSE 結束（done / error）時寫入 assistant 訊息。
+
+    - 從 pool 取新連線：避免 StreamingResponse 期間原本的 Depends 連線生命週期不確定
+    - 任何 DB 錯誤一律不丟例外，只印 log；持久化失敗不該打斷已經 yield 給前端的串流
+    - 回傳 message id；失敗時回傳 None
+    """
+    try:
+        async with get_pool().acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO messages
+                    (chat_id, parent_id, role, content, context_refs, metadata)
+                VALUES ($1, $2, 'assistant', $3, $4, $5)
+                RETURNING id
+                """,
+                chat_id,
+                parent_id,
+                content,
+                json.dumps(context_refs, ensure_ascii=False) if context_refs is not None else None,
+                json.dumps(metadata, ensure_ascii=False) if metadata is not None else None,
+            )
+            return row["id"]
+    except Exception as e:
+        print(f"[MSG] INSERT assistant failed, chat_id={chat_id}: {type(e).__name__}: {e}")
+        return None
 
 
 async def _generate_title_via_llm(query: str) -> Optional[str]:
@@ -217,6 +281,159 @@ async def list_all_chats(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# GET /api/chat —— 載入指定 chat 的歷史訊息（cursor-based 分頁）
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 分頁設計（與 ChatGPT / Slack / Telegram 同款）：
+# - 不用 page/offset：邊看邊有新訊息會跳號 / 漏訊息
+# - 複合 cursor (created_at, id)：避免「同一 microsecond 兩筆」時只用 ts 會漏列
+# - 排序：DB 取 DESC + LIMIT N+1，回給前端再轉 ASC（聊天記錄一般是時間從上到下）
+# - has_more：透過 LIMIT N+1 判斷是否還有更舊的訊息（多取 1 筆當哨兵）
+# - next_before：當 has_more=true 時，回傳本次頁內「時間上最舊」那筆的 { ts, id }，
+#                下一頁請同時帶 before_ts + before_id；只帶其中一個 → 422
+
+# 一頁預設 30、上限 100（避免單次拉太多打爆 frontend / network）
+_DEFAULT_MESSAGES_LIMIT = 30
+_MAX_MESSAGES_LIMIT = 100
+
+
+@router.get("/api/chat")
+async def get_chat_messages(
+    chat_id: UUID = Query(..., description="要載入的 chat UUID"),
+    before_ts: Optional[datetime] = Query(
+        None,
+        description="複合 cursor 之一：本頁內時間上最舊那筆的 created_at（須與 before_id 成對）",
+    ),
+    before_id: Optional[UUID] = Query(
+        None,
+        description="複合 cursor 之一：本頁內時間上最舊那筆的 message id（須與 before_ts 成對）",
+    ),
+    limit: int = Query(
+        _DEFAULT_MESSAGES_LIMIT,
+        ge=1,
+        le=_MAX_MESSAGES_LIMIT,
+        description=f"單次最多載入幾筆（預設 {_DEFAULT_MESSAGES_LIMIT}，上限 {_MAX_MESSAGES_LIMIT}）",
+    ),
+    db: asyncpg.Connection = Depends(get_db),
+    current_user_id: UUID = Depends(get_current_user_id),
+):
+    """
+    讀取指定 chat 的歷史訊息（按時間「舊→新」排序）。
+
+    安全：
+    - chat_id ownership 透過 chats.user_id = current_user_id 驗證；找不到一律 404，
+      不洩漏資源是否存在
+    - user_id 從 JWT 來，前端不需也不該帶
+
+    HTTP 回應：
+    - 200 : { messages: [...], has_more: bool,
+              next_before: { ts: iso8601, id: uuid } | null }
+
+    Cursor 規則：
+    - 首頁：不帶 before_ts / before_id → 取得「最新」limit 條（按時間DESC取，回傳轉為舊→新）。
+    - 載入更舊：帶上一頁回傳的 next_before.ts 為 before_ts，next_before.id 為 before_id。
+    - before_ts / before_id 須「兩個都給」或「兩個都不給」，缺一 → 422。
+
+    - 401 : JWT 失敗
+    - 403 : 帳號已停用
+    - 404 : chat 不存在或不屬於本人
+    - 500 : DB 錯誤
+    """
+    if (before_ts is None) != (before_id is None):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="before_ts and before_id must both be provided, or neither.",
+        )
+    # 1. Ownership 驗證
+    owner_id = await db.fetchval(
+        "SELECT user_id FROM chats WHERE id = $1",
+        chat_id,
+    )
+    if owner_id is None or owner_id != current_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Chat not found or you don't have permission.",
+        )
+
+    # 2. 主查詢：DESC + LIMIT N+1（多取 1 筆當 has_more 哨兵）
+    # SQL 用 (chat_id, created_at DESC) composite index 完成 filter + sort
+    fetch_n = limit + 1
+    try:
+        rows = await db.fetch(
+            """
+            SELECT id, parent_id, role, content,
+                   tokens, context_refs, metadata, created_at
+            FROM messages
+            WHERE chat_id = $1
+              AND (
+                  ($2::timestamptz IS NULL AND $3::uuid IS NULL)
+                  OR created_at < $2
+                  OR (created_at = $2 AND id < $3)
+              )
+            ORDER BY created_at DESC, id DESC
+            LIMIT $4
+            """,
+            chat_id,
+            before_ts,
+            before_id,
+            fetch_n,
+        )
+    except asyncpg.PostgresError as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database error: {e}",
+        )
+
+    has_more = len(rows) > limit
+    page_rows = rows[:limit]   # 丟掉 N+1 哨兵那一筆
+
+    # 3. 翻成 ASC（前端聊天串呈現順序）
+    page_rows_asc = list(reversed(page_rows))
+
+    # 4. next_before：本頁內時間上「最舊」那筆的 (created_at, id)，供複合 cursor
+    oldest = page_rows_asc[0] if page_rows_asc else None
+    next_before: Optional[Dict[str, Any]] = None
+    if has_more and oldest is not None:
+        next_before = {
+            "ts": oldest["created_at"].isoformat(),
+            "id": str(oldest["id"]),
+        }
+
+    def _row_to_dict(row: asyncpg.Record) -> Dict[str, Any]:
+        # asyncpg 對 JSONB 預設不會自動 decode，這裡安全地嘗試 parse
+        def _parse_json(val: Any) -> Any:
+            if val is None:
+                return None
+            if isinstance(val, (dict, list)):
+                return val
+            try:
+                return json.loads(val)
+            except Exception:
+                return val
+
+        return {
+            "id": str(row["id"]),
+            "parent_id": str(row["parent_id"]) if row["parent_id"] else None,
+            "role": row["role"],
+            "content": row["content"],
+            "tokens": _parse_json(row["tokens"]),
+            "context_refs": _parse_json(row["context_refs"]),
+            "metadata": _parse_json(row["metadata"]),
+            "created_at": row["created_at"].isoformat(),
+        }
+
+    return {
+        "status": "success",
+        "data": {
+            "chat_id": str(chat_id),
+            "messages": [_row_to_dict(r) for r in page_rows_asc],
+            "has_more": has_more,
+            "next_before": next_before,
+        },
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # POST /api/chat/messages —— SSE 串流端點
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -257,14 +474,32 @@ async def get_ai_response(
     # 2. 旗標：FALSE 才需要產 title
     should_generate_title = not chat_row["title_generated"]
 
-    # 3. SSE 必要參數
+    # 3. 同步 INSERT user 訊息（在 agent 跑之前），失敗就直接 500
+    # 這樣即使後續 agent / SSE 中斷，user 仍能看到自己問了什麼，方便重試
+    try:
+        clean_query = request.query.strip()
+        if not clean_query:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Query cannot be empty.",
+            )
+        user_message_id = await _insert_user_message(db, request.chat_id, clean_query)
+    except HTTPException:
+        raise
+    except asyncpg.PostgresError as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to persist user message: {e}",
+        )
+
+    # 4. SSE 必要參數
     chat_id_str = str(request.chat_id)
     enabled_tools: List[str] = []
     if request.agent_config and request.agent_config.enabled_tools:
         enabled_tools = request.agent_config.enabled_tools
 
     initial_state = {
-        "messages": [HumanMessage(content=request.query)],
+        "messages": [HumanMessage(content=clean_query)],
         "trace": {},
         "retrieved_data": [],
         "enabled_tools": enabled_tools,
@@ -355,24 +590,40 @@ async def get_ai_response(
 
             # ── async for 結束 = 圖已執行完畢，無條件送 done ─────────
             total_time = round(time.time() - start_total, 3)
+            final_content = accumulated_final_analyst.get("content", "")
+            retrieval_sources = [
+                {
+                    "tool": item.get("source_tool"),
+                    "title": item.get("title"),
+                    "publishAt": item.get("publishAt"),
+                    "url": item.get("url"),
+                    "mongo_id": item.get("mongo_id"),
+                    "content_preview": item.get("content", "")[:100] + "...",
+                }
+                for item in accumulated_retrieved
+            ]
             yield _sse("done", {
                 "status": "success",
                 "chat_id": chat_id_str,
                 "total_execution_time": total_time,
                 "steps": accumulated_steps,
-                "final_content": accumulated_final_analyst.get("content", ""),
-                "retrieval_sources": [
-                    {
-                        "tool": item.get("source_tool"),
-                        "title": item.get("title"),
-                        "publishAt": item.get("publishAt"),
-                        "url": item.get("url"),
-                        "mongo_id": item.get("mongo_id"),
-                        "content_preview": item.get("content", "")[:100] + "...",
-                    }
-                    for item in accumulated_retrieved
-                ],
+                "final_content": final_content,
+                "retrieval_sources": retrieval_sources,
             })
+
+            # ── 持久化 assistant 訊息（store_summary 策略）─────────────
+            # context_refs 只存 SSE 摘要版（title / url / preview），不存 content 全文
+            # → 重整後前端能還原來源 UI，DB 體積也不會被全文撐爆
+            await _insert_assistant_message(
+                chat_id=request.chat_id,
+                parent_id=user_message_id,
+                content=final_content,
+                context_refs=retrieval_sources if retrieval_sources else None,
+                metadata={
+                    "steps": accumulated_steps,
+                    "total_execution_time": total_time,
+                },
+            )
 
             # ── 處理並行的 title task（僅第一次訊息才存在）─────────
             # 主串流結束後再 await，可同時利用主串流時間做 title 生成
@@ -416,7 +667,23 @@ async def get_ai_response(
             # 例外發生時若 title_task 還在跑，主動取消避免 leak
             if title_task is not None and not title_task.done():
                 title_task.cancel()
-            yield _sse("error", {"message": f"Agent 執行失敗: {str(e)}"})
+
+            err_text = f"Agent 執行失敗: {str(e)}"
+            yield _sse("error", {"message": err_text})
+
+            # save_user_and_error：失敗也寫入一筆 role=assistant 的錯誤訊息
+            # → user 重整後仍能看到「自己問過 + 系統回過錯誤」的完整時序
+            # → 不會導致下次第一次發訊息時又被當成 first message 重新跑 title
+            await _insert_assistant_message(
+                chat_id=request.chat_id,
+                parent_id=user_message_id,
+                content=err_text,
+                metadata={
+                    "error": True,
+                    "exception_type": type(e).__name__,
+                    "total_execution_time": round(time.time() - start_total, 3),
+                },
+            )
 
     return StreamingResponse(
         event_generator(),

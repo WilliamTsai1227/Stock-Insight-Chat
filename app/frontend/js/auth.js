@@ -7,7 +7,7 @@
 //   機制 C：並發鎖 → 防止多個 401 同時觸發 /refresh → RT Reuse Attack
 // ============================================
 
-const AUTH_API = 'http://localhost:8000/api';
+const AUTH_API = resolveStockInsightApiBase();
 
 // ─── 機制 C：並發鎖 ──────────────────────────────────────────────
 // 若多個請求同時收到 401，確保只有一個 /refresh 被執行

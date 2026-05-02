@@ -32,10 +32,14 @@ app = FastAPI(
 # 3. 設定 CORS (跨域資源共享)
 # allow_origins 不可與 allow_credentials=True 同時使用萬用字元 *，
 # 瀏覽器安全規範要求帶 credentials 的請求必須指定明確 origin。
-_ALLOWED_ORIGINS = os.getenv(
-    "CORS_ALLOWED_ORIGINS",
-    "http://localhost,http://localhost:80,http://127.0.0.1,http://127.0.0.1:80"
-).split(",")
+_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ALLOWED_ORIGINS",
+        "http://localhost,http://localhost:80",
+    ).split(",")
+    if origin.strip()
+]
 
 app.add_middleware(
     CORSMiddleware,

@@ -58,12 +58,20 @@
             </div>
         </aside>
 
+        <!-- 平板／手機：側欄開啟時遮住主內容，點擊關閉 -->
+        <div class="sidebar-backdrop" id="sidebar-backdrop" aria-hidden="true"></div>
+
         <!-- 主內容區: 聊天界面 -->
         <main class="main-content">
             <header class="chat-header">
-                <div class="chat-title-info">
-                    <h2 id="current-chat-title">歡迎回來</h2>
-                    <span id="chat-status" class="status-badge">Ready</span>
+                <div class="chat-header-leading">
+                    <button type="button" id="sidebar-toggle-btn" class="sidebar-toggle-btn" aria-label="開啟側邊選單" aria-expanded="false">
+                        <i data-lucide="menu"></i>
+                    </button>
+                    <div class="chat-title-info">
+                        <h2 id="current-chat-title">歡迎回來</h2>
+                        <span id="chat-status" class="status-badge">Ready</span>
+                    </div>
                 </div>
                 <div class="header-actions">
                     <button class="icon-btn"><i data-lucide="share-2"></i></button>
@@ -123,12 +131,6 @@
                 <div class="pv-hero">
                     <i data-lucide="folder" class="pv-folder-icon"></i>
                     <h1 id="pv-project-name"></h1>
-                </div>
-                <div class="pv-new-chat-wrap">
-                    <button id="pv-new-chat-btn" class="pv-new-chat-btn">
-                        <i data-lucide="plus"></i>
-                        <span id="pv-new-chat-text">在專案中開始新聊天</span>
-                    </button>
                 </div>
                 <div class="pv-tabs">
                     <button class="pv-tab active" data-tab="chats">聊天</button>
@@ -327,6 +329,7 @@
     </div>
 
     <!-- 腳本 -->
+    <script src="/js/api-config.js"></script>
     <script src="/js/auth.js"></script>
     <script src="/js/index.js"></script>
     <script>lucide.createIcons();</script>
