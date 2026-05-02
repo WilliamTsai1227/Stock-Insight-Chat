@@ -948,6 +948,57 @@ async function sendMessage() {
     const statusBadge = document.getElementById('chat-status');
     statusBadge.textContent = 'Analyzing...';
 
+    // ── 若還沒有 chat_id，先打 POST /api/chat 建立 chat ──
+    // 後端會回傳 placeholder title（截斷 query），LLM 正式 title 在
+    // 後續 /api/chat/messages 並行產生，透過 SSE 'title_update' 回推
+    if (!state.currentChatId) {
+        try {
+            const createRes = await authFetch(`${state.apiBase}/chat`, {
+                method: 'POST',
+                body: JSON.stringify({
+                    query,
+                    project_id: state.currentProjectId || null,
+                }),
+            });
+            if (!createRes) return;     // authFetch 已導向 login
+            if (!createRes.ok) {
+                const errData = await createRes.json().catch(() => ({}));
+                const detail = errData.detail || `HTTP ${createRes.status}`;
+                showToast(`建立聊天失敗：${detail}`, 'error');
+                statusBadge.textContent = 'Ready';
+                isStreaming = false;
+                sendBtn.disabled = false;
+                inputEl.disabled = false;
+                inputEl.placeholder = '輸入您的問題...';
+                return;
+            }
+            const createJson = await createRes.json();
+            const newChat = createJson.data;
+            state.currentChatId = newChat.id;
+
+            // 寫入 state.chats 對應 project（若有）
+            const pid = state.currentProjectId;
+            if (pid) {
+                if (!state.chats[pid]) state.chats[pid] = [];
+                state.chats[pid].unshift({
+                    id: newChat.id,
+                    title: newChat.title,
+                });
+            }
+            renderProjects();
+            renderRecentChats();
+            lucide.createIcons();
+        } catch (err) {
+            showToast(`網路錯誤：${err.message}`, 'error');
+            statusBadge.textContent = 'Ready';
+            isStreaming = false;
+            sendBtn.disabled = false;
+            inputEl.disabled = false;
+            inputEl.placeholder = '輸入您的問題...';
+            return;
+        }
+    }
+
     // 建立 AI 訊息容器（先放到畫面上，後續逐步填入）
     const { msgDiv, toolsContainer, bubble, streamCursor, initialPlaceholder } = createStreamingMessageUI();
     const container = document.getElementById('chat-messages');
@@ -1014,8 +1065,7 @@ async function sendMessage() {
             method: 'POST',
             body: JSON.stringify({
                 query,
-                chat_id: (state.currentChatId && !state.currentChatId.startsWith('c'))
-                    ? state.currentChatId : null,
+                chat_id: state.currentChatId,   // 一定是 UUID（上方已確保）
                 agent_config: { enabled_tools }
             })
         });
@@ -1139,6 +1189,35 @@ async function sendMessage() {
                         appendCopyBar(msgDiv, finalText, payload.retrieval_sources);
                         lucide.createIcons();
                         scrollToBottom();
+                        break;
+                    }
+
+                    // ── LLM 產出正式 title（僅第一次訊息會收到）──
+                    // 後端只會在 title_generated=FALSE 時 spawn task，
+                    // 之後一律不再送，所以這裡無需再做去重。
+                    case 'title_update': {
+                        const cid = payload.chat_id;
+                        const newTitle = payload.title;
+                        if (!cid || !newTitle) break;
+
+                        // 找到 state.chats 各 project 中的對應 chat 並更新 title
+                        let updated = false;
+                        for (const pid of Object.keys(state.chats)) {
+                            const found = (state.chats[pid] || []).find(c => c.id === cid);
+                            if (found) {
+                                found.title = newTitle;
+                                updated = true;
+                                break;
+                            }
+                        }
+                        // 即使找不到也重 render 一次（可能是「最近」獨立 chat）
+                        renderProjects();
+                        renderRecentChats();
+                        lucide.createIcons();
+                        if (!updated) {
+                            // 純除錯訊息：未來支援獨立 chat 時可在此補上 state.recentChats 更新
+                            console.debug('title_update: chat not found in state.chats', cid);
+                        }
                         break;
                     }
 

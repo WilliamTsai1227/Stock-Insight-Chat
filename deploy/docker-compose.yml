@@ -27,6 +27,7 @@ services:
       - "5432:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
+      - ../app/backend/database/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql:ro
 
   # 3. 向量資料庫 (Qdrant)
   qdrant:

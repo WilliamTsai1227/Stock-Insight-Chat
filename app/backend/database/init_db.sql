@@ -88,10 +88,15 @@ CREATE TABLE IF NOT EXISTS projects (
 );
 
 -- 11. 建立 chats 表 (隸屬於專案下的對話視窗)
+-- project_id 為 nullable：chat 可獨立存在於 project 之外（對應前端 sidebar 的「最近」區塊）
+-- user_id 必填：直接記錄 owner，避免「無 project_id」的 chat 無法做 ownership 驗證
+-- title_generated：FALSE = 仍為 placeholder（截斷 query），TRUE = 已由 LLM 產出正式 title
 CREATE TABLE IF NOT EXISTS chats (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     title VARCHAR(255) NOT NULL,
+    title_generated BOOLEAN NOT NULL DEFAULT FALSE,
     summary TEXT, -- 存儲 LLM 產生的對話摘要，優化下次載入 Context 的速度
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
@@ -134,6 +139,7 @@ CREATE INDEX IF NOT EXISTS idx_token_usage_logs_created_at ON token_usage_logs(c
 -- 專案與對話 (最核心的查詢路徑)
 CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id);
 CREATE INDEX IF NOT EXISTS idx_chats_project_id ON chats(project_id);
+CREATE INDEX IF NOT EXISTS idx_chats_user_id ON chats(user_id);
 CREATE INDEX IF NOT EXISTS idx_chats_created_at ON chats(created_at);
 
 -- 訊息表 (支援 Parent ID 遞迴查詢與對話流讀取)
