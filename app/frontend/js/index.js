@@ -3,14 +3,16 @@ let isStreaming = false;
 
 // --- 全域狀態 ---
 // 注意：所有資料皆從後端載入，不放任何假資料
-//   projects   : { id, name, created_at }[]   ← /api/project/all 載入
-//   chats      : { [projectId]: { id, title }[] }       ← /api/project?project_id=... 載入
-//   files      : { [projectId]: File[] }                ← 同上
+//   projects     : { id, name, created_at }[]                     ← /api/project/all 載入
+//   chats        : { [projectId]: { id, title }[] }               ← /api/project?project_id=... 載入
+//   files        : { [projectId]: File[] }                        ← 同上
+//   recentChats  : { id, title, created_at }[]（已按 created_at DESC）← /api/chat/all 載入
 //   pendingDeleteProject : 暫存「刪除確認 modal」要刪除的專案物件
 let state = {
     projects: [],
     chats: {},
     files: {},
+    recentChats: [],
     currentProjectId: null,
     currentChatId: null,
     pendingDeleteProject: null,
@@ -51,7 +53,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         await tryRefreshToken();
     }
 
-    await loadProjectsFromServer();
+    // 兩支 list API 沒有相依關係，並行載入
+    await Promise.all([
+        loadProjectsFromServer(),
+        loadRecentChatsFromServer(),
+    ]);
 });
 
 function initEventListeners() {
@@ -91,8 +97,21 @@ function initEventListeners() {
     }
 
     document.getElementById('new-chat-btn').addEventListener('click', () => {
+        // 重置 chat / project context：
+        //   - currentChatId = null  → 下次 sendMessage 才會走 POST /api/chat 建立新 chat
+        //   - currentProjectId = null → sidebar 的「新對話」屬於全域層級，不歸任何 project
+        // 若不清這兩個值，從歷史 chat 切過來再按「新對話」會繼續沿用舊 chat_id，
+        // 訊息會被塞進舊 chat，新 chat 也永遠不會被建立。
+        state.currentChatId = null;
+        state.currentProjectId = null;
+
         showChatView();
         clearChatMessages();
+
+        // 取消 sidebar 的 active 高亮
+        renderProjects();
+        renderRecentChats();
+        lucide.createIcons();
     });
 }
 
@@ -281,41 +300,66 @@ function renderProjects() {
 }
 
 /**
- * 渲染最近對話（彙整所有專案的 chats，依加入順序由新到舊）
+ * 從後端載入此 user 所有 chats（已按 created_at DESC 排序），
+ * 對應端點：GET /api/chat/all
+ */
+async function loadRecentChatsFromServer() {
+    try {
+        const res = await authFetch(`${state.apiBase}/chat/all`);
+        if (!res) return;                 // authFetch 401 → 已導向 login
+        if (!res.ok) {
+            console.error('載入最近聊天失敗：', res.status);
+            return;
+        }
+        const json = await res.json();
+        const chats = (json && json.data) ? json.data : [];
+
+        state.recentChats = chats.map(c => ({
+            id: c.id,
+            title: c.title,
+            created_at: c.created_at,
+        }));
+
+        renderRecentChats();
+        lucide.createIcons();
+    } catch (err) {
+        console.error('載入最近聊天時發生錯誤：', err);
+    }
+}
+
+/**
+ * 渲染左側 sidebar「最近」區塊。
+ * 資料來源：state.recentChats（由 GET /api/chat/all 載入，後端已按時間由近到遠排序）
+ *
+ * 每個 <li>：
+ *   - id="recent-chat-${chat.id}"
+ *   - dataset.chatId = chat.id
+ *   - 顯示 chat title
  */
 function renderRecentChats() {
     const list = document.getElementById('recent-chat-list');
     while (list.firstChild) list.removeChild(list.firstChild);
 
-    // 收集所有 chats，並記錄所屬 project
-    const allChats = [];
-    state.projects.forEach(p => {
-        (state.chats[p.id] || []).forEach(c => {
-            allChats.push({ ...c, projectId: p.id });
-        });
-    });
-
-    // 反轉：最新加入的排在最前面
-    allChats.reverse().forEach(c => {
+    (state.recentChats || []).forEach(c => {
         const li = document.createElement('li');
         li.className = 'recent-chat-item'
             + (c.id === state.currentChatId ? ' active' : '');
         li.id = `recent-chat-${c.id}`;
         li.dataset.chatId = c.id;
-        li.dataset.projectId = c.projectId;
 
         const msgIcon = document.createElement('i');
         msgIcon.setAttribute('data-lucide', 'message-square');
 
         const titleSpan = document.createElement('span');
-        titleSpan.textContent = c.title;
+        titleSpan.textContent = c.title || '(未命名聊天)';
 
         li.appendChild(msgIcon);
         li.appendChild(titleSpan);
 
         li.addEventListener('click', () => {
             state.currentChatId = c.id;
-            state.currentProjectId = c.projectId;
+            // recent chat 不一定屬於某個 project，這裡不主動切換 currentProjectId；
+            // 後續若需要可再從後端查 project_id 補上
             renderProjects();
             renderRecentChats();
             lucide.createIcons();
@@ -508,8 +552,12 @@ async function confirmDeleteProject() {
         closeAllModals();
         state.pendingDeleteProject = null;
 
-        // 3. 重新從後端載入專案列表（與真相同步），同時更新 UI
-        await loadProjectsFromServer();
+        // 3. 重新從後端載入專案列表 + 最近聊天列表（與真相同步）
+        // 刪 project 會 CASCADE 把底下所有 chats 一起刪掉，所以最近列表也要重抓
+        await Promise.all([
+            loadProjectsFromServer(),
+            loadRecentChatsFromServer(),
+        ]);
 
         showToast(`已刪除專案「${project.name}」`, 'success');
 
@@ -985,6 +1033,14 @@ async function sendMessage() {
                     title: newChat.title,
                 });
             }
+
+            // 同步加入「最近」清單最前面（無論是否屬於 project）
+            state.recentChats.unshift({
+                id: newChat.id,
+                title: newChat.title,
+                created_at: newChat.created_at,
+            });
+
             renderProjects();
             renderRecentChats();
             lucide.createIcons();
@@ -1200,24 +1256,22 @@ async function sendMessage() {
                         const newTitle = payload.title;
                         if (!cid || !newTitle) break;
 
-                        // 找到 state.chats 各 project 中的對應 chat 並更新 title
-                        let updated = false;
+                        // 1. 更新 state.chats 各 project 中對應的 chat
                         for (const pid of Object.keys(state.chats)) {
                             const found = (state.chats[pid] || []).find(c => c.id === cid);
                             if (found) {
                                 found.title = newTitle;
-                                updated = true;
                                 break;
                             }
                         }
-                        // 即使找不到也重 render 一次（可能是「最近」獨立 chat）
+
+                        // 2. 更新 state.recentChats 對應的 chat
+                        const recent = state.recentChats.find(c => c.id === cid);
+                        if (recent) recent.title = newTitle;
+
                         renderProjects();
                         renderRecentChats();
                         lucide.createIcons();
-                        if (!updated) {
-                            // 純除錯訊息：未來支援獨立 chat 時可在此補上 state.recentChats 更新
-                            console.debug('title_update: chat not found in state.chats', cid);
-                        }
                         break;
                     }
 

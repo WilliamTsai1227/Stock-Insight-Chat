@@ -164,6 +164,59 @@ async def create_chat(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# GET /api/chat/all —— 列出當前使用者的所有聊天（時間由近到遠）
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/api/chat/all")
+async def list_all_chats(
+    db: asyncpg.Connection = Depends(get_db),
+    current_user: asyncpg.Record = Depends(get_current_user),
+):
+    """
+    讀取目前登入使用者的所有聊天，依 created_at 由近到遠排序。
+
+    安全設計：
+    - user_id 由 JWT 解析，前端不需也不應傳遞（避免越權讀取他人 chats）
+    - SQL 以 user_id 過濾，確保只回傳本人擁有的資料
+
+    HTTP 回應：
+    - 200 OK : 回傳聊天陣列（可能為空）
+    - 401    : JWT 驗證失敗或 Token 已過期
+    - 403    : 帳號已停用
+    - 500    : 其他未預期的資料庫錯誤
+    """
+    user_id = current_user["id"]
+
+    try:
+        rows = await db.fetch(
+            """
+            SELECT id, title, created_at
+            FROM chats
+            WHERE user_id = $1
+            ORDER BY created_at DESC
+            """,
+            user_id,
+        )
+    except asyncpg.PostgresError as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database error: {str(e)}",
+        )
+
+    return {
+        "status": "success",
+        "data": [
+            {
+                "id": str(row["id"]),
+                "title": row["title"],
+                "created_at": row["created_at"].isoformat(),
+            }
+            for row in rows
+        ],
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # POST /api/chat/messages —— SSE 串流端點
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -328,7 +381,11 @@ async def get_ai_response(
             if title_task is not None:
                 try:
                     new_title = await asyncio.wait_for(title_task, timeout=3.0)
-                except (asyncio.TimeoutError, Exception):
+                except asyncio.TimeoutError:
+                    print(f"[TITLE] task timeout (>3s), chat_id={chat_id_str}")
+                    new_title = None
+                except Exception as e:
+                    print(f"[TITLE] task raised: {type(e).__name__}: {e}, chat_id={chat_id_str}")
                     new_title = None
 
                 if new_title:
@@ -344,13 +401,14 @@ async def get_ai_response(
                                 new_title,
                                 request.chat_id,
                             )
+                        print(f"[TITLE] UPDATE ok, chat_id={chat_id_str}, title={new_title!r}")
                         yield _sse("title_update", {
                             "chat_id": chat_id_str,
                             "title": new_title,
                         })
-                    except Exception:
+                    except Exception as e:
                         # UPDATE 失敗：placeholder 保留，旗標仍 FALSE，下次再試
-                        pass
+                        print(f"[TITLE] UPDATE failed, chat_id={chat_id_str}: {type(e).__name__}: {e}")
 
         except Exception as e:
             import traceback
