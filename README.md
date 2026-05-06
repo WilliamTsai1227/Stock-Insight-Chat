@@ -105,6 +105,8 @@ pip install -r app/backend/requirements.txt
 ### 4. 執行資料遷移 (Migration)
 將資料從 MongoDB 遷移至 Qdrant。你可以直接從 **專案根目錄** 執行：
 
+**Hybrid 檢索（dense + BM25 sparse + RRF）** 之**首次建庫**，或自**舊版「僅單一向量」**升級時：請先完成 **§3** 的 `pip install -r app/backend/requirements.txt`，再依序執行 `setup_qdrant.py --reset`（會刪除既有 Qdrant collection）與 `migrate_to_qdrant.py`（詳見 `specifications/tools_spec.md` §1.1）。下列 Step A 仍以**不刪資料**的初始化為預設；若需 `--reset` 請改用最下方「遷移進階用法」或規格書中的命令列。
+
 ```bash
 # Step A: 初始化 Collection 與索引
 python3 app/backend/scripts/setup_qdrant.py

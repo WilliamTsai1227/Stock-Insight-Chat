@@ -5,9 +5,10 @@
 - stock_codes: 按股票代碼過濾
 - keywords: 按新聞關鍵字過濾
 - type: 按新聞類型 (台股/國際) 過濾
-- search_groups: 按 mongo_id 聚合，避免同一篇文章的不同 chunks 重複出現
+- hybrid / RRF：依 mongo_id 聚合，避免同一篇文章的不同 chunks 重複洗版
 """
 
+import asyncio
 import time
 import os
 from typing import List, Dict, Any, Optional
@@ -15,6 +16,8 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models
 from dotenv import load_dotenv
+
+from app.backend.tools.qdrant_hybrid import embed_sparse_query, hybrid_rrf_grouped
 
 # 載入 .env 環境變數
 load_dotenv()
@@ -42,11 +45,11 @@ async def search_news(
     news_type: Optional[str] = None,   # 按新聞類型過濾 (e.g. "台股新聞")
     keyword: Optional[str] = None,     # 按 keywords 欄位過濾 (e.g. "國巨")
     stock_name: Optional[str] = None,  # 按 stock_names 欄位過濾 (e.g. "勤誠")
-    score_threshold: float = 0.3,      # 🆕 P1: 最低相似度門檻，過濾低品質結果
+    score_threshold: Optional[float] = None,  # RRF 融合分數尺度與純 cosine 不同；None 表示不裁切
 ) -> Dict[str, Any]:
     """
-    新聞工具 #1：混合搜尋 (向量 + 時間/標籤過濾)
-    使用 search_groups 按 mongo_id 聚合，確保同一篇新聞不會回傳多個 chunks。
+    新聞工具 #1：Hybrid 檢索（dense 語意 + BM25 sparse，Qdrant RRF 融合）+ payload 過濾。
+    依 mongo_id 聚合、每組最多 2 chunks（與先前 search_groups 行為一致）。
     stock_code、keyword、stock_name 使用 should (OR) 邏輯，只要其中一個匹配即可。
     """
     start_time = time.time()
@@ -100,31 +103,27 @@ async def search_news(
     search_filter = models.Filter(**filter_args) if filter_args else None
 
     try:
-        # 🔄 P2: 使用 group_size=2 取每篇新聞最相關的前 2 個 chunks，提升長文上下文完整度
-        result = await qdrant_client.search_groups(
-            collection_name="news",
-            query_vector=query_embedding,
-            group_by="mongo_id",
-            group_size=2,        # 🔄 P2: 取前 2 個最相關 chunks
-            query_filter=search_filter,
-            limit=top_k,
-            with_payload=True,
+        sparse_vec = await asyncio.to_thread(embed_sparse_query, query)
+        grouped = await hybrid_rrf_grouped(
+            qdrant_client,
+            "news",
+            query_embedding,
+            sparse_vec,
+            search_filter,
+            group_by_payload_key="mongo_id",
+            group_size=2,
+            top_k=top_k,
+            score_threshold=score_threshold,
         )
 
         context = []
-        for group in result.groups:
-            top_hit = group.hits[0]
+        for _gid, hits in grouped:
+            top_hit = hits[0]
+            first_payload = top_hit.payload or {}
 
-            # 🆕 P1: 過濾低品質結果
-            if top_hit.score < score_threshold:
-                continue
-
-            first_payload = top_hit.payload
-
-            # 🔄 P2: 合併同一篇新聞的多個 chunks
-            combined_content = "\n".join([
-                h.payload.get("content", "") for h in group.hits
-            ])
+            combined_content = "\n".join(
+                (h.payload or {}).get("content", "") for h in hits
+            )
 
             context.append({
                 "title": first_payload.get("title", "未知標題"),
@@ -132,9 +131,8 @@ async def search_news(
                 "publishAt": first_payload.get("publishAt"),
                 "url": first_payload.get("url"),
                 "total_chunks": first_payload.get("total_chunks"),
-                "chunks_retrieved": len(group.hits),
+                "chunks_retrieved": len(hits),
                 "content": combined_content,
-                # 新增欄位
                 "source": first_payload.get("source"),
                 "stock_codes": first_payload.get("stock_codes", []),
                 "stock_names": first_payload.get("stock_names", []),

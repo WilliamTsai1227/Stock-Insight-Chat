@@ -5,16 +5,19 @@ AI 分析搜尋工具 v2
 - chunk_type: summary / key_news / stock_insight (按語意角色過濾)
 - sentiment_label: positive / negative / neutral
 - industry_list: 產業標籤
-- search_groups: 按 mongo_id 聚合，避免同一篇分析的不同 chunks 重複出現
+- search_groups / hybrid RRF：按 mongo_id 聚合，避免同一篇分析的不同 chunks 重複出現
 """
 
 import os
+import asyncio
 import time
 from typing import List, Dict, Any, Optional
 from motor.motor_asyncio import AsyncIOMotorClient
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models
 from dotenv import load_dotenv
+
+from app.backend.tools.qdrant_hybrid import embed_sparse_query, hybrid_rrf_grouped, hybrid_rrf_flat
 
 load_dotenv()
 
@@ -39,11 +42,11 @@ async def search_ai_analysis(
     chunk_type: Optional[str] = None,       # "summary" | "key_news" | "stock_insight"
     sentiment: Optional[str] = None,        # "positive" | "negative" | "neutral"
     industry: Optional[str] = None,         # 按產業標籤過濾
-    score_threshold: float = 0.3,           # 🆕 P1: 最低相似度門檻
+    score_threshold: Optional[float] = None,   # RRF 分數尺度非 cosine；None 表示不裁切
 ) -> Dict[str, Any]:
     """
-    AI 分析工具：混合搜尋 (向量 + 時間/語意角色過濾)
-    使用 search_groups 按 mongo_id 聚合，確保同一篇分析不會回傳多個 chunks。
+    AI 分析工具：Hybrid（dense + BM25 sparse，RRF 融合）+ 時間／語意角色過濾。
+    依 mongo_id 聚合、每組最多 2 chunks。
     """
     must_conditions = []
 
@@ -77,44 +80,39 @@ async def search_ai_analysis(
     search_filter = models.Filter(must=must_conditions) if must_conditions else None
 
     try:
-        # 使用 search_groups 按 mongo_id 聚合
-        result = await qdrant_client.search_groups(
-            collection_name="ai_analysis",
-            query_vector=query_embedding,
-            group_by="mongo_id",
-            group_size=2,           # 每篇分析取最相關的 2 個 chunks (可能有 summary + key_news)
-            query_filter=search_filter,
-            limit=top_k,
-            with_payload=True,
+        sparse_vec = await asyncio.to_thread(embed_sparse_query, query)
+        grouped = await hybrid_rrf_grouped(
+            qdrant_client,
+            "ai_analysis",
+            query_embedding,
+            sparse_vec,
+            search_filter,
+            group_by_payload_key="mongo_id",
+            group_size=2,
+            top_k=top_k,
+            score_threshold=score_threshold,
         )
 
         context = []
-        for group in result.groups:
-            top_hit = group.hits[0]
+        for _gid, hits in grouped:
+            top_hit = hits[0]
+            first_payload = top_hit.payload or {}
 
-            # 🆕 P1: 過濾低品質結果
-            if top_hit.score < score_threshold:
-                continue
-
-            # 將同一篇分析的多個 chunks 合併
             combined_content = ""
-            first_payload = top_hit.payload
-
-            for hit in group.hits:
-                combined_content += hit.payload.get("content", "") + "\n\n"
+            for hit in hits:
+                combined_content += (hit.payload or {}).get("content", "") + "\n\n"
 
             context.append({
                 "title": first_payload.get("title", "無標題"),
                 "content": combined_content.strip(),
                 "mongo_id": first_payload.get("mongo_id"),
                 "publishAt": first_payload.get("publishAt"),
-                # 新增欄位
                 "sentiment": first_payload.get("sentiment"),
                 "sentiment_label": first_payload.get("sentiment_label"),
                 "stock_list": first_payload.get("stock_list", []),
                 "industry_list": first_payload.get("industry_list", []),
                 "source_news_titles": first_payload.get("source_news_titles", []),
-                "chunk_types": [h.payload.get("chunk_type") for h in group.hits],
+                "chunk_types": [(h.payload or {}).get("chunk_type") for h in hits],
                 "score": top_hit.score,
             })
 
@@ -151,12 +149,16 @@ async def search_recommendations(
     search_filter = models.Filter(must=must_conditions)
 
     try:
-        search_result = await qdrant_client.search(
-            collection_name="ai_analysis",
-            query_vector=query_embedding,
-            query_filter=search_filter,
+        # 推薦工具使用固定中文查詢；仍走 sparse query_embed 與 dense 並行 RRF
+        q_text = "推薦股票、強勢產業、潛力標的、看好板塊"
+        sparse_vec = await asyncio.to_thread(embed_sparse_query, q_text)
+        search_result = await hybrid_rrf_flat(
+            qdrant_client,
+            "ai_analysis",
+            query_embedding,
+            sparse_vec,
+            search_filter,
             limit=top_k,
-            with_payload=True
         )
 
         recommended_stocks = set()

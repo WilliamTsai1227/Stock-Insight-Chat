@@ -19,6 +19,9 @@ QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
 
 # 指定向量維度為 1536 (OpenAI text-embedding-3-small)
 VECTOR_SIZE = 1536
+# Hybrid：named dense + FastEmbed BM25 sparse（與 app/backend/tools/qdrant_hybrid.py 一致）
+DENSE_VECTOR_NAME = "dense"
+SPARSE_VECTOR_NAME = "text"
 
 client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
 
@@ -77,15 +80,25 @@ def setup_collections():
         try:
             if client.collection_exists(collection_name):
                 print(f"  ⚠️  Collection '{collection_name}' 已存在，跳過建立")
+                print(
+                    f"      （若尚未升級為 Hybrid：請用 --reset 重建，並重新執行 migrate_to_qdrant）"
+                )
             else:
                 client.create_collection(
                     collection_name=collection_name,
-                    vectors_config=models.VectorParams(
-                        size=VECTOR_SIZE,
-                        distance=models.Distance.COSINE
-                    )
+                    vectors_config={
+                        DENSE_VECTOR_NAME: models.VectorParams(
+                            size=VECTOR_SIZE,
+                            distance=models.Distance.COSINE,
+                        ),
+                    },
+                    sparse_vectors_config={
+                        SPARSE_VECTOR_NAME: models.SparseVectorParams(
+                            modifier=models.Modifier.IDF,
+                        ),
+                    },
                 )
-                print(f"  ✅ 建立 Collection: {collection_name}")
+                print(f"  ✅ 建立 Collection (dense+BM25 sparse): {collection_name}")
         except Exception as e:
             print(f"  ❌ 建立 Collection 失敗: {e}")
             continue

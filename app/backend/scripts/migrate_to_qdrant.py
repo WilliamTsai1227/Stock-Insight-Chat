@@ -5,6 +5,10 @@ MongoDB → Qdrant 向量遷移工具 v2
   - news collection:          RecursiveCharacterTextSplitter (語意段落切分)
   - AI_news_analysis collection: 按欄位角色拆分 (summary / key_news / stock_insight)
 
+向量入庫：
+  - dense: OpenAI text-embedding-3-small（向量名 dense）
+  - sparse: FastEmbed Qdrant/bm25 passage_embed（向量名 text，對齊 IDF sparse index）
+
 特性：
   - Batch Embedding (OpenAI 支援一次最多 2048 筆)
   - 完整 Metadata 保留 (keywords, stock_names, source_news, etc.)
@@ -47,6 +51,36 @@ mongo_client = AsyncIOMotorClient(MONGO_URI)
 db = mongo_client[MONGO_DB]
 qdrant_client = AsyncQdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
 ai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+
+_SPARSE_MODEL = None
+
+
+def _get_sparse_embedder():
+    global _SPARSE_MODEL
+    if _SPARSE_MODEL is None:
+        from fastembed import SparseTextEmbedding
+
+        _SPARSE_MODEL = SparseTextEmbedding(model_name="Qdrant/bm25")
+    return _SPARSE_MODEL
+
+
+def batch_sparse_vectors(texts: List[str], batch_size: int = 48) -> List[models.SparseVector]:
+    """以 FastEmbed BM25 產生與 Qdrant sparse IDF index 相容的 passage 向量。"""
+    model = _get_sparse_embedder()
+    out: List[models.SparseVector] = []
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i : i + batch_size]
+        for emb in model.passage_embed(batch):
+            out.append(
+                models.SparseVector(
+                    indices=emb.indices.tolist(),
+                    values=emb.values.tolist(),
+                )
+            )
+    if len(out) != len(texts):
+        raise RuntimeError(f"sparse 向量筆數不符：{len(out)} vs {len(texts)}")
+    return out
+
 
 # ─── 新聞 Text Splitter (語意段落切分) ───────────────────────
 news_splitter = RecursiveCharacterTextSplitter(
@@ -340,12 +374,16 @@ async def migrate_collection(
     print(f"\n🧠 開始產生 Embeddings ({len(all_chunks)} 筆)...")
     texts_to_embed = [c["text"] for c in all_chunks]
     embeddings = await batch_embed(texts_to_embed, batch_size=embedding_batch_size)
-    print(f"✅ Embedding 完成")
+    print(f"✅ Dense Embedding 完成")
+
+    print(f"🧾 開始產生 BM25 sparse 向量 ({len(all_chunks)} 筆)...")
+    sparse_vectors = batch_sparse_vectors(texts_to_embed, batch_size=48)
+    print(f"✅ Sparse (BM25) 完成")
 
     # Step 4: 組裝 Points 並批次 Upsert
     print(f"📤 開始寫入 Qdrant...")
     points: List[models.PointStruct] = []
-    for chunk, embedding in zip(all_chunks, embeddings):
+    for chunk, embedding, sparse_vec in zip(all_chunks, embeddings, sparse_vectors):
         mongo_id = chunk["payload"]["mongo_id"]
         chunk_type = chunk["payload"].get("chunk_type", "unknown")
         chunk_idx = chunk["payload"].get("chunk_idx", 0)
@@ -353,7 +391,10 @@ async def migrate_collection(
 
         points.append(models.PointStruct(
             id=point_id,
-            vector=embedding,
+            vector={
+                "dense": embedding,
+                "text": sparse_vec,
+            },
             payload=chunk["payload"]
         ))
 

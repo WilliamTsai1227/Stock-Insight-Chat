@@ -41,6 +41,7 @@ async def test_news_search():
         result = await client.search_groups(
             collection_name="news",
             query_vector=[0.1] * 1536,
+            using="dense",
             group_by="mongo_id",
             group_size=1,
             query_filter=filter_condition,
@@ -72,6 +73,7 @@ async def test_news_search():
         result = await client.search_groups(
             collection_name="news",
             query_vector=[0.1] * 1536,
+            using="dense",
             group_by="mongo_id",
             group_size=1,
             query_filter=filter_condition,
@@ -110,6 +112,7 @@ async def test_ai_analysis_search():
         result = await client.search(
             collection_name="ai_analysis",
             query_vector=[0.1] * 1536,
+            using="dense",
             query_filter=filter_condition,
             limit=3,
             with_payload=True,
@@ -141,6 +144,7 @@ async def test_ai_analysis_search():
         result = await client.search_groups(
             collection_name="ai_analysis",
             query_vector=[0.1] * 1536,
+            using="dense",
             group_by="mongo_id",
             group_size=2,       # 每篇分析取最多 2 個 chunks
             query_filter=filter_condition,
@@ -172,6 +176,7 @@ async def test_ai_analysis_search():
         result = await client.search(
             collection_name="ai_analysis",
             query_vector=[0.1] * 1536,
+            using="dense",
             query_filter=filter_condition,
             limit=3,
             with_payload=True,
@@ -198,8 +203,19 @@ async def test_collection_stats():
         try:
             info = await client.get_collection(name)
             print(f"\n  📦 {name}:")
-            print(f"     向量數量: {info.points_count}")
-            print(f"     向量維度: {info.config.params.vectors.size}")
+            print(f"     向量點數: {info.points_count}")
+            vectors = info.config.params.vectors
+            if isinstance(vectors, dict):
+                for vn, vp in vectors.items():
+                    print(f"     dense「{vn}」維度: {vp.size}")
+            else:
+                print(f"     向量維度: {vectors.size}")
+            sparse_cfg = getattr(info.config.params, "sparse_vectors", None)
+            if sparse_cfg:
+                if isinstance(sparse_cfg, dict):
+                    print(f"     sparse 索引: {list(sparse_cfg.keys())}")
+                else:
+                    print(f"     sparse 設定: {sparse_cfg}")
             print(f"     索引狀態: {info.status}")
         except Exception as e:
             print(f"  ❌ {name}: {e}")

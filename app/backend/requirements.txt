@@ -66,7 +66,8 @@ python-jose==3.5.0
 python-multipart==0.0.9
 pytz==2024.1
 PyYAML==6.0.3
-qdrant-client==1.8.1
+qdrant-client==1.12.2
+fastembed==0.5.1
 regex==2026.4.4
 requests==2.33.1
 requests-toolbelt==1.0.0
