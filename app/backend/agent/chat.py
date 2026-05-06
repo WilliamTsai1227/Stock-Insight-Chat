@@ -16,6 +16,70 @@ from app.backend.tools.ai_analysis import search_ai_analysis, search_recommendat
 
 load_dotenv()
 
+# 共用 Embedding 客戶端（避免每次工具呼叫重建 HTTP 連線設定）
+_embeddings: OpenAIEmbeddings | None = None
+
+
+def _get_shared_embeddings() -> OpenAIEmbeddings:
+    global _embeddings
+    if _embeddings is None:
+        _embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+    return _embeddings
+
+
+def _clip_for_llm(text: str, max_chars: int) -> str:
+    """限制單則片段長度，避免 ToolMessage 過長拖慢 Router / Analyst。"""
+    t = text or ""
+    if len(t) <= max_chars:
+        return t
+    return t[: max_chars - 1] + "…"
+
+
+def _format_retrieved_data_for_analyst(items: List[Dict[str, Any]]) -> str:
+    """
+    將 state['retrieved_data'] 轉成 Analyst 專用、未截斷正文的參考區塊。
+    （Router 仍只經由 ToolMessage 讀取 _clip_for_llm 後的摘要。）
+    """
+    if not items:
+        return ""
+    blocks: List[str] = []
+    for i, it in enumerate(items, start=1):
+        st = it.get("source_tool") or "unknown"
+        title = it.get("title") or "（無標題）"
+        body = str(it.get("content", "") or "").strip()
+        lines: List[str] = [f"### [{i}] 來源: {st} ｜ {title}"]
+
+        if st == "news":
+            if it.get("stock_names"):
+                lines.append(f"相關個股: {', '.join(it['stock_names'])}")
+            if it.get("publishAt"):
+                lines.append(f"時間: {it['publishAt']}")
+        elif st == "ai_analysis":
+            if it.get("sentiment_label"):
+                lines.append(f"情緒: {it['sentiment_label']}")
+            if it.get("industry_list"):
+                lines.append(f"產業: {', '.join(it['industry_list'])}")
+            if it.get("publishAt"):
+                lines.append(f"時間: {it['publishAt']}")
+            snt = it.get("source_news_titles") or []
+            if snt:
+                lines.append("參考新聞: " + "; ".join(str(x) for x in snt[:5]))
+        elif st == "recommendations":
+            if it.get("publishAt"):
+                lines.append(f"時間: {it['publishAt']}")
+            if it.get("sentiment_label"):
+                lines.append(f"情緒: {it['sentiment_label']}")
+
+        lines.append("")
+        lines.append(body if body else "（無內文）")
+        blocks.append("\n".join(lines))
+    return "\n\n---\n\n".join(blocks)
+
+
+# 預設檢索筆數與注入 Analyst 的單則字元上限（可視延遲與品質再調）
+RETRIEVAL_TOP_K = 8
+MAX_TOOL_ITEM_CHARS = 1200
+
 # --- 1. 定義狀態 (State) ---
 class AgentState(TypedDict):
     # 紀錄完整的對話歷史
@@ -58,13 +122,14 @@ async def search_stock_news(
         keyword、stock_code、stock_name 三者以 OR 邏輯匹配，只要其中任一命中即可。
         建議查詢個股時同時填入三者以最大化搜尋命中率。
     """
-    embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
-    query_vector = await embeddings.aembed_query(query)
+    emb = _get_shared_embeddings()
+    query_vector = await emb.aembed_query(query)
 
     result = await search_news(
         query=query,
         query_embedding=query_vector,
         chat_id="agent_session",
+        top_k=RETRIEVAL_TOP_K,
         start_date=start_date,
         end_date=end_date,
         stock_code=stock_code,
@@ -82,7 +147,8 @@ async def search_stock_news(
         stocks_info = ""
         if item.get("stock_names"):
             stocks_info = f" [相關個股: {', '.join(item['stock_names'])}]"
-        output += f"- 【{item['title']}】{stocks_info}: {item['content']}\n"
+        body = _clip_for_llm(str(item.get("content", "")), MAX_TOOL_ITEM_CHARS)
+        output += f"- 【{item['title']}】{stocks_info}: {body}\n"
     return output
 
 @tool
@@ -104,13 +170,14 @@ async def search_market_ai_analysis(
         sentiment: 情緒過濾 ("positive" / "negative" / "neutral")。若使用者問「利空」用 negative，「利多」用 positive。
         industry: 產業標籤過濾 (如 "半導體測試"、"能源")。
     """
-    embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
-    query_vector = await embeddings.aembed_query(query)
+    emb = _get_shared_embeddings()
+    query_vector = await emb.aembed_query(query)
 
     result = await search_ai_analysis(
         query=query,
         query_embedding=query_vector,
         chat_id="agent_session",
+        top_k=RETRIEVAL_TOP_K,
         start_date=start_date,
         end_date=end_date,
         sentiment=sentiment,
@@ -130,7 +197,7 @@ async def search_market_ai_analysis(
         meta = f" ({', '.join(meta_parts)})" if meta_parts else ""
 
         output += f"\n--- 【{item['title']}】{meta} ---\n"
-        output += f"{item['content']}\n"
+        output += f"{_clip_for_llm(str(item.get('content', '')), MAX_TOOL_ITEM_CHARS)}\n"
         if item.get("source_news_titles"):
             output += f"  參考新聞: {'; '.join(item['source_news_titles'][:3])}\n"
 
@@ -146,14 +213,15 @@ async def get_market_recommendations(start_date: str = None, end_date: str = Non
         start_date: 開始時間 (ISO 格式)。
         end_date: 結束時間 (ISO 格式)。
     """
-    embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+    emb = _get_shared_embeddings()
     # 使用固定關鍵字來抓取推薦類型的報告
-    query_vector = await embeddings.aembed_query("推薦股票、強勢產業、潛力標的、看好板塊")
+    query_vector = await emb.aembed_query("推薦股票、強勢產業、潛力標的、看好板塊")
 
     result = await search_recommendations(
         query_embedding=query_vector,
         start_date=start_date,
-        end_date=end_date
+        end_date=end_date,
+        top_k=RETRIEVAL_TOP_K,
     )
 
     if not result["stocks"] and not result["industries"]:
@@ -305,7 +373,9 @@ async def call_analyst(state: AgentState):
 
     analyst_prompt = f"""你是一位具備頂尖洞察力的資深分析師，擅長從碎片化的數據中提取最有價值的投資核心資訊。現在是 {current_now}。
 
-    請將對話歷史中搜尋工具 (Tool Messages) 提供的一切資料，轉化為一封「清晰、優雅且具備專業點評」的分析報告。
+    **資料使用方式（必讀）**：對話歷史中的 Tool Message 為**精簡摘要**，僅用於對齊檢索流程。若本輪對話末附有系統訊息【完整參考資料】，其中為從向量庫取回的**未截斷原文**；撰寫報告、引用數據與細節時**務必以上述完整參考資料為準**，不可僅依摘要臆測。
+
+    請將【完整參考資料】與 Tool Message 摘要共同理解後，轉化為一封「清晰、優雅且具備專業點評」的分析報告。
     
     ### 撰寫規範：
     * **語意化結構**：請使用多級標題（如：## 市場核心觀察、### 關鍵標的追蹤），避免死板的 [1][2] 格式。
@@ -315,7 +385,13 @@ async def call_analyst(state: AgentState):
     * **語氣風格**：流暢、專業且友善的繁體中文。
     * **細節**：如有數據，像是股價、漲跌幅、成交量等，任何數據請務必列出。
     """
-    full_messages = [SystemMessage(content=analyst_prompt)] + messages
+    full_ref = _format_retrieved_data_for_analyst(state.get("retrieved_data", []))
+    tail: List[BaseMessage] = []
+    if full_ref.strip():
+        tail.append(SystemMessage(
+            content="【完整參考資料】（供撰寫報告，以下為未截斷檢索正文）\n\n" + full_ref
+        ))
+    full_messages = [SystemMessage(content=analyst_prompt)] + messages + tail
 
     # 使用 astream 逐 chunk 累積，讓 astream_events 能在 analyst 節點期間
     # 發出 on_chat_model_stream 事件供 API 層轉發 token
@@ -350,12 +426,12 @@ async def call_tools(state: AgentState):
     last_message = state["messages"][-1]
 
     # 🆕 P4: 統一建立 Embedding 實例 + 快取，避免重複 API 呼叫
-    embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+    emb = _get_shared_embeddings()
     embedding_cache: Dict[str, List[float]] = {}
 
     async def get_cached_embedding(text: str) -> List[float]:
         if text not in embedding_cache:
-            embedding_cache[text] = await embeddings.aembed_query(text)
+            embedding_cache[text] = await emb.aembed_query(text)
         return embedding_cache[text]
 
     # 🆕 P3: 定義單一工具的執行邏輯，供並行調用
@@ -370,6 +446,7 @@ async def call_tools(state: AgentState):
                 query=query_text,
                 query_embedding=(await get_cached_embedding(query_text)),
                 chat_id="api_call",
+                top_k=RETRIEVAL_TOP_K,
                 start_date=args.get("start_date"),
                 end_date=args.get("end_date"),
                 stock_code=args.get("stock_code"),
@@ -382,7 +459,8 @@ async def call_tools(state: AgentState):
                 stock_info = ""
                 if c.get("stock_names"):
                     stock_info = f" [相關: {', '.join(c['stock_names'])}]"
-                parts.append(f"[{c.get('title')}]{stock_info}: {c.get('content')}")
+                body = _clip_for_llm(str(c.get("content", "")), MAX_TOOL_ITEM_CHARS)
+                parts.append(f"[{c.get('title')}]{stock_info}: {body}")
             ai_content = "\n\n".join(parts) if parts else "找不到相關新聞。"
             for c in raw_result.get("context", []):
                 retrieved.append({**c, "source_tool": "news"})
@@ -393,6 +471,7 @@ async def call_tools(state: AgentState):
                 query=query_text,
                 query_embedding=(await get_cached_embedding(query_text)),
                 chat_id="api_call",
+                top_k=RETRIEVAL_TOP_K,
                 start_date=args.get("start_date"),
                 end_date=args.get("end_date"),
                 sentiment=args.get("sentiment"),
@@ -408,7 +487,8 @@ async def call_tools(state: AgentState):
                     meta_parts.append(f"產業:{','.join(c['industry_list'])}")
                 if meta_parts:
                     meta = f" ({', '.join(meta_parts)})"
-                entry = f"[{c.get('title')}]{meta}: {c.get('content')}"
+                body = _clip_for_llm(str(c.get("content", "")), MAX_TOOL_ITEM_CHARS)
+                entry = f"[{c.get('title')}]{meta}: {body}"
                 if c.get("source_news_titles"):
                     entry += f"\n  參考新聞: {'; '.join(c['source_news_titles'][:3])}"
                 parts.append(entry)
@@ -420,7 +500,8 @@ async def call_tools(state: AgentState):
             raw_result = await search_recommendations(
                 query_embedding=(await get_cached_embedding("推薦股票與強勢產業")),
                 start_date=args.get("start_date"),
-                end_date=args.get("end_date")
+                end_date=args.get("end_date"),
+                top_k=RETRIEVAL_TOP_K,
             )
             lines = []
             if raw_result.get("stocks"):

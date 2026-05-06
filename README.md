@@ -52,6 +52,22 @@ docker-compose -f ./deploy/docker-compose.yml stop
 docker-compose -f ./deploy/docker-compose.yml down
 ```
 
+#### 重置本機 PostgreSQL（重新執行 `init_db.sql`）
+
+PostgreSQL 官方映像**只在資料目錄為空的首次初始化**時，會執行 `docker-entrypoint-initdb.d` 內掛載的 `app/backend/database/init_db.sql`。若本機曾啟動過 Compose 並保留了具名 volume（例如 `db_data`），之後即使執行 `docker-compose … up --build`，**也不會再自動重跑**該腳本。
+
+當你可以接受**清空本機資料庫與相關持久化資料**時，可先刪除 volumes 再啟動，讓 Postgres 重新初始化並套用 `init_db.sql`：
+
+```bash
+docker-compose -f ./deploy/docker-compose.yml down -v
+docker-compose -f ./deploy/docker-compose.yml up --build -d
+```
+
+> [!WARNING]
+> `down -v` 會一併刪除 Compose 檔案中宣告的**所有具名 volume**（含 `db_data` 與 Qdrant 的 `qdrant_storage` 等），向量與對話資料都會消失。僅在開發環境且確認可重建資料時使用。
+
+**不建議**在每次「小幅度更新專案或 schema」都執行上述流程；日常 schema 演進應以 migration 或受控 SQL 更新為主，避免誤刪正式或需保留的資料。
+
 ### 1-1. 重啟後端服務 (Restarting Backend)
 若你修改了後端程式碼（如 `chat.py` 或 `news.py`），需要重新構建 Image 並重啟容器：
 ```bash
