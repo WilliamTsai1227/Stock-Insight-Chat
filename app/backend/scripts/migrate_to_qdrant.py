@@ -152,7 +152,7 @@ async def batch_embed(texts: List[str], batch_size: int = 512, max_retries: int 
                     print(f"     Retrying in {wait_time}s...")
                     await asyncio.sleep(wait_time)
                 else:
-                    print(f"  ❌ Batch {i // batch_size} 永久失敗，填入零向量")
+                    print(f"   Batch {i // batch_size} 永久失敗，填入零向量")
                     all_embeddings.extend([[0.0] * EMBEDDING_DIM] * len(batch))
 
     return all_embeddings
@@ -256,9 +256,16 @@ def chunk_ai_analysis_document(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
         "category": doc.get("category"),
         "is_summary": doc.get("is_summary", False),
         "analysis_batch": doc.get("analysis_batch"),
-        "source_news_titles": [s.get("title", "") for s in doc.get("source_news", [])],
-        "source_news_ids": [str(s.get("_id", "")) for s in doc.get("source_news", [])],
+        # 部分文件的 source_news 欄位為 bool 或非 list（資料髒亂），需先正規化
+        "source_news_titles": [s.get("title", "") for s in
+                                (doc.get("source_news") if isinstance(doc.get("source_news"), list) else [])
+                                if isinstance(s, dict)],
+        "source_news_ids":    [str(s.get("_id", "")) for s in
+                                (doc.get("source_news") if isinstance(doc.get("source_news"), list) else [])
+                                if isinstance(s, dict)],
         "collection_type": "ai_analysis",
+
+
     }
 
     results = []
@@ -332,18 +339,18 @@ async def migrate_collection(
     4. 批次 Upsert 到 Qdrant
     """
     print(f"\n{'='*60}")
-    print(f"🚀 開始遷移: {mongo_col_name} → {qdrant_col_name}")
+    print(f" 開始遷移: {mongo_col_name} → {qdrant_col_name}")
     print(f"   最大文件數: {limit} | Embedding batch: {embedding_batch_size}")
-    print(f"   模式: {'🧪 DRY RUN (不寫入 Qdrant)' if dry_run else '📝 正式寫入'}")
+    print(f"   模式: {' DRY RUN (不寫入 Qdrant)' if dry_run else ' 正式寫入'}")
     print(f"{'='*60}")
 
     # Step 1: 從 MongoDB 讀取
     cursor = db[mongo_col_name].find().sort("_id", -1).limit(limit)
     docs = await cursor.to_list(length=limit)
-    print(f"📦 從 MongoDB 讀取到 {len(docs)} 筆文件")
+    print(f" 從 MongoDB 讀取到 {len(docs)} 筆文件")
 
     if not docs:
-        print("⚠️  沒有文件可處理，跳過")
+        print("  沒有文件可處理，跳過")
         return
 
     # Step 2: 切分所有文件
@@ -371,17 +378,17 @@ async def migrate_collection(
         return
 
     # Step 3: 批次 Embedding
-    print(f"\n🧠 開始產生 Embeddings ({len(all_chunks)} 筆)...")
+    print(f"\n 開始產生 Embeddings ({len(all_chunks)} 筆)...")
     texts_to_embed = [c["text"] for c in all_chunks]
     embeddings = await batch_embed(texts_to_embed, batch_size=embedding_batch_size)
-    print(f"✅ Dense Embedding 完成")
+    print(f" Dense Embedding 完成")
 
     print(f"🧾 開始產生 BM25 sparse 向量 ({len(all_chunks)} 筆)...")
     sparse_vectors = batch_sparse_vectors(texts_to_embed, batch_size=48)
-    print(f"✅ Sparse (BM25) 完成")
+    print(f" Sparse (BM25) 完成")
 
     # Step 4: 組裝 Points 並批次 Upsert
-    print(f"📤 開始寫入 Qdrant...")
+    print(f" 開始寫入 Qdrant...")
     points: List[models.PointStruct] = []
     for chunk, embedding, sparse_vec in zip(all_chunks, embeddings, sparse_vectors):
         mongo_id = chunk["payload"]["mongo_id"]
