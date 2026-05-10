@@ -1424,10 +1424,10 @@ async function sendMessage() {
     const welcome = container.querySelector('.welcome-hero');
     if (welcome) welcome.remove();
     container.appendChild(msgDiv);
-    scrollToBottom();
-
+    
     // 這次 SSE 對應的 chat（發送完成後若在別的對話視景，不要被 done 又把 state.currentChatId 搶回去）
     const streamTargetChatId = state.currentChatId;
+    scrollToBottom(streamTargetChatId, true);
 
     // 暫存串流文字、工具行清單、思考計時器
     let rawStreamText = '';
@@ -1462,7 +1462,7 @@ async function sendMessage() {
         thinkingRow.appendChild(text);
         thinkingRow.appendChild(dots);
         toolsContainer.appendChild(thinkingRow);
-        scrollToBottom();
+        scrollToBottom(streamTargetChatId);
     }
 
     // 清除思考中指示
@@ -1560,7 +1560,7 @@ async function sendMessage() {
                         row.appendChild(suffix);
                         toolsContainer.appendChild(row);
                         toolRows.push({ toolName: payload.tool, element: row, status: 'running' });
-                        scrollToBottom();
+                        scrollToBottom(streamTargetChatId);
                         break;
                     }
 
@@ -1605,7 +1605,7 @@ async function sendMessage() {
                         rawStreamText += payload.text || '';
                         bubble.innerHTML = renderMarkdown(rawStreamText);
                         bubble.appendChild(streamCursor);
-                        scrollToBottom();
+                        scrollToBottom(streamTargetChatId);
                         break;
                     }
 
@@ -1623,7 +1623,7 @@ async function sendMessage() {
                         appendStepsAndSources(msgDiv, payload.steps, payload.retrieval_sources);
                         appendCopyBar(msgDiv, finalText, payload.retrieval_sources);
                         lucide.createIcons();
-                        scrollToBottom();
+                        scrollToBottom(streamTargetChatId);
                         break;
                     }
 
@@ -1984,9 +1984,31 @@ function addMessageToUI(role, content, options) {
     if (!skipScroll) scrollToBottom();
 }
 
-function scrollToBottom() {
+let isUserScrolledUp = false;
+
+document.addEventListener('DOMContentLoaded', () => {
     const container = document.getElementById('chat-messages');
+    if (container) {
+        container.addEventListener('scroll', () => {
+            const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+            // 如果距離底部大於 50px，代表使用者往上滑了
+            isUserScrolledUp = distanceToBottom > 50;
+        });
+    }
+});
+
+function scrollToBottom(targetChatId = null, force = false) {
+    const container = document.getElementById('chat-messages');
+    if (!container) return;
+
+    // 1. 若目前畫面已經不在該對話，不自動滾動（防止切換對話後被拉走）
+    if (targetChatId !== null && state.currentChatId !== targetChatId) return;
+
+    // 2. 若使用者往上看歷史訊息，暫停自動滾動（除非強制滾動）
+    if (!force && isUserScrolledUp) return;
+
     container.scrollTop = container.scrollHeight;
+    isUserScrolledUp = false; // 重置
 }
 
 // ============================================================
@@ -2048,7 +2070,32 @@ function appendCopyBar(msgDiv, rawText, sources) {
 
         const fullText = plainText + sourcesText;
 
-        navigator.clipboard.writeText(fullText).then(() => {
+        const copyToClipboard = (text) => {
+            if (navigator.clipboard && window.isSecureContext) {
+                return navigator.clipboard.writeText(text);
+            } else {
+                return new Promise((resolve, reject) => {
+                    try {
+                        const textArea = document.createElement("textarea");
+                        textArea.value = text;
+                        textArea.style.position = "fixed"; // 避免畫面捲動
+                        textArea.style.left = "-999999px";
+                        textArea.style.top = "-999999px";
+                        document.body.appendChild(textArea);
+                        textArea.focus();
+                        textArea.select();
+                        const successful = document.execCommand('copy');
+                        textArea.remove();
+                        if (successful) resolve();
+                        else reject(new Error('Fallback copy failed'));
+                    } catch (err) {
+                        reject(err);
+                    }
+                });
+            }
+        };
+
+        copyToClipboard(fullText).then(() => {
             // 短暫顯示「已複製」勾勾確認
             btn.classList.add('copied');
             while (btn.firstChild) btn.removeChild(btn.firstChild);
@@ -2074,6 +2121,12 @@ function appendCopyBar(msgDiv, rawText, sources) {
                 btn.appendChild(labelBack);
                 lucide.createIcons();
             }, 2000);
+        }).catch(err => {
+            console.error('複製失敗:', err);
+            // 失敗時也可做簡單提示 (改個文字或顏色)
+            const oldText = label.textContent;
+            label.textContent = '複製失敗';
+            setTimeout(() => { label.textContent = oldText; }, 2000);
         });
     });
 }

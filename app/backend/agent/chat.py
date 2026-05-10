@@ -76,8 +76,8 @@ def _format_retrieved_data_for_analyst(items: List[Dict[str, Any]]) -> str:
     return "\n\n---\n\n".join(blocks)
 
 
-# 預設檢索筆數與注入 Analyst 的單則字元上限（可視延遲與品質再調）
-RETRIEVAL_TOP_K = 15
+# 預設檢索筆數與注入 Analyst 的單則字元上限（降低以加快回應速度）
+RETRIEVAL_TOP_K = 5
 MAX_TOOL_ITEM_CHARS = 1200
 
 # --- 1. 定義狀態 (State) ---
@@ -283,6 +283,7 @@ async def call_router(state: AgentState):
 2. **數據優先**：你必須透過工具來獲得最新且具備來源證明的資料。
 3. **工具導向**：如果使用者指定了工具 (目前可用：{', '.join(target_tools)})，代表使用者只信任這些來源。你必須從中選擇最相關的工具來執行，以獲取資訊。
 4. **回覆策略**：只有在「執行完工具並拿到資料後」，你才可以在下一個階段進行分析。在 Router 階段，你的首要任務是「去查資料」。
+5. **嚴禁產出總結**：當你認為已經搜集夠多資料，決定不要呼叫任何工具時，你「絕對不要」在回覆中自己撰寫任何新聞摘要、報告或整理。你只需簡單回覆一句：「資料已備齊，交給 Analyst 進行分析」即可。這非常關鍵！
 
 [時間規範]
 - 只要提到「最近」、「最新」或「這週」，請統一計算為「過去 14 天」並填入 start_date。

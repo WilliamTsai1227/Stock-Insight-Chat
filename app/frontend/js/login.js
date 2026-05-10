@@ -184,7 +184,16 @@ document.getElementById('reg-password-confirm').addEventListener('keydown', (e) 
 
 // --- Utility Functions ---
 function showError(el, msg) {
-    el.textContent = msg;
+    if (typeof msg === 'object') {
+        // 處理 FastAPI 的 422 驗證錯誤 (通常是個 list)
+        if (Array.isArray(msg)) {
+            el.textContent = msg.map(e => e.msg).join(', ');
+        } else {
+            el.textContent = JSON.stringify(msg);
+        }
+    } else {
+        el.textContent = msg;
+    }
     el.classList.remove('hidden');
 }
 

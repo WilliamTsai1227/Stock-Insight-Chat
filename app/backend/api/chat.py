@@ -685,7 +685,7 @@ async def get_ai_response(
                 yield msg
         except asyncio.CancelledError:
             # 這裡捕捉到前端斷線，但沒關係，背景任務仍在執行並會將結果存入 DB
-            print(f"⚠️ [SSE] Frontend disconnected for chat {chat_id_str}. Background task continues execution...")
+            print(f"[SSE] Frontend disconnected for chat {chat_id_str}. Background task continues execution...")
             raise
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

@@ -44,6 +44,8 @@ _ALLOWED_ORIGINS = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_ALLOWED_ORIGINS,
+    # 支援 192.168.0.* 網段 (任意 port) 以及 localhost
+    allow_origin_regex=r"^https?://(192\.168\.0\.\d+)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
