@@ -506,18 +506,21 @@ async def get_ai_response(
     }
     config = {"configurable": {"thread_id": chat_id_str}}
 
-    async def event_generator():
+    # ── [NEW] 核心解法：生產者-消費者 (Producer-Consumer) 佇列模式 ──
+    # 信箱：用來傳遞 SSE 訊息
+    event_queue = asyncio.Queue()
+
+    # 1. 生產者 (背景任務)：負責跑 LangGraph 與 DB 持久化。完全獨立於前端連線！
+    async def background_agent_runner():
         start_total = time.time()
 
-        # 備援累積資料（不依賴 final_state）
+        # 備援累積資料
         accumulated_steps: list = []
         accumulated_retrieved: list = []
         accumulated_final_analyst: dict = {}
-
-        # ── 關鍵：用 chain_start / chain_end 追蹤 analyst 節點是否正在執行 ──
         in_analyst = False
 
-        # ── 條件式 spawn：第一次訊息才呼 LLM 產 title，與主串流並行 ──
+        # 條件式 spawn：第一次訊息才呼 LLM 產 title，與主流程並行
         title_task: Optional[asyncio.Task] = (
             asyncio.create_task(_generate_title_via_llm(request.query))
             if should_generate_title else None
@@ -533,11 +536,9 @@ async def get_ai_response(
                 name = event.get("name", "")
                 data = event.get("data", {})
 
-                # ── Analyst 節點開始執行 ─────────────────────────────
                 if kind == "on_chain_start" and name == "analyst":
                     in_analyst = True
 
-                # ── Analyst 節點結束 ─────────────────────────────────
                 elif kind == "on_chain_end" and name == "analyst":
                     in_analyst = False
                     output = data.get("output", {})
@@ -548,7 +549,6 @@ async def get_ai_response(
                         if step not in accumulated_steps:
                             accumulated_steps.append(step)
 
-                # ── Router 節點結束：tool_start / thinking ───────────
                 elif kind == "on_chain_end" and name == "router":
                     output = data.get("output", {})
                     trace_frag = output.get("trace", {})
@@ -561,34 +561,32 @@ async def get_ai_response(
                         tool_calls = getattr(msg, "tool_calls", None)
                         if tool_calls:
                             for tc in tool_calls:
-                                yield _sse("tool_start", {
+                                await event_queue.put(_sse("tool_start", {
                                     "tool": tc["name"],
                                     "query": tc.get("args", {}).get("query"),
-                                })
+                                }))
                         elif getattr(msg, "content", ""):
                             steps = trace_frag.get("steps", [])
                             thought = steps[-1].get("thought", "") if steps else ""
                             if thought:
-                                yield _sse("thinking", {"text": thought})
+                                await event_queue.put(_sse("thinking", {"text": thought}))
 
-                # ── Tools 節點結束：tool_done ────────────────────────
                 elif kind == "on_chain_end" and name == "tools":
                     output = data.get("output", {})
                     for item in output.get("retrieved_data", []):
                         accumulated_retrieved.append(item)
                     for msg in output.get("messages", []):
                         tool_name = getattr(msg, "name", "unknown")
-                        yield _sse("tool_done", {"tool": tool_name})
+                        await event_queue.put(_sse("tool_done", {"tool": tool_name}))
 
-                # ── LLM token：只在 analyst 節點期間才轉發 ───────────
                 elif kind == "on_chat_model_stream" and in_analyst:
                     chunk = data.get("chunk")
                     if chunk:
                         token = getattr(chunk, "content", "") or ""
                         if token:
-                            yield _sse("token", {"text": token})
+                            await event_queue.put(_sse("token", {"text": token}))
 
-            # ── async for 結束 = 圖已執行完畢，無條件送 done ─────────
+            # 圖已執行完畢
             total_time = round(time.time() - start_total, 3)
             final_content = accumulated_final_analyst.get("content", "")
             retrieval_sources = [
@@ -602,18 +600,16 @@ async def get_ai_response(
                 }
                 for item in accumulated_retrieved
             ]
-            yield _sse("done", {
+            await event_queue.put(_sse("done", {
                 "status": "success",
                 "chat_id": chat_id_str,
                 "total_execution_time": total_time,
                 "steps": accumulated_steps,
                 "final_content": final_content,
                 "retrieval_sources": retrieval_sources,
-            })
+            }))
 
-            # ── 持久化 assistant 訊息（store_summary 策略）─────────────
-            # context_refs 只存 SSE 摘要版（title / url / preview），不存 content 全文
-            # → 重整後前端能還原來源 UI，DB 體積也不會被全文撐爆
+            # 持久化 assistant 訊息（因為 _insert 內自己拿 pool connection，所以不受 FastAPI depends 影響）
             await _insert_assistant_message(
                 chat_id=request.chat_id,
                 parent_id=user_message_id,
@@ -625,10 +621,7 @@ async def get_ai_response(
                 },
             )
 
-            # ── 處理並行的 title task（僅第一次訊息才存在）─────────
-            # 主串流結束後再 await，可同時利用主串流時間做 title 生成
-            # title 失敗時 placeholder 保留、title_generated 維持 FALSE，
-            # 下次第二條訊息會再嘗試一次（自動 retry）
+            # Title 生成與儲存
             if title_task is not None:
                 try:
                     new_title = await asyncio.wait_for(title_task, timeout=3.0)
@@ -641,7 +634,6 @@ async def get_ai_response(
 
                 if new_title:
                     try:
-                        # 從 pool 取新連線做 UPDATE（不影響 SSE 生命週期）
                         async with get_pool().acquire() as conn:
                             await conn.execute(
                                 """
@@ -653,43 +645,47 @@ async def get_ai_response(
                                 request.chat_id,
                             )
                         print(f"[TITLE] UPDATE ok, chat_id={chat_id_str}, title={new_title!r}")
-                        yield _sse("title_update", {
+                        await event_queue.put(_sse("title_update", {
                             "chat_id": chat_id_str,
                             "title": new_title,
-                        })
+                        }))
                     except Exception as e:
-                        # UPDATE 失敗：placeholder 保留，旗標仍 FALSE，下次再試
                         print(f"[TITLE] UPDATE failed, chat_id={chat_id_str}: {type(e).__name__}: {e}")
 
         except Exception as e:
             import traceback
             traceback.print_exc()
-            # 例外發生時若 title_task 還在跑，主動取消避免 leak
             if title_task is not None and not title_task.done():
                 title_task.cancel()
-
+            
             err_text = f"Agent 執行失敗: {str(e)}"
-            yield _sse("error", {"message": err_text})
-
-            # save_user_and_error：失敗也寫入一筆 role=assistant 的錯誤訊息
-            # → user 重整後仍能看到「自己問過 + 系統回過錯誤」的完整時序
-            # → 不會導致下次第一次發訊息時又被當成 first message 重新跑 title
+            await event_queue.put(_sse("error", {"message": err_text}))
+            
+            # 發生錯誤也寫入 DB 以防資料丟失
             await _insert_assistant_message(
                 chat_id=request.chat_id,
                 parent_id=user_message_id,
                 content=err_text,
-                metadata={
-                    "error": True,
-                    "exception_type": type(e).__name__,
-                    "total_execution_time": round(time.time() - start_total, 3),
-                },
+                metadata={"error": str(e)}
             )
+        finally:
+            # 放一個 None 當作結束標記
+            await event_queue.put(None)
 
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    # 啟動背景生產者任務
+    asyncio.create_task(background_agent_runner())
+
+    # 2. 消費者 (SSE Generator)：只負責從信箱拿信，就算斷線被 Cancelled，也不會影響 background_agent_runner
+    async def event_generator():
+        try:
+            while True:
+                msg = await event_queue.get()
+                if msg is None:  # 收到結束標記
+                    break
+                yield msg
+        except asyncio.CancelledError:
+            # 這裡捕捉到前端斷線，但沒關係，背景任務仍在執行並會將結果存入 DB
+            print(f"⚠️ [SSE] Frontend disconnected for chat {chat_id_str}. Background task continues execution...")
+            raise
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
