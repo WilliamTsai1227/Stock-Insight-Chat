@@ -77,7 +77,7 @@ def _format_retrieved_data_for_analyst(items: List[Dict[str, Any]]) -> str:
 
 
 # 預設檢索筆數與注入 Analyst 的單則字元上限（可視延遲與品質再調）
-RETRIEVAL_TOP_K = 8
+RETRIEVAL_TOP_K = 15
 MAX_TOOL_ITEM_CHARS = 1200
 
 # --- 1. 定義狀態 (State) ---

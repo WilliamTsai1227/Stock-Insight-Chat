@@ -88,7 +88,7 @@ async def search_ai_analysis(
             sparse_vec,
             search_filter,
             group_by_payload_key="mongo_id",
-            group_size=2,
+            group_size=4,
             top_k=top_k,
             score_threshold=score_threshold,
         )
@@ -118,7 +118,9 @@ async def search_ai_analysis(
 
         return {"context": context}
     except Exception as e:
-        print(f"❌ Error searching AI analysis: {e}")
+        import traceback
+        print(f" Error searching AI analysis: {e}")
+        traceback.print_exc()
         return {"context": []}
 
 
@@ -126,7 +128,7 @@ async def search_recommendations(
     query_embedding: List[float],
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
-    top_k: int = 10
+    top_k: int = 15
 ) -> Dict[str, Any]:
     """
     推薦專用工具：從 AI 分析報告中提取結構化的推薦股票與產業標籤。
@@ -189,7 +191,7 @@ async def search_recommendations(
                 "stocks": formatted_stocks,
                 "industries": industries,
                 "publishAt": payload.get("publishAt"),
-                # 🆕 新增溯源欄位
+                #  新增溯源欄位
                 "source_news_titles": payload.get("source_news_titles", []),
                 "sentiment": payload.get("sentiment"),
                 "sentiment_label": payload.get("sentiment_label"),
@@ -201,7 +203,7 @@ async def search_recommendations(
             "sources": details
         }
     except Exception as e:
-        print(f"❌ Error searching recommendations: {e}")
+        print(f" Error searching recommendations: {e}")
         return {"stocks": [], "industries": [], "sources": []}
 
 
@@ -225,5 +227,5 @@ async def get_full_ai_analysis(mongo_ids: List[str]) -> List[Dict[str, Any]]:
             })
         return results
     except Exception as e:
-        print(f"❌ Error getting full AI analysis: {e}")
+        print(f" Error getting full AI analysis: {e}")
         return []

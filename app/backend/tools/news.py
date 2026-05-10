@@ -54,10 +54,11 @@ async def search_news(
     """
     start_time = time.time()
 
-    # 組建過濾條件
+    # ── 時間 must filter（唯一保留的 filter）─────────────────
+    # 理由：sparse BM25 已針對 [title]+content 建立索引，
+    #       直接搜尋 keyword/stock_name 比 payload filter 更全面（不會漏掉 content 裡提及但未打標的資料）。
+    #       只有「時間範圍」才需要硬性限制，其餘交給向量搜尋召回。
     must_conditions = []
-    should_conditions = []
-
     if start_date or end_date:
         must_conditions.append(models.FieldCondition(
             key="publishAt",
@@ -66,44 +67,17 @@ async def search_news(
                 lte=end_date
             )
         ))
+    search_filter = models.Filter(must=must_conditions) if must_conditions else None
 
-    # stock_code、keyword、stock_name 用 should (OR) 邏輯
-    # 只要其中任一欄位匹配，該文件就會被保留
-    if stock_code:
-        should_conditions.append(models.FieldCondition(
-            key="stock_codes",
-            match=models.MatchValue(value=stock_code)
-        ))
-
-    if keyword:
-        should_conditions.append(models.FieldCondition(
-            key="keywords",
-            match=models.MatchValue(value=keyword)
-        ))
-
-    if stock_name:
-        should_conditions.append(models.FieldCondition(
-            key="stock_names",
-            match=models.MatchValue(value=stock_name)
-        ))
-
-    # 新聞類型過濾 (必須滿足)
-    if news_type:
-        must_conditions.append(models.FieldCondition(
-            key="type",
-            match=models.MatchValue(value=news_type)
-        ))
-
-    # 組建 filter：must 全部滿足 且 should 至少一個滿足
-    filter_args = {}
-    if must_conditions:
-        filter_args["must"] = must_conditions
-    if should_conditions:
-        filter_args["should"] = should_conditions
-    search_filter = models.Filter(**filter_args) if filter_args else None
+    # ── 將 keyword / stock_name / stock_code 融入 query，讓 BM25 sparse 自然召回 ──
+    # 這樣即使 stock_names / keywords payload 欄位為空，也能靠 content 裡的字面匹配找到
+    extra_terms = [t for t in [keyword, stock_name, stock_code, news_type] if t]
+    augmented_query = query
+    if extra_terms:
+        augmented_query = f"{query} {' '.join(extra_terms)}"
 
     try:
-        sparse_vec = await asyncio.to_thread(embed_sparse_query, query)
+        sparse_vec = await asyncio.to_thread(embed_sparse_query, augmented_query)
         grouped = await hybrid_rrf_grouped(
             qdrant_client,
             "news",
@@ -111,10 +85,11 @@ async def search_news(
             sparse_vec,
             search_filter,
             group_by_payload_key="mongo_id",
-            group_size=2,
+            group_size=5,  # 每篇新聞最多合併 5 個 chunk，確保完整內容不遺漏
             top_k=top_k,
             score_threshold=score_threshold,
         )
+
 
         context = []
         for _gid, hits in grouped:
@@ -141,6 +116,9 @@ async def search_news(
             })
 
     except Exception as e:
+        import traceback
+        print(f" [search_news] 搜尋失敗: {e}")
+        traceback.print_exc()
         context = [{"error": str(e)}]
 
     execution_time = time.time() - start_time
