@@ -11,6 +11,70 @@ Stock Insight Chat 是一套專為投資者設計的 AI 智能對話系統。它
 
 ---
 
+## 優化
+
+本節整理近期對**延遲、穩定性與行動端體驗**的調整與對應程式位置，便於維運與 code review。
+
+### 後端架構重構（`app/backend/api/chat.py`）
+
+- **`asyncio.Queue` 生產者–消費者模式**：`POST /api/chat/messages` 以背景任務 **`background_agent_runner()`**（生產者）執行 LangGraph（`agent_app.astream_events`）、將 SSE 事件寫入 **`event_queue`**；**`event_generator()`**（消費者）僅負責 `yield` 佇列內容。Agent 回合與 HTTP 串流生命週期解耦。
+- **前端斷線仍完成持久化**：消費者若因 **`asyncio.CancelledError`**（例如瀏覽器關閉連線）結束，**不會終止**已 `create_task` 的背景任務；生產者仍會跑到圖走完，並呼叫 **`_insert_assistant_message`** 等將助理訊息寫入 **PostgreSQL**，最後以 **`event_queue.put(None)`** 作為結束標記。
+
+示意（節錄，`app/backend/api/chat.py`）：
+
+```python
+event_queue = asyncio.Queue()
+
+async def background_agent_runner():
+    try:
+        async for event in agent_app.astream_events(...):
+            # ... router / tools / analyst 事件 → event_queue.put(_sse(...))
+        await event_queue.put(_sse("done", {...}))
+        await _insert_assistant_message(...)
+    finally:
+        await event_queue.put(None)
+
+asyncio.create_task(background_agent_runner())
+
+async def event_generator():
+    try:
+        while True:
+            msg = await event_queue.get()
+            if msg is None:
+                break
+            yield msg
+    except asyncio.CancelledError:
+        # 前端斷線：背景任務仍繼續執行並寫入 DB
+        raise
+```
+
+---
+
+### 移動端與 UI 修復（frontend）
+
+- **鍵盤／視區與 fixed 版面**：`.app-container` 使用 **`100vh` + `100dvh`** 與 **`width/max-width: 100%`**，減少行動瀏覽器網址列與虛擬鍵盤造成的溢出；`**@media (max-width: 1024px)**` 內對 **`.chat-input-area`**、`env(safe-area-inset-*)` 調整留白，並搭配側欄抽屜、`min-width: 0` 的 flex 子項等，緩解小螢幕跑版（`app/frontend/css/index.css`）。
+- **智慧自動捲動**：`chat-messages` 的 `scroll` 監聽以距離底部的閾值更新 **`isUserScrolledUp`**；**`scrollToBottom`** 在非 **`force`** 時若使用者已往上讀舊訊息則不拉回底部；並以 **`targetChatId`** 對齊目前對話，**切換對話時**不會錯頻捲動（`app/frontend/js/index.js`）。
+- **登入錯誤顯示與測試帳號**：**`showError`** 對 `detail` 為物件／陣列（如 FastAPI 422）時轉成人可讀字串，避免畫面上出現 **`[object Object]`**（`app/frontend/js/login.js`）；登入表單在 **`login.html`** 對測試用 email／password 設 **`value`** 預填（僅開發便利性，正式環境請勿沿用）。
+- **複製回答（非 HTTPS 降級）**：優先 **`navigator.clipboard.writeText`**（需安全上下文）；否則以隱藏 **`textarea`** + **`document.execCommand('copy')`**，方便區網 **HTTP** 等環境仍可複製（`app/frontend/js/index.js` 內 **`copyToClipboard`**）。
+
+---
+
+### 大幅縮減 Context（降低延遲與用量）
+
+檢索參數 **`RETRIEVAL_TOP_K`** 由 **15** 調為 **5**：每次工具（如向量搜尋新聞）取回並累積進 **`retrieved_data`**／注入 Analyst 的筆數上限跟著下降，進而減少 Token 與後續 Router／Analyst 成本（`app/backend/agent/chat.py` 頂部常數 **`RETRIEVAL_TOP_K`**，並由 **`call_tools` → search_news／search_ai_analysis 等 `top_k=`** 使用）。
+
+---
+
+### 「封印 Router 冗長總結」— 將整理交給 Analyst
+
+過去 Router 在「不再呼叫工具」時可能輸出大段摘要，徒增 **輸入 token／延遲**（例如長時間卡在 Router 最後一步）。如今在 Router 的 **system_prompt**（**`call_router`** 內組字串）強制規則：
+
+> 當已蒐集足夠資料、決定不呼叫任何工具時，**不得**自行撰寫新聞摘要或報告，**僅需**輸出固定短句：**「資料已備齊，交給 Analyst 進行分析」**。
+
+實際長文交由 **`call_analyst`** 與 **【完整參考資料】** 區塊處理；trace 仍可透過 **`thought`** 顯示該句，避免 Router 預先生成冗長內容。程式位置：**`app/backend/agent/chat.py`** — **`call_router`** 組裝之 **`system_prompt`** 中「**嚴禁產出總結**」一條，以及 **`RETRIEVAL_TOP_K`** 與 **`call_tools`** 的對應關係。
+
+---
+
 ##  快速開始 (Quick Start)
 
 ### 0. 進入網站測試 (Frontend)

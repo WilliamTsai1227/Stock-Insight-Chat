@@ -9,6 +9,7 @@ module 套件 (app/backend/module/)
             ② 密碼工具（Argon2 雜湊 / 驗證）
             ③ 簽發 Token（AT / RT / decode）
             ④ 驗收 Token（FastAPI Depends：get_current_user_id / get_current_user）
+  chat_context.py — 依 parent_id 遞迴載入對話主線上下文（供 Agent POST /messages 使用）
 """
 
-__all__ = ["jwt"]
+__all__ = ["jwt", "chat_context"]

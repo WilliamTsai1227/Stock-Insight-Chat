@@ -14,6 +14,10 @@ from langchain_openai import ChatOpenAI
 
 from app.backend.agent.chat import create_chat_agent
 from app.backend.database.postgresql import get_db, get_pool
+from app.backend.module.chat_context import (
+    fetch_prior_context_for_agent,
+    rows_to_langchain_messages,
+)
 from app.backend.module.jwt import get_current_user, get_current_user_id
 
 router = APIRouter(tags=["Chat"])
@@ -62,8 +66,11 @@ def _make_placeholder_title(query: str) -> str:
 # - user 訊息：在 agent 開跑前 INSERT，失敗 → 回 500，避免進到 SSE 才出問題
 # - assistant 訊息：在 SSE 'done' / 'error' 時 INSERT，使用 pool 取新連線（避免
 #   依賴 Depends 注入連線在 StreamingResponse 期間的生命週期）
-# - parent_id 設計：assistant.parent_id = user_message_id，方便前端把問答配對
-#   user 訊息 parent_id 一律 NULL（對話樹起點）
+# - parent_id 設計：
+#   assistant.parent_id = 對應的 user_message_id（問答對齊）
+#   user.parent_id = 本 chat 中「前一則訊息」id（多半為上一則 assistant），
+#   讓 PostgreSQL 能沿 parent_id 遞迴還原單一主線脈絡（見 module/chat_context.py）
+#   首則 user：parent_id = NULL
 
 
 async def _insert_user_message(
@@ -71,16 +78,41 @@ async def _insert_user_message(
     chat_id: UUID,
     content: str,
 ) -> UUID:
-    """在 agent 跑之前同步寫入 user 訊息，回傳新插入的 message id。"""
-    row = await db.fetchrow(
-        """
-        INSERT INTO messages (chat_id, parent_id, role, content)
-        VALUES ($1, NULL, 'user', $2)
-        RETURNING id
-        """,
-        chat_id,
-        content,
-    )
+    """
+    在 agent 跑之前同步寫入 user 訊息，回傳新插入的 message id。
+
+    高併發：以交易 + 鎖定 chats 列，讓「讀最後一則 → INSERT」對同一 chat_id
+    序列化，避免兩個請求讀到同一個 prev_id 而鏈錯。
+    """
+    async with db.transaction():
+        row_chat = await db.fetchrow(
+            "SELECT id FROM chats WHERE id = $1::uuid FOR UPDATE",
+            chat_id,
+        )
+        if row_chat is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Chat not found.",
+            )
+        prev_id = await db.fetchval(
+            """
+            SELECT id FROM messages
+            WHERE chat_id = $1::uuid
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            chat_id,
+        )
+        row = await db.fetchrow(
+            """
+            INSERT INTO messages (chat_id, parent_id, role, content)
+            VALUES ($1, $2, 'user', $3)
+            RETURNING id
+            """,
+            chat_id,
+            prev_id,
+            content,
+        )
     return row["id"]
 
 
@@ -484,6 +516,13 @@ async def get_ai_response(
                 detail="Query cannot be empty.",
             )
         user_message_id = await _insert_user_message(db, request.chat_id, clean_query)
+
+        prior_rows = await fetch_prior_context_for_agent(
+            db,
+            chat_id=request.chat_id,
+            user_message_id=user_message_id,
+        )
+        history_lc = rows_to_langchain_messages(prior_rows)
     except HTTPException:
         raise
     except asyncpg.PostgresError as e:
@@ -499,7 +538,7 @@ async def get_ai_response(
         enabled_tools = request.agent_config.enabled_tools
 
     initial_state = {
-        "messages": [HumanMessage(content=clean_query)],
+        "messages": history_lc + [HumanMessage(content=clean_query)],
         "trace": {},
         "retrieved_data": [],
         "enabled_tools": enabled_tools,

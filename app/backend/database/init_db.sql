@@ -106,7 +106,7 @@ CREATE TABLE IF NOT EXISTS chats (
 CREATE TABLE IF NOT EXISTS messages (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     chat_id UUID NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
-    parent_id UUID REFERENCES messages(id) ON DELETE SET NULL, -- 父訊息 ID，用於 Q&A 對齊
+    parent_id UUID REFERENCES messages(id) ON DELETE SET NULL, -- 父訊息：assistant 指向對應 user；user 建議指向前一則訊息（如上一則 assistant）以串成主線，供遞迴上下文載入
     role VARCHAR(50) NOT NULL, -- user / assistant
     content TEXT NOT NULL,
     tokens JSONB NOT NULL DEFAULT '{"prompt":0, "completion":0, "total":0, "is_cached": false}',
