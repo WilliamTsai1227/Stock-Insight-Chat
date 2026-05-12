@@ -167,23 +167,69 @@ pip install -r app/backend/requirements.txt
 ```
 
 ### 4. 執行資料遷移 (Migration)
-將資料從 MongoDB 遷移至 Qdrant。你可以直接從 **專案根目錄** 執行：
 
-**Hybrid 檢索（dense + BM25 sparse + RRF）** 之**首次建庫**，或自**舊版「僅單一向量」**升級時：請先完成 **§3** 的 `pip install -r app/backend/requirements.txt`，再依序執行 `setup_qdrant.py --reset`（會刪除既有 Qdrant collection）與 `migrate_to_qdrant.py`（詳見 `specifications/tools_spec.md` §1.1）。下列 Step A 仍以**不刪資料**的初始化為預設；若需 `--reset` 請改用最下方「遷移進階用法」或規格書中的命令列。
+將 MongoDB 內文稿轉為 Qdrant 向量點並建立索引。**依目的不同**，分成兩種流程（請擇一參照）：
+
+---
+
+#### 情境一：清空並重建 Qdrant（Hybrid 結構對了，但資料庫要換空／改 schema）
+
+適用：**第一次建庫**、**升級過 `setup_qdrant.py` 定義後需整庫對齊**、**確認要刪掉既有向量再重灌**。注意：`--reset` 會**刪除** `news` 與 `ai_analysis` 底下**所有 points**。
 
 ```bash
-# Step A: 初始化 Collection 與索引
-python3 app/backend/scripts/setup_qdrant.py
+# 1) 刪除既有 collection，依腳本重建（互動確認 y）
+python3 app/backend/scripts/setup_qdrant.py --reset
 
-# Step B: Dry Run 預覽切分結果 (推薦先執行確認)
+# 2) 確認 Mongo 文稿切分與程式無誤（不呼叫 Embedding API、不寫入 Qdrant）
 python3 app/backend/scripts/migrate_to_qdrant.py --dry-run --limit 10
 
-# Step C: 正式遷移 (各取最新 100 篇)
+# 3) 正式寫入向量（數量可自行調整：100 為各 collection 至多處理的「最新 N 篇」，依 mongo sort）
 python3 app/backend/scripts/migrate_to_qdrant.py --limit 100
 
-# Step D: 驗證遷移結果
+# 4) 可選：跑過濾／聚合檢查
 python3 app/backend/scripts/test_qdrant_filter.py
 ```
+
+完成情境一後，Qdrant 即為**結構與資料皆由腳本當時版本決定的一套乾淨庫**。若之後只新增 Mongo 文檔、未改動切分程式，通常改走**情境二**即可補資料。
+
+---
+
+#### 情境二：日常維運（collection 已在、不重灌整庫）
+
+**什麼時候執行 `setup_qdrant.py`（不加 `--reset`）？**
+
+| 時機 | 說明 |
+| :--- | :--- |
+| **新環境／剛架起 Qdrant、尚無 collection** | 只做「建 bucket + payload 索引」，不刪資料。 |
+| **從 repo 拉了新版 `setup_qdrant.py`、多了欄位要建索引** | 再跑一次可補 `create_payload_index`；collection 若已存在則跳過重建。 |
+| **想確認 Hybrid 是否正常** | 可看腳本輸出的**結構驗證**區塊。 |
+
+**不一定要每天跑**；Qdrant 若已存在且無 schema 異動可略過。
+
+**什麼時候執行 `migrate_to_qdrant.py`？**
+
+| 指令 | 時機 |
+| :--- | :--- |
+| `--dry-run --limit 10` | 改過切分、`chunk_news_document`／payload 映射後想**先看切長相**；或大額 migrate 前先抽查。Dry run **不embedding、不 upsert**。 |
+| `--limit N`（或進階的 `--collection`） | Mongo 有新的新聞／分析要進向量庫時，**例行補資料**；同一 `(mongo_id, chunk_type, chunk_idx)` 的 point id **固定**，重跑等同 **upsert 覆寫**，可當增量或修正後重灌部分篇數。 |
+
+**日常若不想清空重來**，較務實的順序為：
+
+```bash
+# （可選）僅在未建過 collection／要補新索引時
+python3 app/backend/scripts/setup_qdrant.py
+
+# （推薦在改過遷移邏輯後）先看切分
+python3 app/backend/scripts/migrate_to_qdrant.py --dry-run --limit 10
+
+# 實際寫入或更新向量（調整 limit 視資料量而定）
+python3 app/backend/scripts/migrate_to_qdrant.py --limit 100
+
+# （可選）檢索自測
+python3 app/backend/scripts/test_qdrant_filter.py
+```
+
+**Hybrid 檢索**之**首次建庫**，或自**舊版「僅單一向量」**升級時，請優先遵循 **情境一**。其他細節見 `specifications/tools_spec.md` §1.1 與下方「遷移進階用法」。執行前請先完成 **§3**（`pip install -r app/backend/requirements.txt`）與 Qdrant 服務可連線。
 
 #### 遷移進階用法
 ```bash
@@ -197,6 +243,14 @@ python3 app/backend/scripts/migrate_to_qdrant.py --limit 99999
 # 重建 Collection (⚠️ 清除所有現有資料)
 python3 app/backend/scripts/setup_qdrant.py --reset
 ```
+
+#### `setup_qdrant.py`：重複執行、提示訊息與結構驗證
+
+- **可多次執行**：若 Qdrant 裡 **`news` / `ai_analysis` 已存在**，腳本會**略過 `create_collection`**（不會再多建同名 collection）；仍會依序呼叫 `create_payload_index`。已存在的索引若建立失敗，會印出「可能已存在」類訊息並繼續。
+- **剛做完 `--reset` 再跑一次一般初始化**：接下來再執行 `python3 app/backend/scripts/setup_qdrant.py` 時會顯示 **collection「已存在、略過建立」**，這代表上一輪已建好，**不是** Hybrid 設定失敗；若需確認實際 schema，請以腳本尾段的 **結構驗證** 區塊為準（或見 Dashboard）。
+- **`--reset`**：互動確認 `y` 後會**刪除**上述兩個 collection（**內含所有 points**），再依腳本定義重建 **dense（`dense`，1536 維）+ sparse BM25（`text`）** 與 payload 索引。**刪檔後須重新執行 `migrate_to_qdrant.py` 才有向量資料。**
+- **結構驗證輸出**（每次跑完每個 collection 的索引步驟後）：會列印 **`status`、`points_count`**、**`dense` 維度是否為 1536**、**是否存在 `text` sparse**、 **`payload_schema` 是否涵蓋腳本預期的索引欄位**（若有額外欄位會以 ℹ️ 標示）。若 `payload_schema` 為空（少數情境），腳本會說明可能原因，並仍以向量區塊為主判斷。
+- **資料持久化**：若 Docker Compose **未使用 `down -v` 刪除 Qdrant volume**，即使重建容器，`news`／`ai_analysis` 仍可能在 volume 裡存活，這與腳本的「已存在」行為一致。
 
 ### 5. 驗證資料 (Qdrant Dashboard)
 遷移完成後，你可以透過瀏覽器存取 Qdrant 內建的控制台來檢查資料：
@@ -607,7 +661,7 @@ sequenceDiagram
 
 系統內建完善的數據 ETL 工具，可確保 Qdrant 與 MongoDB 資料同步：
 
-*   `setup_qdrant.py`: 自動初始化 Collection 與建立高性能索引（含 Datetime / Keyword / Integer / Bool 索引），支援 `--reset` 旗標重建。
+*   `setup_qdrant.py`: 自動初始化 Collection 與建立高性能索引（含 Datetime / Keyword / Integer / Bool 等），支援 `--reset` 全刪重建；**collection 若已存在則跳過新建但仍會補索引**；並在執行時輸出 **結構驗證**（`dense` 1536、`text` sparse、payload 索引欄位是否齊備）。細節見 **§4「`setup_qdrant.py`：重複執行、提示訊息與結構驗證」**。
 *   `migrate_to_qdrant.py`: 具備**防重複機制**的遷移腳本。
     *   利用 `uuid5` 產生確定性 ID（基於 `mongo_id` + `chunk_type` + `chunk_idx`），確保資料變動時僅執行 `upsert`。
     *   支援 `--dry-run` 模式預覽切分結果。

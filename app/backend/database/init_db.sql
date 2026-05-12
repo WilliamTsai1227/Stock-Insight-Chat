@@ -34,10 +34,15 @@ CREATE TABLE IF NOT EXISTS user_usage_quotas (
 );
 
 -- 5. 建立 token_usage_logs 表 (Token 使用詳細流水帳)
+-- 寫入時機：每次 AI 對話背景任務完成後，一次性 INSERT 一筆（不在串流途中寫入）
+-- 與 user_usage_quotas 分開的原因：
+--   quotas 是「即時計數器」(一個 user 永遠只有一列，O(1) 查 quota)，
+--   logs 是 append-only 流水帳，用於對帳 / 費用報表 / 各模型用量統計
 CREATE TABLE IF NOT EXISTS token_usage_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    message_id UUID, -- 關聯到 messages 表 (若有)
+    chat_id UUID REFERENCES chats(id) ON DELETE SET NULL, -- 關聯到 chats 表，方便按對話查詢費用
+    message_id UUID,                                      -- 關聯到最後一則 assistant message (若有)
     model_name VARCHAR(100),
     prompt_tokens INTEGER DEFAULT 0,
     completion_tokens INTEGER DEFAULT 0,
@@ -135,6 +140,7 @@ CREATE TABLE IF NOT EXISTS files (
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_token_usage_logs_user_id ON token_usage_logs(user_id);
 CREATE INDEX IF NOT EXISTS idx_token_usage_logs_created_at ON token_usage_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_token_usage_logs_chat_id ON token_usage_logs(chat_id);
 
 -- 專案與對話 (最核心的查詢路徑)
 CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id);

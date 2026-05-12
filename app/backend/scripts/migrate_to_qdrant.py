@@ -168,8 +168,8 @@ def chunk_news_document(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
     短文 (< 800 字) 直接當單一 chunk，長文使用 RecursiveCharacterTextSplitter。
     回傳格式：[{"text": ..., "payload": {...}}, ...]
     """
-    title = doc.get("title", "無標題")
-    content = doc.get("content", "")
+    title = doc.get("title") or "無標題"
+    content = doc.get("content") or ""
     mongo_id = str(doc["_id"])
 
     if not content.strip():
@@ -240,9 +240,9 @@ def chunk_ai_analysis_document(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
     產出最多 3 個 chunk：summary / key_news / stock_insight
     """
     mongo_id = str(doc["_id"])
-    title = doc.get("article_title", "無標題")
+    title = doc.get("article_title") or "無標題"
     publish_at = transform_timestamp(doc.get("publishAt", int(time.time())))
-    sentiment_raw = doc.get("sentiment", "")
+    sentiment_raw = doc.get("sentiment") or ""
 
     # 共用 metadata
     base_payload = {
@@ -272,8 +272,8 @@ def chunk_ai_analysis_document(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
     chunk_idx = 0
 
     # ── Chunk 1: 摘要向量 (summary + article_title) ──
-    summary = doc.get("summary", "")
-    if summary and summary.strip():
+    summary = doc.get("summary") or ""
+    if summary.strip():
         text = f"[分析摘要] {title}：{summary}"
         results.append({
             "text": text,
@@ -287,8 +287,8 @@ def chunk_ai_analysis_document(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
         chunk_idx += 1
 
     # ── Chunk 2: 重要新聞向量 (important_news) ──
-    important_news = doc.get("important_news", "")
-    if important_news and important_news.strip():
+    important_news = doc.get("important_news") or ""
+    if important_news.strip():
         text = f"[重要新聞] {title}：{important_news}"
         results.append({
             "text": text,
@@ -302,8 +302,8 @@ def chunk_ai_analysis_document(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
         chunk_idx += 1
 
     # ── Chunk 3: 潛力標的向量 (potential_stocks_and_industries) ──
-    potential = doc.get("potential_stocks_and_industries", "")
-    if potential and potential.strip():
+    potential = doc.get("potential_stocks_and_industries") or ""
+    if potential.strip():
         text = f"[潛力標的分析] {title}：{potential}"
         results.append({
             "text": text,
