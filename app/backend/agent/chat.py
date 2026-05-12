@@ -5,7 +5,9 @@ from typing import TypedDict, Annotated, List, Tuple, Union, Dict, Any
 from datetime import datetime
 from dotenv import load_dotenv
 
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_openai import OpenAIEmbeddings
+
+from app.backend.agent.stream_usage_chat_openai import StreamUsageChatOpenAI
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage, SystemMessage
 from langchain_core.tools import tool
 from langgraph.graph import StateGraph, END
@@ -245,11 +247,22 @@ async def get_market_recommendations(start_date: str = None, end_date: str = Non
 
 tools = [search_stock_news, search_market_ai_analysis, get_market_recommendations]
 
+# OpenAI streaming：在尾包帶 usage（供 astream_events / on_chat_model_end 聚合）
+_OPENAI_STREAM_OPTS: Dict[str, Any] = {"stream_options": {"include_usage": True}}
+
 # --- 模型配置 ---
 # 1. 導航模型 (Router): 速度快、工具調用準確
-router_model_base = ChatOpenAI(model="gpt-5-mini", temperature=1)
+router_model_base = StreamUsageChatOpenAI(
+    model="gpt-5-mini",
+    temperature=1,
+    model_kwargs=_OPENAI_STREAM_OPTS,
+)
 # 2. 分析模型 (Analyst): 深度思考、文筆詳盡
-analyst_model = ChatOpenAI(model="gpt-5", temperature=1)
+analyst_model = StreamUsageChatOpenAI(
+    model="gpt-5",
+    temperature=1,
+    model_kwargs=_OPENAI_STREAM_OPTS,
+)
 
 # Router / 檢索反覆上限（與 trace 裡 node=="router" 筆數對齊）
 # 前 N 次進入 router 可綁定工具；自第 N+1 次起卸除工具強制收斂（N = 此常數）。

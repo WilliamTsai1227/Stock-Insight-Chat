@@ -45,7 +45,8 @@ motor==3.3.2
 multidict==6.7.1
 mypy_extensions==1.1.0
 numpy==1.26.4
-openai==1.14.3
+# stream_options.include_usage（串流計費資訊）需 openai>=1.26；舊版會噴 AsyncCompletions.create unexpected keyword argument
+openai==1.68.2
 orjson==3.11.8
 packaging==23.2
 passlib==1.7.4
