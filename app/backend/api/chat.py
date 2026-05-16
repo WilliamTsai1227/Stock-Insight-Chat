@@ -26,6 +26,7 @@ from app.backend.module.token_usage import (
     parse_usage_from_llm_message,
     record_token_usage,
 )
+from app.backend.module.usage_quota import assert_preflight_llm_quota
 
 router = APIRouter(tags=["Chat"])
 
@@ -537,6 +538,9 @@ async def get_ai_response(
 
     # 2. 旗標：FALSE 才需要產 title
     should_generate_title = not chat_row["title_generated"]
+
+    # 2b. Token 配額 Pre-flight（未進 LangGraph／OpenAI）；已達上限回 429
+    await assert_preflight_llm_quota(current_user_id)
 
     # 3. 同步 INSERT user 訊息（在 agent 跑之前），失敗就直接 500
     # 這樣即使後續 agent / SSE 中斷，user 仍能看到自己問了什麼，方便重試

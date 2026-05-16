@@ -1501,7 +1501,20 @@ async function sendMessage() {
         });
 
         if (!response) return;  // authFetch 已處理 401 → 跳轉 login.html
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        if (!response.ok) {
+            let detail = `HTTP ${response.status}`;
+            try {
+                const errBody = await response.json();
+                if (typeof errBody.detail === 'string') {
+                    detail = errBody.detail;
+                } else if (Array.isArray(errBody.detail)) {
+                    const parts = errBody.detail
+                        .map((x) => (typeof x === 'object' && x.msg ? x.msg : String(x)));
+                    detail = parts.join('；');
+                }
+            } catch (_) { /* 非 JSON 或無 body */ }
+            throw new Error(detail);
+        }
         if (!response.body) throw new Error('瀏覽器不支援 Streaming');
 
         newChatComposeLock = false;
@@ -1682,7 +1695,12 @@ async function sendMessage() {
     } catch (err) {
         console.error('Streaming error:', err);
         addBubbleIfNeeded();
-        bubble.textContent = '伺服器連線失敗，請檢查 Docker 是否啟動。';
+        const msg =
+            err && typeof err.message === 'string' && err.message.length > 0
+                ? err.message
+                : '伺服器連線失敗，請檢查 Docker 是否啟動。';
+        bubble.textContent = msg;
+        showToast(msg, 'error');
     } finally {
         try {
             cleanup();

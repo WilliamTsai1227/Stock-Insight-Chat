@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
 from app.backend.database.postgresql import get_pool
+from app.backend.module.usage_quota import try_increment_used_tokens
 
 # 費用估算：OpenAI Platform「Text / Standard」每 1M tokens（input / output）
 # 對照 https://platform.openai.com/pricing ；實際帳單以帳戶為準。
@@ -407,8 +408,10 @@ async def record_token_usage(
 ) -> Optional[UUID]:
     """
     將單次 LLM 結算（一輪）的 token 用量寫入兩張表（同一 transaction）：
-      1. user_usage_quotas  ── UPSERT 累加該輪 tokens
+      1. user_usage_quotas  ── 條件式遞增（不超過 subscription_tiers.monthly_token_limit）
       2. token_usage_logs   ── INSERT 一列流水帳（對帳／費用報表）
+
+    若配額不足，不配額、不寫 log，回傳 None。
 
     caller：建議填 router／analyst等（見 api/chat.py `on_chat_model_end` 推斷）。
     成功時回傳 `token_usage_logs.id`，跳過或失敗時回傳 None。
@@ -429,17 +432,13 @@ async def record_token_usage(
     try:
         async with get_pool().acquire() as conn:
             async with conn.transaction():
-                await conn.execute(
-                    """
-                    INSERT INTO user_usage_quotas (user_id, current_period_start, used_tokens, updated_at)
-                    VALUES ($1, date_trunc('month', NOW()), $2, NOW())
-                    ON CONFLICT (user_id) DO UPDATE
-                        SET used_tokens = user_usage_quotas.used_tokens + EXCLUDED.used_tokens,
-                            updated_at  = NOW()
-                    """,
-                    user_id,
-                    total,
-                )
+                ok = await try_increment_used_tokens(conn, user_id, total)
+                if not ok:
+                    print(
+                        f"[QUOTA] record_token_usage skipped (over limit or no quota row) "
+                        f"user={user_id} chat={chat_id} delta={total}"
+                    )
+                    return None
 
                 row = await conn.fetchrow(
                     """

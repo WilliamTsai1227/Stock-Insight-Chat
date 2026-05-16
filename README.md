@@ -745,45 +745,51 @@ sequenceDiagram
 為了支撐商業化營運，系統設計了一套嚴謹的 Token 計量與會員等級系統。這不僅是資料庫欄位的增加，更涉及高併發下的數據一致性與效能平衡。
 
 ### 1. 會員等級與配額 (Subscription Tiers)
-系統預設提供三種等級，透過 `subscription_tiers` 表定義：
-*   **Free (免費版)**：每個月 100k Tokens，支援 10 個專案。
-*   **Pro (中階版)**：每個月 1M Tokens，支援 20 個專案，優先處理權。
-*   **Ultra (高級版)**：每個月 5M Tokens，無限制專案，支援進階 RAG 模式。
+系統預設提供三種等級，透過 `subscription_tiers` 表定義（`init_db.sql` 種子＋migration **`V005__seed_subscription_tiers.sql`** 可對齊既有庫）：
+*   **Free (免費版)**：每個月 **200k** Tokens，支援 10 個專案。
+*   **Pro (中階版)**：每個月 **1M** Tokens，支援 20 個專案。
+*   **Ultra (高級版)**：每個月 **5M** Tokens，`max_projects` 以高上限表示「實務上不限」（schema 仍為整數）。
 
-### 2. Token 管理架構 (Token Management Architecture)
+註冊時 `tier_id` 預設指向 **`free`**；若 `tier_id` 為 NULL，後端配額邏輯以 **與 free 相同的每月上限**（`usage_quota.DEFAULT_FALLBACK_MONTHLY_LIMIT`）作為 fallback。
 
-設計 Token 系統時，採用 **「雙軌制儲存」** 與 **「預扣/結算機制」**。
+### 2. 已實作：配額模組與阻擋策略 (`app/backend/module/usage_quota.py`)
 
-#### A. 雙軌制儲存策略
-*   **PostgreSQL (權威存儲)**：
-    *   `user_usage_quotas`: 儲存當前週期的「累計用量」，用於精確計費。
-    *   `token_usage_logs`: 儲存每一筆對話的詳細流水（含 Model 名稱、Prompt/Completion 分布、成本），用於對帳與報表。
-*   **Redis (即時快取)**：
-    *   儲存 `usage:{user_id}:current`，利用 Redis 的 `INCRBY` 原子操作提供微秒級的計量與檢查。
+1.  **Pre-flight（送 OpenAI／進 LangGraph 前）**  
+    `POST /api/chat/messages` 在寫入 user 訊息與啟動 Agent 前呼叫 `assert_preflight_llm_quota`：讀取 `user_usage_quotas.used_tokens` 與 `subscription_tiers.monthly_token_limit`（JOIN `users`）。若 **`used_tokens >= monthly_token_limit`**，直接 **HTTP 429**，不進圖、不開串流主流程。  
+    同時會 **`ensure_quota_row_exists`**，避免舊帳號缺 `user_usage_quotas` 列。
 
-#### B. 高併發策略 (Concurrency Control)
-在高併發情況下，若直接使用 `UPDATE ... SET used = used + N` 容易造成資料庫鎖競爭或死鎖。
-1.  **原子更新 (Atomic Increment)**：
-    ```sql
-    UPDATE user_usage_quotas 
-    SET used_tokens = used_tokens + :n, updated_at = NOW()
-    WHERE user_id = :uid AND used_tokens + :n <= :limit;
-    ```
-2.  **非同步回寫 (Async Flush)**：
-    應用層先將 Token 用量寫入訊息隊列 (MQ) 或 Redis 串流，再由專門的 Worker 批次 (Batch) 寫回 PostgreSQL，減少對資料庫的頻繁 IO。
+2.  **原子條件遞增（每一輪 `on_chat_model_end`）**  
+    `record_token_usage`（`token_usage.py`）在**同一個 DB transaction** 內先執行  
+    `UPDATE user_usage_quotas ... WHERE used_tokens + delta <= monthly_limit`（見 `try_increment_used_tokens`）。  
+    若本輪加總會超過上限，**不遞增、不寫 `token_usage_logs`**（並印 `[QUOTA]` 日誌）。  
+    注意：LLM 該輪若已實際呼叫，供應商端成本仍可能已發生；Pre-flight 可降低「已滿額仍整段開打」的情況。
 
-### 3. 即時限流與配額檢查 (Real-time Guardrails)
+### 3. Token 管理架構 (Token Management Architecture)
 
-系統如何判斷「這一句」能不能說？
-1.  **Pre-flight Check (預檢查)**：在呼叫 LLM 前，先從快取讀取當前用量，若已達 95% 則發出警告；若已達 100% 則直接拒絕請求。
-2.  **Reservation Pattern (預留模式)**：
-    *   假設 LLM 可能生成 1000 tokens，先在 Redis 中預扣 1000。
-    *   當 LLM 生成結束後，根據「實際使用量」(如 450) 進行結算，將多扣的 (550) 退回。
-    *   這能確保在高併發追問下，使用者絕不會超出預算。
+設計上另含 **「雙軌制儲存」** 與可選的 **「預扣/結算」**（Redis 等）；目前 **權威計數在 PostgreSQL**。
 
-### 4. Python Class 設計實踐
+#### A. 雙軌制儲存策略（目前狀態）
+*   **PostgreSQL (已用於計數與流水)**：
+    *   `user_usage_quotas`：每人每月累計 **`used_tokens`**（與 `subscription_tiers.monthly_token_limit` 比對）。
+    *   `token_usage_logs`：每次 LLM 結算一列（對帳／模型用量／粗估成本）。
+*   **Redis（規劃中，尚未接線）**：
+    *   可作微秒級預檢或預留；目前以 Postgres 原子 `UPDATE … WHERE used_tokens + n <= limit` 為準。
 
-在程式碼層面，我們建議採用 **「單一權責原則」** 的 `UsageManager`：
+#### B. 高併發與一致性（目前實作）
+*   **條件式原子遞增**（與寫流水同一 transaction）：見 **§2** 與 `usage_quota.try_increment_used_tokens`。
+*   **MQ / 非同步回寫 Worker**：尚未實作；高 QPS 時可再評估。
+
+### 4. 即時限流與延伸 (Real-time Guardrails)
+
+已落地：**進主對話前 Pre-flight 429**、**每輪結算條件更新**（§2）。  
+以下仍屬加強方向：
+*   **快取預檢**：Redis `INCRBY` 搭配 TTL／週 Key，降低熱門路徑讀 DB 頻率。
+*   **預留模式（Reservation）**：先預扣再依實用量結算退回，適合超高併發。
+*   **自然月重置**：目前 `current_period_start` 欄位存在於 schema；自動歸零可另加 cron 或於讀取時依月份重置（尚未實作）。
+
+### 5. Python Class 設計實踐（參考用）
+
+仍以 **「單一權責」** 封裝為目標；目前生產路徑以 **`usage_quota`** 模組為準，而非下方範例類別：
 
 ```python
 class TokenUsage:
@@ -823,4 +829,4 @@ class UsageManager:
 - [x] 前端對話介面開發 (Vanilla JS + HTML/CSS 玻璃擬態設計)
 
 ---
-*Last Update: 2026-04-18*
+*Last Update: 2026-05-16*

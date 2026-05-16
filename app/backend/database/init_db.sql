@@ -11,6 +11,16 @@ CREATE TABLE IF NOT EXISTS subscription_tiers (
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 種子：訂閱等級（與 README／usage_quota.DEFAULT_FALLBACK_MONTHLY_LIMIT 對齊）
+INSERT INTO subscription_tiers (name, monthly_token_limit, max_projects)
+VALUES
+    ('free', 200000, 10),
+    ('pro', 1000000, 20),
+    ('ultra', 5000000, 999999)
+ON CONFLICT (name) DO UPDATE SET
+    monthly_token_limit = EXCLUDED.monthly_token_limit,
+    max_projects = EXCLUDED.max_projects;
+
 -- 3. 建立 users 表 (會員系統核心)
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
