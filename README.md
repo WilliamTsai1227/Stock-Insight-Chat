@@ -93,7 +93,7 @@ async def event_generator():
 - **Password**: `1qaz!QAZ`
 
 ### 1. 啟動基礎設施
-透過 Docker Compose 啟動 Qdrant 向量資料庫與 PostgreSQL：
+透過 Docker Compose 啟動 Qdrant 向量資料庫與 PostgreSQL（請在**專案根目錄**執行，即與 `./deploy/` 同層）：
 ```bash
 docker-compose -f ./deploy/docker-compose.yml up -d
 ```

@@ -11,13 +11,30 @@ from app.backend.api import api_router
 from app.backend.database.postgresql import create_pool, close_pool
 
 
+def _warmup_sparse_bm25() -> None:
+    """
+    在主執行緒預載 FastEmbed BM25，避免首度 search 時於 asyncio.to_thread 內才觸發
+    huggingface_hub 下載；與 tqdm 並行鎖在部分套件版本下會出現 `tqdm` 無 `_lock` 錯誤。
+    """
+    try:
+        from app.backend.tools.qdrant_hybrid import embed_sparse_query
+
+        embed_sparse_query("warmup")
+        print("[WARMUP] BM25 SparseTextEmbedding ready.", flush=True)
+    except Exception as e:
+        print(
+            f"[WARMUP] BM25 warmup failed (first hybrid search may error): "
+            f"{type(e).__name__}: {e}",
+            flush=True,
+        )
+
+
 # 1. 使用 lifespan 管理 asyncpg Connection Pool 生命週期
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # --- 啟動時建立 Connection Pool ---
     await create_pool()
+    _warmup_sparse_bm25()
     yield
-    # --- 關閉時釋放所有連線 ---
     await close_pool()
 
 

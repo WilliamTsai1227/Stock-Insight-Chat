@@ -46,6 +46,7 @@ class TokenUsageLogModel(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     user_id: UUID
     message_id: Optional[UUID] = None
+    caller: Optional[str] = None
     model_name: str
     prompt_tokens: int = 0
     completion_tokens: int = 0

@@ -34,15 +34,15 @@ CREATE TABLE IF NOT EXISTS user_usage_quotas (
 );
 
 -- 5. 建立 token_usage_logs 表 (Token 使用詳細流水帳)
--- 寫入時機：每次 AI 對話背景任務完成後，一次性 INSERT 一筆（不在串流途中寫入）
--- 與 user_usage_quotas 分開的原因：
---   quotas 是「即時計數器」(一個 user 永遠只有一列，O(1) 查 quota)，
---   logs 是 append-only 流水帳，用於對帳 / 費用報表 / 各模型用量統計
+-- 寫入時機：可為「每次 LLM 結束一筆」（同一 chat_id 多列），或舊版「每次對話結束一筆」；
+-- 不在串流途中寫入。與 user_usage_quotas 分開：
+--   quotas = 即時計數器；logs = append-only 對帳／報表／依模型統計
 CREATE TABLE IF NOT EXISTS token_usage_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     chat_id UUID REFERENCES chats(id) ON DELETE SET NULL, -- 關聯到 chats 表，方便按對話查詢費用
     message_id UUID,                                      -- 關聯到最後一則 assistant message (若有)
+    caller VARCHAR(50),                                   -- LLM 輪次來源：router、analyst 等（可 NULL）
     model_name VARCHAR(100),
     prompt_tokens INTEGER DEFAULT 0,
     completion_tokens INTEGER DEFAULT 0,
@@ -138,9 +138,18 @@ CREATE TABLE IF NOT EXISTS files (
 
 -- 使用者與權限相關
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-CREATE INDEX IF NOT EXISTS idx_token_usage_logs_user_id ON token_usage_logs(user_id);
-CREATE INDEX IF NOT EXISTS idx_token_usage_logs_created_at ON token_usage_logs(created_at);
-CREATE INDEX IF NOT EXISTS idx_token_usage_logs_chat_id ON token_usage_logs(chat_id);
+-- token_usage_logs：同一 chat 可多列（每輪 LLM）；複合索引對齊熱點查詢
+--   (user_id, chat_id)        → 某使用者某一對話 SUM／GROUP BY model_name
+--   (user_id, created_at DESC)→ 某使用者時間區間報表、ORDER BY 時間
+--   (chat_id, created_at DESC)→ 某對話時間序明細（chat_id 可為 NULL 時略過索引匹配）
+--   (created_at DESC)         → 全站／管理端依時間掃描（搭配 LIMIT）
+CREATE INDEX IF NOT EXISTS idx_token_usage_logs_user_chat
+    ON token_usage_logs(user_id, chat_id);
+CREATE INDEX IF NOT EXISTS idx_token_usage_logs_user_created_at
+    ON token_usage_logs(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_token_usage_logs_chat_created_at
+    ON token_usage_logs(chat_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_token_usage_logs_created_at ON token_usage_logs(created_at DESC);
 
 -- 專案與對話 (最核心的查詢路徑)
 CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id);

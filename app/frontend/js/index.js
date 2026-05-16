@@ -1280,7 +1280,8 @@ async function loadChatHistoryIntoView(chatId) {
 function appendAssistantHistoryMessage(record) {
     const container = document.getElementById('chat-messages');
     const msgDiv = document.createElement('div');
-    msgDiv.className = 'message assistant';
+    // 須與串流 SSE 使用的 `message ai` 一致，否則 .ai .bubble 的 Markdown／列表樣式不會套用
+    msgDiv.className = 'message ai';
     if (record.id) msgDiv.dataset.messageId = record.id;
 
     const bubble = document.createElement('div');

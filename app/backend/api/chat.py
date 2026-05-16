@@ -19,7 +19,13 @@ from app.backend.module.chat_context import (
     rows_to_langchain_messages,
 )
 from app.backend.module.jwt import get_current_user, get_current_user_id
-from app.backend.module.token_usage import parse_usage_from_llm_message, record_token_usage
+from app.backend.module.token_usage import (
+    attach_token_usage_logs_to_message,
+    extract_model_label_from_lc_output,
+    log_token_usage_parse_shape,
+    parse_usage_from_llm_message,
+    record_token_usage,
+)
 
 router = APIRouter(tags=["Chat"])
 
@@ -50,6 +56,31 @@ agent_app = create_chat_agent()
 
 def _sse(event: str, data: Any) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _infer_llm_caller_from_event(event: Dict[str, Any], in_analyst: bool) -> str:
+    """
+    從 LangGraph / LangChain `astream_events` 推斷本輪 LLM 所屬節點（caller）。
+    優先 metadata.langgraph_node；其次 checkpoint_ns 前綴；tags；最後退回 in_analyst 旗標。
+    """
+    md = event.get("metadata")
+    if isinstance(md, dict):
+        node = md.get("langgraph_node")
+        if isinstance(node, str) and node.strip():
+            return node.strip().lower()[:50]
+        ckpt = md.get("checkpoint_ns")
+        if isinstance(ckpt, str) and ckpt.strip():
+            head = ckpt.split(":")[0].strip().lower()
+            if head:
+                return head[:50]
+    tags = event.get("tags")
+    if isinstance(tags, (list, tuple)):
+        for t in tags:
+            if isinstance(t, str) and t.strip():
+                tl = t.strip().lower()
+                if tl in ("router", "analyst"):
+                    return tl[:50]
+    return "analyst" if in_analyst else "router"
 
 
 def _make_placeholder_title(query: str) -> str:
@@ -560,7 +591,10 @@ async def get_ai_response(
         accumulated_final_analyst: dict = {}
         in_analyst = False
 
-        # Token 用量累積（在記憑體中累積，不在串流中寫 DB）
+        # 每次 on_chat_model_end 各寫一列 token_usage_logs；此列表收集 id，於 assistant INSERT 後繫結 message_id
+        pending_token_log_ids: List[UUID] = []
+
+        # Token 用量累積（僅供 TOKEN-DBG／除錯；配額由各輪 record_token_usage 累加）
         acc_prompt_tokens: int = 0
         acc_completion_tokens: int = 0
         acc_model_name: str = os.getenv("ANALYST_MODEL", "gpt-4o")
@@ -650,11 +684,12 @@ async def get_ai_response(
                             await event_queue.put(_sse("token", {"text": token}))
 
                 elif kind == "on_chat_model_end":
-                    # 收集每次 LLM call 的 token（Router + Analyst）；兼容 usage_metadata 與 token_usage
+                    # 每輪 LLM 結算：解析本輪 usage → INSERT token_usage_logs（並 UPSERT quotas）
                     output = data.get("output")
                     bp, bc = parse_usage_from_llm_message(output)
-                    acc_prompt_tokens += bp
-                    acc_completion_tokens += bc
+                    _md = event.get("metadata") or {}
+                    _mk = list(_md.keys())[:20] if isinstance(_md, dict) else None
+                    round_model = acc_model_name
                     resp_meta_raw = None
                     if isinstance(output, dict):
                         resp_meta_raw = output.get("response_metadata")
@@ -663,12 +698,42 @@ async def get_ai_response(
                     if isinstance(resp_meta_raw, dict):
                         model_from_resp = resp_meta_raw.get("model_name")
                         if model_from_resp:
-                            acc_model_name = model_from_resp
+                            round_model = model_from_resp
+                    inner_model = extract_model_label_from_lc_output(output)
+                    if inner_model:
+                        round_model = inner_model
+                    acc_model_name = round_model
+
+                    log_token_usage_parse_shape(
+                        event_name=name or "",
+                        batch_p=bp,
+                        batch_c=bc,
+                        model_label=round_model,
+                        output=output,
+                        tags=event.get("tags"),
+                        meta_keys=_mk,
+                    )
+                    acc_prompt_tokens += bp
+                    acc_completion_tokens += bc
                     print(
                         f"[TOKEN-DBG] on_chat_model_end: batch_p={bp} batch_c={bc} "
                         f"acc_p={acc_prompt_tokens} acc_c={acc_completion_tokens} "
-                        f"model={acc_model_name}"
+                        f"model={round_model}"
                     )
+
+                    caller_llm = _infer_llm_caller_from_event(event, in_analyst)
+                    if bp > 0 or bc > 0:
+                        log_id = await record_token_usage(
+                            user_id=current_user_id,
+                            chat_id=request.chat_id,
+                            message_id=None,
+                            model_name=round_model,
+                            prompt_tokens=bp,
+                            completion_tokens=bc,
+                            caller=caller_llm,
+                        )
+                        if log_id is not None:
+                            pending_token_log_ids.append(log_id)
 
             # 圖已執行完畢
             total_time = round(time.time() - start_total, 3)
@@ -704,16 +769,12 @@ async def get_ai_response(
                     "total_execution_time": total_time,
                 },
             )
-
-            # 寫入 Token 用量（全部跨完成後才一次性 commit，不卡 SSE 串流）
-            await record_token_usage(
-                user_id=current_user_id,
-                chat_id=request.chat_id,
-                message_id=assistant_message_id,
-                model_name=acc_model_name,
-                prompt_tokens=acc_prompt_tokens,
-                completion_tokens=acc_completion_tokens,
-            )
+            if assistant_message_id and pending_token_log_ids:
+                await attach_token_usage_logs_to_message(
+                    current_user_id,
+                    assistant_message_id,
+                    pending_token_log_ids,
+                )
 
             # Title 生成與儲存
             if title_task is not None:
@@ -756,12 +817,18 @@ async def get_ai_response(
             await event_queue.put(_sse("error", {"message": err_text}))
             
             # 發生錯誤也寫入 DB 以防資料丟失
-            await _insert_assistant_message(
+            err_assistant_id = await _insert_assistant_message(
                 chat_id=request.chat_id,
                 parent_id=user_message_id,
                 content=err_text,
                 metadata={"error": str(e)}
             )
+            if err_assistant_id and pending_token_log_ids:
+                await attach_token_usage_logs_to_message(
+                    current_user_id,
+                    err_assistant_id,
+                    pending_token_log_ids,
+                )
         finally:
             # 放一個 None 當作結束標記
             await event_queue.put(None)
