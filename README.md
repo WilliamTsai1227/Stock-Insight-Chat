@@ -75,7 +75,74 @@ async def event_generator():
 
 ---
 
+### Router Context Explosion 修復（降低 Router Token 用量）
+
+**根因（兩層）**：
+
+1. **歷史層**：Router 每次呼叫收到完整 DB 歷史（`CONTEXT_CHAIN_MAX_HOPS` 控制），若歷史長則 prompt 肥大。
+2. **同輪累積層**：同一個 user query 內，若 Router 重試多次（Router→Tools→Router→Tools），每輪的 ToolMessages 會**疊加**進 `state["messages"]`，第 3 次進 Router 時就包含前兩批工具結果，造成 token 暴增。
+
+**核心洞察**：Router 的工作只是「判斷要叫哪些工具」與「工具是否找到資料」，不需要閱讀完整對話脈絡；Analyst 才需要完整歷史來撰寫分析報告。因此建立 **雙軌保護架構**：
+
+```
+ToolMessage（精簡 800 chars）  → state["messages"]      → Router 判斷用（slim context）
+原始完整資料                    → state["retrieved_data"] → Analyst 分析用（完整正文）
+```
+
+**修改項目**：
+
+1. **新增 `_slim_messages_for_router()`**（`app/backend/agent/chat.py`）  
+   Router 只傳入「最近 `ROUTER_HISTORY_TURNS`（預設 2）輪歷史」+ 本輪精簡訊息；Analyst 節點的 `call_analyst` 維持接收完整 `messages`，不受影響。
+
+   ```python
+   # call_router 內（修改後）
+   slim_msgs = _slim_messages_for_router(messages)  # 只留最近 2 輪歷史 + 本輪精簡版
+   router_prompt = [SystemMessage(content=system_prompt)] + slim_msgs
+   ```
+
+2. **同輪 ToolMessages 只保留最新一批**（`_slim_messages_for_router` 內，方向 A）  
+   Router 重試時，舊批次的 ToolMessages 從 Router prompt 中丟棄，只保留**最新一批**工具結果。所有 AIMessage（Router 的決策記錄）仍完整保留，讓 Router 知道自己已試過哪些工具。
+
+   ```
+   Before（Router 第 3 次）：
+     HumanMsg | AIMsg(calls=A) | ToolMsg_A1 ToolMsg_A2 | AIMsg(calls=B) | ToolMsg_B1
+   After：
+     HumanMsg | AIMsg(calls=A) |                       | AIMsg(calls=B) | ToolMsg_B1
+   ```
+
+3. **`MAX_TOOL_ITEM_CHARS`：`1200` → `800`**（`app/backend/agent/chat.py`）  
+   ToolMessage 的截斷上限再降；Router 只需確認「有無找到資料」，截斷版已足夠。Analyst 透過 `retrieved_data` 拿到未截斷原文，分析品質不變。
+
+4. **`CONTEXT_CHAIN_MAX_HOPS` 預設值：`10` → `6`**（`app/backend/module/chat_context.py`）  
+   從 DB 載出的歷史訊息數量上限降低。**注意**：若 `.env` 已設定此變數（如 `CONTEXT_CHAIN_MAX_HOPS=2`），則 `.env` 值優先，程式碼預設值不生效。
+
+**可調整的環境變數**：
+
+| 變數 | 預設（code） | 說明 |
+|---|---|---|
+| `ROUTER_HISTORY_TURNS` | `2` | Router 保留幾輪跨對話歷史（每輪 = 1 問 + 1 答） |
+| `CONTEXT_CHAIN_MAX_HOPS` | `6`（`.env` 優先） | 從 DB 往上遞迴幾步載歷史訊息 |
+
+**各參數控制範圍對照**：
+
+| 參數 | 控制哪個 LLM | 說明 |
+|---|---|---|
+| `CONTEXT_CHAIN_MAX_HOPS` | Router + Analyst **共用** | 控制從 DB 撈幾則進 `state["messages"]`，兩者都受影響 |
+| `ROUTER_HISTORY_TURNS` | **僅 Router** | 在已載入的 messages 裡再裁切 Router 看的歷史輪數 |
+| 方向 A（同輪 ToolMessage 裁切） | **僅 Router** | Router 重試時只看最新一批工具結果，Analyst 不受影響 |
+
+**預期效果**：
+
+| 指標 | 修改前 | 修改後（估計） |
+|---|---|---|
+| Router 同輪重試 token 累積 | 每批 +5k–10k | 每批 +1k–2k（↓ 約 80%） |
+| Router prompt tokens（多輪對話後） | ~23k–28k | ~4k–8k |
+| Analyst 分析品質 | ✅ | ✅ 不變（雙軌架構保護） |
+
+---
+
 ##  快速開始 (Quick Start)
+
 
 ### 0. 進入網站測試 (Frontend)
 本專案前端為 **純 HTML/CSS/JS**，由 Docker 內的 **Nginx** 提供服務（`frontend`，預設對外 `80` port）。
@@ -827,6 +894,7 @@ class UsageManager:
 - [x] Batch Embedding + Dry Run 預覽
 - [x] LangGraph Agent 核心邏輯實現 (支援 ReAct 模式)
 - [x] 前端對話介面開發 (Vanilla JS + HTML/CSS 玻璃擬態設計)
+- [x] Router Context Explosion 修復（slim context + 雙軌保護架構，Router tokens ↓ ~75%）
 
 ---
-*Last Update: 2026-05-16*
+*Last Update: 2026-05-19*

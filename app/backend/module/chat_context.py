@@ -34,7 +34,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 #
 # 約略：約 5「輪」完整問答可將 max_hops 設成 9（10 則 = 5×2），或依 token 再縮。
 DEFAULT_CONTEXT_CHAIN_MAX_HOPS: int = int(
-    os.getenv("CONTEXT_CHAIN_MAX_HOPS", "10")
+    os.getenv("CONTEXT_CHAIN_MAX_HOPS", "6")  # 原為 10；6 = 約 3 輪完整問答
 )
 
 

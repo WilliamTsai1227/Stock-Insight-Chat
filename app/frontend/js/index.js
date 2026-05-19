@@ -1300,6 +1300,31 @@ function appendAssistantHistoryMessage(record) {
 }
 
 // ============================================================
+// 後端 API 錯誤文案對照（維持英文 detail，畫面顯示中文）
+// ============================================================
+
+const BACKEND_QUOTA_EXCEEDED_PREFIX = 'Monthly token quota exceeded';
+const QUOTA_EXCEEDED_UI_ZH =
+    '已達本月使用量上限，可升級為 Pro（中階版）或 Ultra（高級版）用戶，' +
+    '獲得更多 token 使用上限。';
+
+/**
+ * @param {number} httpStatus
+ * @param {string} detail
+ * @returns {string}
+ */
+function mapChatMessagesErrorForDisplay(httpStatus, detail) {
+    if (
+        httpStatus === 429 &&
+        typeof detail === 'string' &&
+        detail.startsWith(BACKEND_QUOTA_EXCEEDED_PREFIX)
+    ) {
+        return QUOTA_EXCEEDED_UI_ZH;
+    }
+    return detail;
+}
+
+// ============================================================
 // 核心：支援 SSE 串流的 sendMessage
 // ============================================================
 
@@ -1513,7 +1538,8 @@ async function sendMessage() {
                     detail = parts.join('；');
                 }
             } catch (_) { /* 非 JSON 或無 body */ }
-            throw new Error(detail);
+            const displayDetail = mapChatMessagesErrorForDisplay(response.status, detail);
+            throw new Error(displayDetail);
         }
         if (!response.body) throw new Error('瀏覽器不支援 Streaming');
 

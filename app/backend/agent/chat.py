@@ -80,7 +80,10 @@ def _format_retrieved_data_for_analyst(items: List[Dict[str, Any]]) -> str:
 
 # 預設檢索筆數與注入 Analyst 的單則字元上限（降低以加快回應速度）
 RETRIEVAL_TOP_K = 5
-MAX_TOOL_ITEM_CHARS = 1200
+# Router 看的 ToolMessage 字元上限（截斷版，判斷「有無資料」就夠）
+MAX_TOOL_ITEM_CHARS = 800
+# Router 歷史 slim context：只保留最近 N 輪的對話（每輪 = 1 問 + 1 答 = 2 則）
+ROUTER_HISTORY_TURNS = int(os.getenv("ROUTER_HISTORY_TURNS", "2"))
 
 # --- 1. 定義狀態 (State) ---
 class AgentState(TypedDict):
@@ -268,6 +271,69 @@ analyst_model = StreamUsageChatOpenAI(
 # 前 N 次進入 router 可綁定工具；自第 N+1 次起卸除工具強制收斂（N = 此常數）。
 ROUTER_MAX_CYCLES = 3
 
+
+def _slim_messages_for_router(
+    messages: List[BaseMessage],
+    history_turns: int = ROUTER_HISTORY_TURNS,
+) -> List[BaseMessage]:
+    """
+    為 Router 提供精簡版的對話上下文，大幅降低 prompt tokens。
+
+    Router 只需要：
+    1. 最近 history_turns 輪的歷史（每輪 = HumanMessage + AIMessage = 2 則）
+       讓 Router 知道對話主題，避免重複問相同問題
+    2. 當前輪次訊息，但只保留「最新一批 ToolMessages」：
+       - 所有 AIMessage 全部保留（Router 知道自己已試過哪些工具）
+       - 舊批次的 ToolMessages 丟棄（節省 token）
+       - 最後一個 AIMessage 之後的 ToolMessages 全部保留（最新結果）
+
+    Before（Router 第 3 次呼叫）：
+      HumanMsg | AIMsg(calls=A) | ToolMsg_A1 ToolMsg_A2 | AIMsg(calls=B) | ToolMsg_B1 ToolMsg_B2
+    After：
+      HumanMsg | AIMsg(calls=A) |                       | AIMsg(calls=B) | ToolMsg_B1 ToolMsg_B2
+
+    Analyst 永遠拿到完整 messages（此函式僅供 call_router 使用）。
+    """
+    # 找出最後一個 HumanMessage 的位置（= 本輪 user query）
+    last_human_idx = 0
+    for i, m in enumerate(messages):
+        if isinstance(m, HumanMessage):
+            last_human_idx = i
+
+    # 本輪訊息：從最後一則 HumanMessage 起
+    current_round = messages[last_human_idx:]
+
+    # 歷史訊息：最後一則 HumanMessage 以前的所有訊息
+    history = messages[:last_human_idx]
+
+    # 歷史只保留最近 N 輪（HumanMessage + AIMessage，忽略歷史中的 ToolMessage）
+    clean_history = [m for m in history if isinstance(m, (HumanMessage, AIMessage))]
+    slim_history = clean_history[-(history_turns * 2):] if clean_history else []
+
+    # ── 方向 A：當前輪只保留最新一批 ToolMessages ──
+    # 找出 current_round 中最後一個 AIMessage 的位置
+    last_ai_idx_in_round = -1
+    for i, m in enumerate(current_round):
+        if isinstance(m, AIMessage):
+            last_ai_idx_in_round = i
+
+    if last_ai_idx_in_round < 0:
+        # 本輪還沒有 AIMessage（第一次進 Router），直接使用完整 current_round
+        slim_current = current_round
+    else:
+        # 最後一個 AIMessage 之前：只保留非 ToolMessage（HumanMsg + 舊 AIMsg）
+        # 舊批次的 ToolMessages 全部丟掉，節省 token
+        pre_last_ai = [
+            m for m in current_round[:last_ai_idx_in_round]
+            if not isinstance(m, ToolMessage)
+        ]
+        # 最後一個 AIMessage 之後：完整保留（最新一批 ToolMessages 結果）
+        post_last_ai = current_round[last_ai_idx_in_round:]
+        slim_current = pre_last_ai + post_last_ai
+
+    return slim_history + slim_current
+
+
 # --- 3. 定義節點 (Nodes) ---
 
 async def call_router(state: AgentState):
@@ -340,7 +406,10 @@ async def call_router(state: AgentState):
         # 這裡我們將 Router 模型動態綁定選後的工具
         dynamic_router = router_model_base.bind_tools(current_tools_to_bind)
 
-    router_prompt = [SystemMessage(content=system_prompt)] + messages
+    # Router 使用精簡版 context：只看最近 ROUTER_HISTORY_TURNS 輪歷史 + 本輪訊息
+    # Analyst 節點仍使用完整 messages（見 call_analyst），不受此影響
+    slim_msgs = _slim_messages_for_router(messages)
+    router_prompt = [SystemMessage(content=system_prompt)] + slim_msgs
     response = await dynamic_router.ainvoke(router_prompt)
     
     execution_time = time.time() - start_time
