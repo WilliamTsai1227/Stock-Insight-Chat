@@ -116,28 +116,44 @@ ToolMessage（精簡 800 chars）  → state["messages"]      → Router 判斷�
 4. **`CONTEXT_CHAIN_MAX_HOPS` 預設值：`10` → `6`**（`app/backend/module/chat_context.py`）  
    從 DB 載出的歷史訊息數量上限降低。**注意**：若 `.env` 已設定此變數（如 `CONTEXT_CHAIN_MAX_HOPS=2`），則 `.env` 值優先，程式碼預設值不生效。
 
+5. **DB 歷史中的 Analyst 回答截斷**（`app/backend/module/chat_context.py`）— **實測後補強**  
+   即使 `CONTEXT_CHAIN_MAX_HOPS=2` 只載入 3 則歷史，每則 Analyst 報告本身就高達 10,000+ chars（~3000 tokens），仍會把後續 Router 基礎 prompt 拉高到 5000–6000 tokens。  
+   在 `rows_to_langchain_messages()` 中對 `assistant` 角色截斷至 `HISTORY_ASSISTANT_MAX_CHARS`（預設 800 chars ≈ 200 tokens）：  
+
+   ```python
+   # 修改後
+   if len(content) > HISTORY_ASSISTANT_MAX_CHARS:
+       content = content[:HISTORY_ASSISTANT_MAX_CHARS] + "\n\n…（舊對話已截斷）"
+   out.append(AIMessage(content=content))
+   ```
+
+   Router 與 Analyst 只需知道上一輪討論的主題即可；本輪 Analyst 的分析素材來自 `retrieved_data`（當輪新搜尋結果），不依賴舊報告內容，**分析品質不受影響**。
+
 **可調整的環境變數**：
 
 | 變數 | 預設（code） | 說明 |
 |---|---|---|
 | `ROUTER_HISTORY_TURNS` | `2` | Router 保留幾輪跨對話歷史（每輪 = 1 問 + 1 答） |
 | `CONTEXT_CHAIN_MAX_HOPS` | `6`（`.env` 優先） | 從 DB 往上遞迴幾步載歷史訊息 |
+| `HISTORY_ASSISTANT_MAX_CHARS` | `800` | DB 歷史中 Analyst 回答的截斷字元上限 |
 
 **各參數控制範圍對照**：
 
 | 參數 | 控制哪個 LLM | 說明 |
 |---|---|---|
 | `CONTEXT_CHAIN_MAX_HOPS` | Router + Analyst **共用** | 控制從 DB 撈幾則進 `state["messages"]`，兩者都受影響 |
+| `HISTORY_ASSISTANT_MAX_CHARS` | Router + Analyst **共用** | DB 歷史舊報告截斷，避免舊 Analyst 回答膨脹後續 prompt |
 | `ROUTER_HISTORY_TURNS` | **僅 Router** | 在已載入的 messages 裡再裁切 Router 看的歷史輪數 |
 | 方向 A（同輪 ToolMessage 裁切） | **僅 Router** | Router 重試時只看最新一批工具結果，Analyst 不受影響 |
 
-**預期效果**：
+**預期效果（含本次補強）**：
 
-| 指標 | 修改前 | 修改後（估計） |
+| 指標 | 優化前 | 優化後（估計） |
 |---|---|---|
-| Router 同輪重試 token 累積 | 每批 +5k–10k | 每批 +1k–2k（↓ 約 80%） |
-| Router prompt tokens（多輪對話後） | ~23k–28k | ~4k–8k |
-| Analyst 分析品質 | ✅ | ✅ 不變（雙軌架構保護） |
+| Router 第 1 次 prompt tokens（長對話） | ~6000 | ~2000（↓ ~67%，主因：舊報告截斷） |
+| Router 同輪重試 token 累積 | 每批 +5k–10k | 每批 +1k–2k（↓ 約 80%，主因：方向 A） |
+| Analyst prompt tokens | ~20k–43k | ~8k–15k |
+| Analyst 分析品質 | ✅ | ✅ 不變（retrieved_data 雙軌保護） |
 
 ---
 
@@ -161,17 +177,32 @@ ToolMessage（精簡 800 chars）  → state["messages"]      → Router 判斷�
 
 ### 1. 啟動基礎設施
 透過 Docker Compose 啟動 Qdrant 向量資料庫與 PostgreSQL（請在**專案根目錄**執行，即與 `./deploy/` 同層）：
+
 ```bash
+# 一般啟動（會沿用現有映像；若 Dockerfile 無變更就不會重做映像）
 docker-compose -f ./deploy/docker-compose.yml up -d
 ```
+
+若你希望**不依賴 build cache**，強迫從頭建置映像（例如懷疑某層仍是舊的，或確認後端有吃到最新程式）：
+
+```bash
+docker-compose -f ./deploy/docker-compose.yml build --no-cache
+docker-compose -f ./deploy/docker-compose.yml up -d
+```
+
+> **`up --build` 與 `build --no-cache` 的差別：** `docker-compose … up --build -d` 會在必要時重建映像，但**預設仍會使用 Docker 的 layer cache**。只有對 `build`（或等同的 `--no-cache` 選項）下 `--no-cache` 時，才不會套用快取的建置層。Compose 並沒有 `up … --no-catch`；正確拼法是 **`--no-cache`**，且為 `build` 子命令的選項。
 
 #### 常用 Docker Compose 指令速查
 ```bash
 # 啟動所有服務 (背景執行)
 docker-compose -f ./deploy/docker-compose.yml up -d
 
-# 重建並啟動所有服務 (程式碼有更新時使用)
+# 重建並啟動所有服務 (程式碼有更新時使用；仍會使用 build cache)
 docker-compose -f ./deploy/docker-compose.yml up --build -d
+
+# 不依 cache 強制重建映像後再起（等同上面兩行分開寫）
+docker-compose -f ./deploy/docker-compose.yml build --no-cache
+docker-compose -f ./deploy/docker-compose.yml up -d
 
 # 追蹤單一服務 logs
 docker-compose -f ./deploy/docker-compose.yml logs -f <service name>

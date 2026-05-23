@@ -37,6 +37,13 @@ DEFAULT_CONTEXT_CHAIN_MAX_HOPS: int = int(
     os.getenv("CONTEXT_CHAIN_MAX_HOPS", "6")  # 原為 10；6 = 約 3 輪完整問答
 )
 
+# 歷史中載入的 Analyst 回答截斷上限（字元數）
+# 對 Router 與 Analyst 而言，知道「上一輪討論的主題」就夠，不需要完整舊報告
+# 預設 800 chars ≈ 200 tokens，可透過環境變數 HISTORY_ASSISTANT_MAX_CHARS 覆蓋
+HISTORY_ASSISTANT_MAX_CHARS: int = int(
+    os.getenv("HISTORY_ASSISTANT_MAX_CHARS", "800")
+)
+
 
 async def fetch_ancestor_chain_rows(
     conn: asyncpg.Connection,
@@ -133,7 +140,14 @@ async def fetch_prior_context_for_agent(
 
 
 def rows_to_langchain_messages(rows: Sequence[Any]) -> List[BaseMessage]:
-    """將 DB 列轉成 LangChain 訊息（僅 user / assistant）。"""
+    """
+    將 DB 列轉成 LangChain 訊息（僅 user / assistant）。
+
+    assistant 訊息（Analyst 報告）截斷至 HISTORY_ASSISTANT_MAX_CHARS：
+    - Router 只需知道上輪討論主題，不需要完整舊報告
+    - Analyst 實際分析數據來自本輪新檢索的 retrieved_data，舊報告僅供主題對齊
+    - 載入完整舊報告會把每輪基礎 prompt 增加 ~5000 tokens，是 context explosion 主因
+    """
     out: List[BaseMessage] = []
     for r in rows:
         role = r["role"]
@@ -141,5 +155,11 @@ def rows_to_langchain_messages(rows: Sequence[Any]) -> List[BaseMessage]:
         if role == "user":
             out.append(HumanMessage(content=content))
         elif role == "assistant":
+            # 截斷舊報告：Router/Analyst 只需知道上一輪主題，不需完整舊內容
+            if len(content) > HISTORY_ASSISTANT_MAX_CHARS:
+                content = (
+                    content[:HISTORY_ASSISTANT_MAX_CHARS]
+                    + "\n\n…（舊對話已截斷，完整內容將於畫面上呼叫）"
+                )
             out.append(AIMessage(content=content))
     return out

@@ -80,10 +80,63 @@ def _format_retrieved_data_for_analyst(items: List[Dict[str, Any]]) -> str:
 
 # 預設檢索筆數與注入 Analyst 的單則字元上限（降低以加快回應速度）
 RETRIEVAL_TOP_K = 5
-# Router 看的 ToolMessage 字元上限（截斷版，判斷「有無資料」就夠）
-MAX_TOOL_ITEM_CHARS = 800
+# Router／工具回覆寫入 LLM 時，單一檢索片段字元上限（超過截斷；向量庫原文仍保存在 retrieved_data）
+MAX_TOOL_ITEM_CHARS = int(os.getenv("MAX_TOOL_ITEM_CHARS", "500"))
 # Router 歷史 slim context：只保留最近 N 輪的對話（每輪 = 1 問 + 1 答 = 2 則）
 ROUTER_HISTORY_TURNS = int(os.getenv("ROUTER_HISTORY_TURNS", "2"))
+
+
+def _strip_tool_calls_for_orphan_ai(m: BaseMessage) -> BaseMessage:
+    """
+    OpenAI Chat：若 AIMessage 帶 tool_calls，下一則必須是對應的 ToolMessage。
+    精簡本輪訊息時若已丟棄舊批 ToolMessage，必須一併清掉先前 AIMessage 的 tool_calls，
+    否則會 400 invalid_request_error（missing tool responses）。
+
+    僅建新 AIMessage(content=…) 不可靠：LC 會帶 residual tool_calls / additional_kwargs。
+    """
+    if not isinstance(m, AIMessage):
+        return m
+    tcalls = getattr(m, "tool_calls", None) or []
+    inv = getattr(m, "invalid_tool_calls", None) or []
+    ak = getattr(m, "additional_kwargs", None) or {}
+    has_shadow_tool = isinstance(ak, dict) and bool(
+        ak.get("tool_calls") or ak.get("function_call")
+    )
+    if not tcalls and not inv and not has_shadow_tool:
+        return m
+    new_kwargs: Dict[str, Any] = {}
+    if isinstance(ak, dict):
+        new_kwargs = {
+            k: v
+            for k, v in ak.items()
+            if k not in ("tool_calls", "function_call")
+        }
+    update_payload = {
+        "tool_calls": [],
+        "invalid_tool_calls": [],
+        "additional_kwargs": new_kwargs,
+    }
+    # Pydantic v2：`model_copy`；部分 LangChain / 復原來源的 AIMessage 可能沒有此法（環境漂移或序列化）。
+    dup = getattr(m, "model_copy", None)
+    if callable(dup):
+        return dup(update=update_payload)
+    # Pydantic v1 相容：`BaseModel.copy(update=…)`
+    legacy = getattr(m, "copy", None)
+    if callable(legacy):
+        try:
+            return legacy(update=update_payload)
+        except TypeError:
+            pass
+    # 最後手段：建新訊息（不把 tool_calls 殘留给 OpenAI）。
+    return AIMessage(
+        content=getattr(m, "content", "") or "",
+        additional_kwargs=dict(new_kwargs),
+        tool_calls=[],
+        invalid_tool_calls=[],
+        id=getattr(m, "id", None),
+        name=getattr(m, "name", None),
+        response_metadata=dict(getattr(m, "response_metadata", None) or {}),
+    )
 
 # --- 1. 定義狀態 (State) ---
 class AgentState(TypedDict):
@@ -292,7 +345,7 @@ def _slim_messages_for_router(
     After：
       HumanMsg | AIMsg(calls=A) |                       | AIMsg(calls=B) | ToolMsg_B1 ToolMsg_B2
 
-    Analyst 永遠拿到完整 messages（此函式僅供 call_router 使用）。
+    （Analyst 另見 `_analyst_turn_messages`：不依賴 ToolMessage 冗長摘要。）
     """
     # 找出最後一個 HumanMessage 的位置（= 本輪 user query）
     last_human_idx = 0
@@ -307,7 +360,11 @@ def _slim_messages_for_router(
     history = messages[:last_human_idx]
 
     # 歷史只保留最近 N 輪（HumanMessage + AIMessage，忽略歷史中的 ToolMessage）
-    clean_history = [m for m in history if isinstance(m, (HumanMessage, AIMessage))]
+    clean_history = [
+        _strip_tool_calls_for_orphan_ai(m)
+        for m in history
+        if isinstance(m, (HumanMessage, AIMessage))
+    ]
     slim_history = clean_history[-(history_turns * 2):] if clean_history else []
 
     # ── 方向 A：當前輪只保留最新一批 ToolMessages ──
@@ -321,10 +378,11 @@ def _slim_messages_for_router(
         # 本輪還沒有 AIMessage（第一次進 Router），直接使用完整 current_round
         slim_current = current_round
     else:
-        # 最後一個 AIMessage 之前：只保留非 ToolMessage（HumanMsg + 舊 AIMsg）
-        # 舊批次的 ToolMessages 全部丟掉，節省 token
+        # 最後一個 AIMessage 之前：丟棄舊批次 ToolMessages；若砍掉工具回覆，
+        # 必須把前面的 AIMessage 之 tool_calls 一併剝掉，否則 API 規格不符
         pre_last_ai = [
-            m for m in current_round[:last_ai_idx_in_round]
+            _strip_tool_calls_for_orphan_ai(m)
+            for m in current_round[:last_ai_idx_in_round]
             if not isinstance(m, ToolMessage)
         ]
         # 最後一個 AIMessage 之後：完整保留（最新一批 ToolMessages 結果）
@@ -332,6 +390,26 @@ def _slim_messages_for_router(
         slim_current = pre_last_ai + post_last_ai
 
     return slim_history + slim_current
+
+
+def _analyst_turn_messages(messages: List[BaseMessage]) -> List[BaseMessage]:
+    """
+    Analyst 請求不包含 ToolMessage 全文：檢索正文改由末尾【完整參考資料】提供（來自 retrieved_data，未套用 MAX_TOOL_ITEM_CHARS）。
+    略過 ToolMessage 時須對帶 tool_calls 的 AIMessage 剝除外掛呼叫，以免違反 OpenAI 「tool_calls 後須接 tool」規則。
+    """
+    out: List[BaseMessage] = []
+    for m in messages:
+        if isinstance(m, ToolMessage):
+            continue
+        if isinstance(m, AIMessage):
+            out.append(_strip_tool_calls_for_orphan_ai(m))
+        else:
+            out.append(m)
+    return out
+
+
+def _state_had_any_tool_messages(messages: List[BaseMessage]) -> bool:
+    return any(isinstance(m, ToolMessage) for m in messages)
 
 
 # --- 3. 定義節點 (Nodes) ---
@@ -407,7 +485,7 @@ async def call_router(state: AgentState):
         dynamic_router = router_model_base.bind_tools(current_tools_to_bind)
 
     # Router 使用精簡版 context：只看最近 ROUTER_HISTORY_TURNS 輪歷史 + 本輪訊息
-    # Analyst 節點仍使用完整 messages（見 call_analyst），不受此影響
+    # Analyst 另組訊息（見 call_analyst 的 `_analyst_turn_messages`）
     slim_msgs = _slim_messages_for_router(messages)
     router_prompt = [SystemMessage(content=system_prompt)] + slim_msgs
     response = await dynamic_router.ainvoke(router_prompt)
@@ -456,9 +534,9 @@ async def call_analyst(state: AgentState):
 
     analyst_prompt = f"""你是一位具備頂尖洞察力的資深分析師，擅長從碎片化的數據中提取最有價值的投資核心資訊。現在是 {current_now}。
 
-    **資料使用方式（必讀）**：對話歷史中的 Tool Message 為**精簡摘要**，僅用於對齊檢索流程。若本輪對話末附有系統訊息【完整參考資料】，其中為從向量庫取回的**未截斷原文**；撰寫報告、引用數據與細節時**務必以上述完整參考資料為準**，不可僅依摘要臆測。
+    **資料使用方式（必讀）**：本請求**不包含** Router 的工具回覆原文。若對話末尾附有系統訊息 **【完整參考資料】**，其中為向量庫取回的**完整正文（未對單片段做長度截斷）**。撰寫報告與數據引用時**務必以此為唯一依據**；對話中的人類提問與 Router 結語僅協助對齊意圖。若未附有【完整參考資料】但出現檢索狀態提示，代表本輪無可引用正文，請誠實說明資料不足，切勿臆撰行情或細節。
 
-    請將【完整參考資料】與 Tool Message 摘要共同理解後，轉化為一封「清晰、優雅且具備專業點評」的分析報告。
+    請在理解使用者問題後，將【完整參考資料】轉化為一封「清晰、優雅且具備專業點評」的分析報告。
     
     ### 撰寫規範：
     * **語意化結構**：請使用多級標題（如：## 市場核心觀察、### 關鍵標的追蹤），避免死板的 [1][2] 格式。
@@ -472,9 +550,14 @@ async def call_analyst(state: AgentState):
     tail: List[BaseMessage] = []
     if full_ref.strip():
         tail.append(SystemMessage(
-            content="【完整參考資料】（供撰寫報告，以下為未截斷檢索正文）\n\n" + full_ref
+            content="【完整參考資料】（供撰寫報告，以下為向量庫取回之完整正文，未套用 Router 側單片段字數截斷）\n\n" + full_ref
         ))
-    full_messages = [SystemMessage(content=analyst_prompt)] + messages + tail
+    elif _state_had_any_tool_messages(messages):
+        tail.append(SystemMessage(
+            content="【檢索狀態】本輪未寫入可引用之完整參考段落（資料庫可能無命中或結果未進入向量正文）。請依對話誠實說明資料缺口，切勿臆撰具體數據、股價或標的細節。"
+        ))
+    chat_turns = _analyst_turn_messages(messages)
+    full_messages = [SystemMessage(content=analyst_prompt)] + chat_turns + tail
 
     # 使用 astream 逐 chunk 累積，讓 astream_events 能在 analyst 節點期間
     # 發出 on_chat_model_stream 事件供 API 層轉發 token

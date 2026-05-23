@@ -49,7 +49,7 @@ async def search_news(
 ) -> Dict[str, Any]:
     """
     新聞工具 #1：Hybrid 檢索（dense 語意 + BM25 sparse，Qdrant RRF 融合）+ payload 過濾。
-    依 mongo_id 聚合、每組最多 2 chunks（與先前 search_groups 行為一致）。
+    依 mongo_id 聚合後，同一篇最多合併 `group_size` 個向量片段為一條結果（見下方 hybrid_rrf_grouped）。
     stock_code、keyword、stock_name 使用 should (OR) 邏輯，只要其中一個匹配即可。
     """
     start_time = time.time()
