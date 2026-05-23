@@ -136,6 +136,12 @@ ToolMessage（精簡 800 chars）  → state["messages"]      → Router 判斷�
 | `ROUTER_HISTORY_TURNS` | `2` | Router 保留幾輪跨對話歷史（每輪 = 1 問 + 1 答） |
 | `CONTEXT_CHAIN_MAX_HOPS` | `6`（`.env` 優先） | 從 DB 往上遞迴幾步載歷史訊息 |
 | `HISTORY_ASSISTANT_MAX_CHARS` | `800` | DB 歷史中 Analyst 回答的截斷字元上限 |
+| `FLASH_SKIP_ROUTER` | `1`（略過規劃 LLM） | 快捷：**`0`** 時會呼叫 Router（較慢，可細調檢索關鍵字） |
+| `FLASH_ANALYST_MODEL` | `gpt-5-mini` | 快捷模式 Analyst 用模型 |
+| `FLASH_ANALYST_MAX_TOKENS` | `2800` | 對應 API 的 **`max_completion_tokens`**。`gpt-5`／`gpt-5-mini` 會先消耗內部推理 token，數值過小時**可見正文可能只剩標題一二句**；設為空字串則不傳上限（較長但較慢） |
+| `FLASH_RETRIEVAL_TOP_K` | `10` | 快捷 **`search_news`** 每輪向量取回上限（思考模式仍用程式內 `RETRIEVAL_TOP_K`） |
+| `FLASH_REF_MAX_BODY_CHARS` | `2200` | 快捷注入 Analyst【完整參考資料】時每段正文長度上限 |
+| `FLASH_DATE_RANGE_DAYS` | `80` | 快捷 `search_stock_news` 預設 `start_date`／`end_date` 區間跨度（回溯天數） |
 
 **各參數控制範圍對照**：
 
@@ -252,6 +258,32 @@ MONGO_DB=stock_insight
 QDRANT_HOST=localhost
 QDRANT_PORT=6333
 ```
+
+#### 快捷模式（`response_mode: flash`）相關 `.env` 變數（選用）
+
+下列變數**僅影響快捷模式**；程式內皆已有預設值，**不必**為了啟用快捷而強制寫入 `.env`。只有當你要**覆寫**預設（換模型、調速度／品質權衡、改檢索區間等）時，再在專案根目錄的 `.env` 中新增即可。修改後請重啟後端（或重建容器）讓環境變數生效。
+
+**內建預設（與程式一致）** — 若你希望 `.env` 與目前程式預設對齊，可照下表填寫：
+
+| 變數 | 建議填入（= 目前程式預設） | 簡短說明 |
+|------|---------------------------|----------|
+| `FLASH_SKIP_ROUTER` | `1` | `1`＝略過 Router LLM（較快）；`0`＝啟動 Router 協助改寫檢索關鍵字（較慢） |
+| `FLASH_ANALYST_MODEL` | `gpt-5-mini` | 快捷模式 Analyst 使用的模型 |
+| `FLASH_ANALYST_MAX_TOKENS` | `2800` | 對應 **`max_completion_tokens`**。`gpt-5-mini` 等會先耗用推理 token，設太小會**只剩標題／半句可見正文**。**不設定**或**空白**＝不傳上限 |
+| `FLASH_RETRIEVAL_TOP_K` | `10` | **`search_news`（快捷）** 每輪取回筆數；思考模式不依此變數 |
+| `FLASH_REF_MAX_BODY_CHARS` | `2200` | 每段「參考正文」注入 Analyst【完整參考資料】前的截斷上限；字數愈少通常愈快 |
+| `FLASH_DATE_RANGE_DAYS` | `80` | 快捷兩工具預設 `start_date`／`end_date` 的回溯天數；不寫入時同樣為 `80` |
+
+> **為什麼回答只有一兩行？**  
+> `.env` 若仍是 **`FLASH_ANALYST_MAX_TOKENS=900`**（或其他過小數值），在 **`gpt-5-mini`** 上很常發生：**`max_completion_tokens` 多半先被內部推理用掉**，對使用者可見的段落幾乎寫不完，看起來像只有標題＋半截句子。請改 **`2800` 或以上**、或**刪除此變數／留空**讓程式用新預設或不設上限。
+
+**什麼時候才需要在 `.env` 加上述變數？**
+
+- **想換模型**：例如 `FLASH_ANALYST_MODEL=gpt-4o-mini`（以你帳號／供應商實際可用模型為準）。
+- **想要品質、可接受較慢**：例如 `FLASH_SKIP_ROUTER=0`、將 `FLASH_ANALYST_MAX_TOKENS` 調大、將 `FLASH_RETRIEVAL_TOP_K` 調大。
+- **想再壓低延遲**：例如略降 `FLASH_RETRIEVAL_TOP_K`、`FLASH_REF_MAX_BODY_CHARS`。（**請勿對 `gpt-5-mini`** 將 `FLASH_ANALYST_MAX_TOKENS` 設得過低，否則可見正文極易被截斷。）
+
+**結論**：不必為了「有預設值」而把整張表複製進 `.env`；依需求只覆寫少數鍵即可。其餘 Router／歷史載入相關變數仍見前文「可調整的環境變數」表格。
 
 ### 3. Python 環境安裝
 建議使用 **Python 3.11** 版本（Python 3.13 仍有套件相容性問題）：

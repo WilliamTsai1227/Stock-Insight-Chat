@@ -11,6 +11,22 @@ const MAX_PARKED_STAGING_CHATS = 8;
 
 let newChatComposeLock = false;
 
+/** localStorage：`thinking`（LangGraph）／`flash`（單輪新聞向量檢索） */
+const RESPONSE_MODE_STORAGE_KEY = 'sicChatResponseMode';
+/** 回覆模式：收合為短名，下拉為主標題 + 副行說明 */
+const RESPONSE_MODE_META = {
+    thinking: {
+        short: '思考',
+        subtitle: '搜尋執行時間較長，回覆較完整',
+    },
+    flash: {
+        short: '快捷',
+        subtitle: '搜尋執行時間較短，回覆較簡潔',
+    },
+};
+/** @type {'thinking' | 'flash'} */
+let chatResponseMode = 'flash';
+
 function getStreamStagingRoot() {
     let el = document.getElementById('stream-staging');
     if (!el) {
@@ -271,6 +287,121 @@ function renderMarkdown(raw) {
     return html;
 }
 
+function applyResponseModeLabel() {
+    const label = document.getElementById('response-mode-label');
+    if (!label) return;
+    const m = RESPONSE_MODE_META[chatResponseMode] || RESPONSE_MODE_META.flash;
+    label.textContent = m.short;
+    const btn = document.getElementById('response-mode-btn');
+    if (btn) {
+        btn.setAttribute('title', `${m.short}（${m.subtitle}）`);
+    }
+}
+
+/** 下拉選項：第一行標題 + 第二行輔助說明（單一資料來源） */
+function renderResponseModeMenuOptions() {
+    const menu = document.getElementById('response-mode-menu');
+    if (!menu) return;
+
+    menu.textContent = '';
+    /** @type {('thinking' | 'flash')[]} */
+    const order = ['thinking', 'flash'];
+    order.forEach((key) => {
+        const m = RESPONSE_MODE_META[key];
+        const li = document.createElement('li');
+        li.setAttribute('tabindex', '0');
+        li.setAttribute('role', 'option');
+        li.dataset.value = key;
+        li.className = 'response-mode-option';
+
+        const title = document.createElement('span');
+        title.className = 'response-mode-option-title';
+        title.textContent = m.short;
+
+        const desc = document.createElement('span');
+        desc.className = 'response-mode-option-desc';
+        desc.textContent = `（${m.subtitle}）`;
+
+        li.appendChild(title);
+        li.appendChild(desc);
+        menu.appendChild(li);
+    });
+}
+
+function syncResponseModeMenuSelection() {
+    const menu = document.getElementById('response-mode-menu');
+    if (!menu) return;
+    menu.querySelectorAll('.response-mode-option').forEach((li) => {
+        const v = li.getAttribute('data-value');
+        li.classList.toggle('selected', v === chatResponseMode);
+    });
+}
+
+/** 快捷模式僅檢索新聞向量庫，與「工具權限」無關；反灰並關閉選單。 */
+function syncToolSettingsWithResponseMode() {
+    const toggle = document.getElementById('tool-toggle-btn');
+    const popover = document.getElementById('tool-popover');
+    const wrap = document.querySelector('.chat-input-area .tool-settings');
+
+    const flash = chatResponseMode === 'flash';
+    if (wrap) wrap.classList.toggle('tool-settings--flash-lock', flash);
+
+    if (toggle) {
+        toggle.disabled = flash;
+        if (flash) toggle.setAttribute('aria-disabled', 'true');
+        else toggle.removeAttribute('aria-disabled');
+        toggle.setAttribute(
+            'title',
+            flash ? '快捷模式僅檢索新聞，無須調整工具' : '切換工具權限'
+        );
+    }
+    if (flash && popover) popover.classList.add('hidden');
+}
+
+function initResponseModeSelector() {
+    try {
+        const s = localStorage.getItem(RESPONSE_MODE_STORAGE_KEY);
+        if (s === 'flash' || s === 'thinking') chatResponseMode = s;
+    } catch (_) { /* noop */ }
+    renderResponseModeMenuOptions();
+    applyResponseModeLabel();
+    syncResponseModeMenuSelection();
+    syncToolSettingsWithResponseMode();
+
+    const btn = document.getElementById('response-mode-btn');
+    const menu = document.getElementById('response-mode-menu');
+    if (!btn || !menu) return;
+
+    menu.classList.add('hidden');
+    btn.setAttribute('aria-expanded', 'false');
+
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        syncResponseModeMenuSelection();
+        menu.classList.toggle('hidden');
+        btn.setAttribute('aria-expanded', String(!menu.classList.contains('hidden')));
+    });
+    menu.addEventListener('click', (e) => e.stopPropagation());
+
+    menu.querySelectorAll('.response-mode-option').forEach((li) => {
+        li.addEventListener('click', () => {
+            const v = li.getAttribute('data-value');
+            if (v !== 'flash' && v !== 'thinking') return;
+            chatResponseMode = v;
+            try {
+                localStorage.setItem(RESPONSE_MODE_STORAGE_KEY, v);
+            } catch (_) { /* noop */ }
+            applyResponseModeLabel();
+            syncResponseModeMenuSelection();
+            syncToolSettingsWithResponseMode();
+            menu.classList.add('hidden');
+            btn.setAttribute('aria-expanded', 'false');
+        });
+    });
+
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+}
+
 // --- 初始化 ---
 document.addEventListener('DOMContentLoaded', async () => {
     // 先渲染空白骨架（確保「新增專案」按鈕立刻可見）
@@ -316,14 +447,27 @@ function initEventListeners() {
 
     const toolToggle = document.getElementById('tool-toggle-btn');
     const toolPopover = document.getElementById('tool-popover');
-    if (toolToggle) {
+    if (toolToggle && toolPopover) {
         toolToggle.onclick = (e) => {
+            if (chatResponseMode === 'flash') {
+                e.preventDefault();
+                e.stopPropagation();
+                return;
+            }
             e.stopPropagation();
             toolPopover.classList.toggle('hidden');
         };
     }
-    document.addEventListener('click', () => toolPopover.classList.add('hidden'));
-    toolPopover.onclick = (e) => e.stopPropagation();
+    document.addEventListener('click', () => {
+        if (toolPopover) toolPopover.classList.add('hidden');
+        const rm = document.getElementById('response-mode-menu');
+        const rb = document.getElementById('response-mode-btn');
+        if (rm) rm.classList.add('hidden');
+        if (rb) rb.setAttribute('aria-expanded', 'false');
+    });
+    if (toolPopover) {
+        toolPopover.onclick = (e) => e.stopPropagation();
+    }
 
     const toolAuto = document.getElementById('tool-auto');
     const manualGroup = document.getElementById('manual-tools');
@@ -356,6 +500,8 @@ function initEventListeners() {
     });
 
     initMobileSidebar();
+
+    initResponseModeSelector();
 }
 
 // ============================================================
@@ -1521,7 +1667,8 @@ async function sendMessage() {
             body: JSON.stringify({
                 query,
                 chat_id: streamTargetChatId,   // 與發送瞬間鎖定，勿用 state.currentChatId（使用者可能 await 時已換對話）
-                agent_config: { enabled_tools }
+                agent_config: { enabled_tools },
+                response_mode: chatResponseMode === 'flash' ? 'flash' : 'thinking',
             })
         });
 

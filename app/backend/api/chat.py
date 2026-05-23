@@ -6,8 +6,8 @@ import asyncpg
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-from typing import List, Optional, Any, Dict
+from pydantic import BaseModel, Field
+from typing import List, Optional, Any, Dict, Literal
 from uuid import UUID
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
@@ -39,6 +39,10 @@ class MessageRequest(BaseModel):
     query: str
     chat_id: UUID                       # 必填：必須先呼叫 POST /api/chat 取得
     agent_config: Optional[AgentConfig] = None
+    response_mode: Literal["thinking", "flash"] = Field(
+        default="thinking",
+        description="thinking=LangGraph；flash=單輪新聞檢索（預設 top_k=10）+Analyst",
+    )
 
 
 class CreateChatRequest(BaseModel):
@@ -515,8 +519,10 @@ async def get_ai_response(
       tool_done    — 工具執行完畢
       token        — Analyst LLM 逐字輸出（只在 analyst 節點期間）
       title_update — 第一次訊息：LLM 產出正式 title 後 push 給前端動態更新
-      done         — 全部完成，含 steps / sources
+      done         — 全部完成，含 steps / sources（flash 時 payload 含 response_mode）
       error        — 例外
+
+    請求欄位 `response_mode`：`thinking`（預設）為 LangGraph 多輪；`flash` 為單輪新聞向量檢索 + Analyst。
 
     安全與 title 邏輯：
     - chat_id 必填；以 (id, user_id) 同時驗證 ownership，找不到回 404
@@ -837,8 +843,236 @@ async def get_ai_response(
             # 放一個 None 當作結束標記
             await event_queue.put(None)
 
+    async def background_flash_runner():
+        """快捷模式：預設略過 Router LLM（可 `FLASH_SKIP_ROUTER=0` 關閉）；
+        僅呼叫 `search_stock_news`（底層 `search_news`，預設每輪 top_k=`FLASH_RETRIEVAL_TOP_K`）；Analyst 用 `FLASH_ANALYST_MODEL`。"""
+        start_total = time.time()
+        accumulated_steps: list = []
+        accumulated_retrieved: list = []
+        pending_token_log_ids: List[UUID] = []
+        acc_prompt_tokens: int = 0
+        acc_completion_tokens: int = 0
+        acc_model_name: str = os.getenv("ANALYST_MODEL", "gpt-4o")
+
+        title_task: Optional[asyncio.Task] = (
+            asyncio.create_task(_generate_title_via_llm(request.query))
+            if should_generate_title else None
+        )
+
+        try:
+            from app.backend.agent.flash_pipeline import (
+                flash_router_phase,
+                flash_run_tools,
+                build_flash_analyst_messages,
+                flash_analyst_astream,
+            )
+
+            messages_lc = initial_state["messages"]
+
+            router_msg, normalized, router_trace_step, _ = await flash_router_phase(
+                messages_lc, clean_query
+            )
+            accumulated_steps.append(router_trace_step)
+            thought = router_trace_step.get("thought") or ""
+            if thought:
+                await event_queue.put(_sse("thinking", {"text": thought}))
+
+            bp_r, bc_r = parse_usage_from_llm_message(router_msg)
+            round_model_r = acc_model_name
+            resp_meta_r = getattr(router_msg, "response_metadata", None)
+            if isinstance(resp_meta_r, dict) and resp_meta_r.get("model_name"):
+                round_model_r = str(resp_meta_r["model_name"])
+            inner_r = extract_model_label_from_lc_output(router_msg)
+            if inner_r:
+                round_model_r = inner_r
+            acc_model_name = round_model_r
+            acc_prompt_tokens += bp_r
+            acc_completion_tokens += bc_r
+            log_token_usage_parse_shape(
+                event_name="flash_router",
+                batch_p=bp_r,
+                batch_c=bc_r,
+                model_label=round_model_r,
+                output=router_msg,
+                tags=None,
+                meta_keys=None,
+            )
+            if bp_r > 0 or bc_r > 0:
+                log_id = await record_token_usage(
+                    user_id=current_user_id,
+                    chat_id=request.chat_id,
+                    message_id=None,
+                    model_name=round_model_r,
+                    prompt_tokens=bp_r,
+                    completion_tokens=bc_r,
+                    caller="router",
+                )
+                if log_id is not None:
+                    pending_token_log_ids.append(log_id)
+
+            for tc in normalized:
+                args = tc.get("args") or {}
+                await event_queue.put(_sse("tool_start", {
+                    "tool": tc.get("name", ""),
+                    "query": args.get("query"),
+                }))
+
+            accumulated_retrieved = await flash_run_tools(normalized)
+
+            for tc in normalized:
+                await event_queue.put(_sse("tool_done", {"tool": tc.get("name", "unknown")}))
+
+            full_messages = build_flash_analyst_messages(messages_lc, accumulated_retrieved)
+            final_content = ""
+            t_an = time.time()
+            last_chunk = None
+            async for chunk in flash_analyst_astream(full_messages):
+                last_chunk = chunk
+                tok = chunk.content or ""
+                if tok:
+                    final_content += tok
+                    await event_queue.put(_sse("token", {"text": tok}))
+
+            analyst_elapsed = round(time.time() - t_an, 3)
+            accumulated_steps.append({
+                "node": "analyst",
+                "execution_time": analyst_elapsed,
+                "content": final_content,
+                "mode": "flash",
+            })
+
+            bp_a, bc_a = parse_usage_from_llm_message(last_chunk)
+            round_model_a = acc_model_name
+            resp_meta_a = getattr(last_chunk, "response_metadata", None) if last_chunk else None
+            if isinstance(resp_meta_a, dict) and resp_meta_a.get("model_name"):
+                round_model_a = str(resp_meta_a["model_name"])
+            inner_a = extract_model_label_from_lc_output(last_chunk)
+            if inner_a:
+                round_model_a = inner_a
+            acc_model_name = round_model_a
+            acc_prompt_tokens += bp_a
+            acc_completion_tokens += bc_a
+            log_token_usage_parse_shape(
+                event_name="flash_analyst",
+                batch_p=bp_a,
+                batch_c=bc_a,
+                model_label=round_model_a,
+                output=last_chunk,
+                tags=None,
+                meta_keys=None,
+            )
+            if bp_a > 0 or bc_a > 0:
+                log_id = await record_token_usage(
+                    user_id=current_user_id,
+                    chat_id=request.chat_id,
+                    message_id=None,
+                    model_name=round_model_a,
+                    prompt_tokens=bp_a,
+                    completion_tokens=bc_a,
+                    caller="analyst",
+                )
+                if log_id is not None:
+                    pending_token_log_ids.append(log_id)
+
+            total_time = round(time.time() - start_total, 3)
+            retrieval_sources = [
+                {
+                    "tool": item.get("source_tool"),
+                    "title": item.get("title"),
+                    "publishAt": item.get("publishAt"),
+                    "url": item.get("url"),
+                    "mongo_id": item.get("mongo_id"),
+                    "content_preview": item.get("content", "")[:100] + "...",
+                }
+                for item in accumulated_retrieved
+            ]
+            await event_queue.put(_sse("done", {
+                "status": "success",
+                "chat_id": chat_id_str,
+                "total_execution_time": total_time,
+                "steps": accumulated_steps,
+                "final_content": final_content,
+                "retrieval_sources": retrieval_sources,
+                "response_mode": "flash",
+            }))
+
+            assistant_message_id = await _insert_assistant_message(
+                chat_id=request.chat_id,
+                parent_id=user_message_id,
+                content=final_content,
+                context_refs=retrieval_sources if retrieval_sources else None,
+                metadata={
+                    "steps": accumulated_steps,
+                    "total_execution_time": total_time,
+                    "response_mode": "flash",
+                },
+            )
+            if assistant_message_id and pending_token_log_ids:
+                await attach_token_usage_logs_to_message(
+                    current_user_id,
+                    assistant_message_id,
+                    pending_token_log_ids,
+                )
+
+            if title_task is not None:
+                try:
+                    new_title = await asyncio.wait_for(title_task, timeout=3.0)
+                except asyncio.TimeoutError:
+                    print(f"[TITLE] task timeout (>3s), chat_id={chat_id_str}")
+                    new_title = None
+                except Exception as e:
+                    print(f"[TITLE] task raised: {type(e).__name__}: {e}, chat_id={chat_id_str}")
+                    new_title = None
+
+                if new_title:
+                    try:
+                        async with get_pool().acquire() as conn:
+                            await conn.execute(
+                                """
+                                UPDATE chats
+                                SET title = $1, title_generated = TRUE
+                                WHERE id = $2
+                                """,
+                                new_title,
+                                request.chat_id,
+                            )
+                        print(f"[TITLE] UPDATE ok, chat_id={chat_id_str}, title={new_title!r}")
+                        await event_queue.put(_sse("title_update", {
+                            "chat_id": chat_id_str,
+                            "title": new_title,
+                        }))
+                    except Exception as e:
+                        print(f"[TITLE] UPDATE failed, chat_id={chat_id_str}: {type(e).__name__}: {e}")
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            if title_task is not None and not title_task.done():
+                title_task.cancel()
+
+            err_text = f"Agent 執行失敗: {str(e)}"
+            await event_queue.put(_sse("error", {"message": err_text}))
+
+            err_assistant_id = await _insert_assistant_message(
+                chat_id=request.chat_id,
+                parent_id=user_message_id,
+                content=err_text,
+                metadata={"error": str(e), "response_mode": "flash"},
+            )
+            if err_assistant_id and pending_token_log_ids:
+                await attach_token_usage_logs_to_message(
+                    current_user_id,
+                    err_assistant_id,
+                    pending_token_log_ids,
+                )
+        finally:
+            await event_queue.put(None)
+
     # 啟動背景生產者任務
-    asyncio.create_task(background_agent_runner())
+    if request.response_mode == "flash":
+        asyncio.create_task(background_flash_runner())
+    else:
+        asyncio.create_task(background_agent_runner())
 
     # 2. 消費者 (SSE Generator)：只負責從信箱拿信，就算斷線被 Cancelled，也不會影響 background_agent_runner
     async def event_generator():

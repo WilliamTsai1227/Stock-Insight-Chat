@@ -176,6 +176,13 @@
                         </div>
                     </div>
                     <textarea id="user-input" placeholder="問問台積電的供應商風險..." rows="1"></textarea>
+                    <div class="response-mode-wrap">
+                        <button type="button" id="response-mode-btn" class="response-mode-btn" aria-haspopup="listbox" aria-expanded="false" title="快捷（搜尋執行時間較短，回覆較簡潔）">
+                            <span id="response-mode-label">快捷</span>
+                            <i data-lucide="chevron-down" class="response-mode-chevron"></i>
+                        </button>
+                        <ul id="response-mode-menu" class="response-mode-menu hidden" role="listbox"></ul>
+                    </div>
                     <button id="send-btn" class="send-btn">
                         <i data-lucide="arrow-up"></i>
                     </button>

@@ -1,12 +1,13 @@
 import os
 import time
 import asyncio
-from typing import TypedDict, Annotated, List, Tuple, Union, Dict, Any
+from typing import TypedDict, Annotated, List, Tuple, Union, Dict, Any, Optional
 from datetime import datetime
 from dotenv import load_dotenv
 
 from langchain_openai import OpenAIEmbeddings
 
+from app.backend.agent.prompts import build_analyst_system_prompt, build_router_system_prompt
 from app.backend.agent.stream_usage_chat_openai import StreamUsageChatOpenAI
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage, SystemMessage
 from langchain_core.tools import tool
@@ -37,7 +38,11 @@ def _clip_for_llm(text: str, max_chars: int) -> str:
     return t[: max_chars - 1] + "…"
 
 
-def _format_retrieved_data_for_analyst(items: List[Dict[str, Any]]) -> str:
+def _format_retrieved_data_for_analyst(
+    items: List[Dict[str, Any]],
+    *,
+    max_body_chars: Optional[int] = None,
+) -> str:
     """
     將 state['retrieved_data'] 轉成 Analyst 專用、未截斷正文的參考區塊。
     （Router 仍只經由 ToolMessage 讀取 _clip_for_llm 後的摘要。）
@@ -49,6 +54,8 @@ def _format_retrieved_data_for_analyst(items: List[Dict[str, Any]]) -> str:
         st = it.get("source_tool") or "unknown"
         title = it.get("title") or "（無標題）"
         body = str(it.get("content", "") or "").strip()
+        if max_body_chars is not None and len(body) > max_body_chars:
+            body = body[: max_body_chars - 1] + "…"
         lines: List[str] = [f"### [{i}] 來源: {st} ｜ {title}"]
 
         if st == "news":
@@ -307,17 +314,39 @@ tools = [search_stock_news, search_market_ai_analysis, get_market_recommendation
 _OPENAI_STREAM_OPTS: Dict[str, Any] = {"stream_options": {"include_usage": True}}
 
 # --- 模型配置 ---
-# 1. 導航模型 (Router): 速度快、工具調用準確
+# 1. 導航模型 (Router): 速度快、工具調用準確（搭配 LangGraph / astream_events 串流）
 router_model_base = StreamUsageChatOpenAI(
     model="gpt-5-mini",
     temperature=1,
     model_kwargs=_OPENAI_STREAM_OPTS,
+)
+# Flash 快捷模式：單次 `ainvoke` 非串流；OpenAI 不允許在非 stream 請求帶 `stream_options`
+flash_router_model = StreamUsageChatOpenAI(
+    model="gpt-5-mini",
+    temperature=1,
+    model_kwargs={},
 )
 # 2. 分析模型 (Analyst): 深度思考、文筆詳盡
 analyst_model = StreamUsageChatOpenAI(
     model="gpt-5",
     temperature=1,
     model_kwargs=_OPENAI_STREAM_OPTS,
+)
+# 快捷模式專用：`gpt-5` 等新模型不接受 `max_tokens`，須改用 `max_completion_tokens`
+# （置於 model_kwargs；環境變數名仍為 FLASH_ANALYST_MAX_TOKENS）
+_FLASH_ANALYST_MODEL = os.getenv("FLASH_ANALYST_MODEL", "gpt-5-mini").strip()
+_flash_an_kw: Dict[str, Any] = dict(_OPENAI_STREAM_OPTS)
+_mx = os.getenv("FLASH_ANALYST_MAX_TOKENS", "5000").strip()
+if _mx:
+    try:
+        _flash_an_kw["max_completion_tokens"] = int(_mx)
+    except ValueError:
+        pass
+
+flash_analyst_model = StreamUsageChatOpenAI(
+    model=_FLASH_ANALYST_MODEL,
+    temperature=1,
+    model_kwargs=_flash_an_kw,
 )
 
 # Router / 檢索反覆上限（與 trace 裡 node=="router" 筆數對齊）
@@ -432,39 +461,7 @@ async def call_router(state: AgentState):
     # 如果前端傳入的清單有合法項，就以該清單為主；否則全開
     target_tools = valid_enabled if valid_enabled else all_tool_names
     
-    system_prompt = f"""你是一個專業股市助理。當前提問時間為：{current_now}。
-你的任務是判斷應調用哪些工具來回答問題。
-
-[重要執行指令 - 必讀]
-1. **嚴禁憑空回答**：對於任何涉及具體標的、公司名單、產業趨勢的問題，你「絕對不得」僅憑內部記憶回答。
-2. **數據優先**：你必須透過工具來獲得最新且具備來源證明的資料。
-3. **工具導向**：如果使用者指定了工具 (目前可用：{', '.join(target_tools)})，代表使用者只信任這些來源。你必須從中選擇最相關的工具來執行，以獲取資訊。
-4. **回覆策略**：只有在「執行完工具並拿到資料後」，你才可以在下一個階段進行分析。在 Router 階段，你的首要任務是「去查資料」。
-5. **嚴禁產出總結**：當你認為已經搜集夠多資料，決定不要呼叫任何工具時，你「絕對不要」在回覆中自己撰寫任何新聞摘要、報告或整理。你只需簡單回覆一句：「資料已備齊，交給 Analyst 進行分析」即可。這非常關鍵！
-
-[時間規範]
-- 只要提到「最近」、「最新」或「這週」，請統一計算為「過去 14 天」並填入 start_date。
-
-[精準過濾指引 - 善用進階參數]
-- 若使用者提及**特定股票或公司名稱**（如「國巨」、「勤誠」、「台積電」），使用 search_stock_news 時請**同時**填入 stock_code 和 keyword 參數。
-  例如查詢國巨：stock_code="2327", keyword="國巨", stock_name="國巨"。
-  這三個參數以 OR 邏輯匹配，只要其中一個命中即可，能最大化搜尋命中率。
-  常見代碼：台積電="2330"、鴻海="2317"、聯發科="2454"、台達電="2308"、國巨="2327"。
-- 若使用者僅關心「台股」相關，使用 search_stock_news 時可設定 news_type="台股新聞"；若關心國際局勢則填 "國際新聞"。
-- 若使用者詢問「利空消息」或「負面新聞」，使用 search_market_ai_analysis 時請設定 sentiment="negative"；反之「利多」設定 sentiment="positive"。
-- 若使用者指定產業（如「半導體」、「能源」、「房地產」），使用 search_market_ai_analysis 時請填入 industry 參數，如 industry="半導體"。
-- 上述進階參數皆為可選，只在使用者提問明確對應時才填入，不要強制猜測。
-
-[空結果重試策略 - 極重要]
-當你看到工具回傳的 Tool Message 包含「找不到」、「找不到相關新聞」、「找不到相關的 AI 分析報告」或「找不到推薦資訊」等空結果時，你「不得」直接回覆使用者或提供選項。你必須按照以下策略自動重試：
-1. **擴大時間範圍**：將 start_date 往前推至 90 天或更久。
-2. **切換新聞類型**：若 news_type 為「台股新聞」，試改為「國際新聞」，反之亦然。也可嘗試不帶 news_type。
-3. **更換關鍵字**：嘗試用英文名稱（如「Yageo」代替「國巨」）、公司全稱、或更廣泛的產業關鍵字。
-4. **放寬過濾條件**：移除 stock_code、sentiment、industry 等限制條件重試。
-5. **嘗試其他工具**：若某個工具無結果，改用另一個工具搜尋。
-
-每次重試至少嘗試 2-3 個不同策略（可同時並行呼叫多個工具）。只有在所有合理策略都已嘗試過但仍無結果時，才可以停止搜尋並告知使用者目前資料庫中確實沒有相關資料。
-"""
+    system_prompt = build_router_system_prompt(current_now, target_tools)
     
     # 核心修正：動態挑選工具物件實體，進行硬性綁定
     # 從 tools 全域變數中，找出名稱符合 target_tools 的物件
@@ -532,20 +529,7 @@ async def call_analyst(state: AgentState):
     messages = state["messages"]
     current_now = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    analyst_prompt = f"""你是一位具備頂尖洞察力的資深分析師，擅長從碎片化的數據中提取最有價值的投資核心資訊。現在是 {current_now}。
-
-    **資料使用方式（必讀）**：本請求**不包含** Router 的工具回覆原文。若對話末尾附有系統訊息 **【完整參考資料】**，其中為向量庫取回的**完整正文（未對單片段做長度截斷）**。撰寫報告與數據引用時**務必以此為唯一依據**；對話中的人類提問與 Router 結語僅協助對齊意圖。若未附有【完整參考資料】但出現檢索狀態提示，代表本輪無可引用正文，請誠實說明資料不足，切勿臆撰行情或細節。
-
-    請在理解使用者問題後，將【完整參考資料】轉化為一封「清晰、優雅且具備專業點評」的分析報告。
-    
-    ### 撰寫規範：
-    * **語意化結構**：請使用多級標題（如：## 市場核心觀察、### 關鍵標的追蹤），避免死板的 [1][2] 格式。
-    * **數據強調**：對於重要的「日期、股價、成長率、股票代碼」，請務必使用 **粗體** 標註。
-    * **深度合成**：將多來源資訊進行交叉驗證與點評，解釋其對投資者的實質意義與潛在風險。
-    * **標的清單**：請在報告末尾優雅地列出提到的股票或產業，並附上入選理由。
-    * **語氣風格**：流暢、專業且友善的繁體中文。
-    * **細節**：如有數據，像是股價、漲跌幅、成交量等，任何數據請務必列出。
-    """
+    analyst_prompt = build_analyst_system_prompt(current_now)
     full_ref = _format_retrieved_data_for_analyst(state.get("retrieved_data", []))
     tail: List[BaseMessage] = []
     if full_ref.strip():
@@ -587,9 +571,11 @@ async def call_analyst(state: AgentState):
     
     return {"messages": [response], "trace": trace}
 
-async def call_tools(state: AgentState):
-    """執行工具呼叫節點 (v3: 並行執行 + Embedding 快取)"""
+async def call_tools(state: AgentState, *, retrieval_top_k: Optional[int] = None):
+    """執行工具呼叫節點 (v3: 並行執行 + Embedding 快取)。
+    retrieval_top_k：快捷模式傳較小值可縮短向量查詢時間與上下文。"""
     last_message = state["messages"][-1]
+    top_k_eff = retrieval_top_k if retrieval_top_k is not None else RETRIEVAL_TOP_K
 
     # 🆕 P4: 統一建立 Embedding 實例 + 快取，避免重複 API 呼叫
     emb = _get_shared_embeddings()
@@ -612,7 +598,7 @@ async def call_tools(state: AgentState):
                 query=query_text,
                 query_embedding=(await get_cached_embedding(query_text)),
                 chat_id="api_call",
-                top_k=RETRIEVAL_TOP_K,
+                top_k=top_k_eff,
                 start_date=args.get("start_date"),
                 end_date=args.get("end_date"),
                 stock_code=args.get("stock_code"),
@@ -637,7 +623,7 @@ async def call_tools(state: AgentState):
                 query=query_text,
                 query_embedding=(await get_cached_embedding(query_text)),
                 chat_id="api_call",
-                top_k=RETRIEVAL_TOP_K,
+                top_k=top_k_eff,
                 start_date=args.get("start_date"),
                 end_date=args.get("end_date"),
                 sentiment=args.get("sentiment"),
@@ -667,7 +653,7 @@ async def call_tools(state: AgentState):
                 query_embedding=(await get_cached_embedding("推薦股票與強勢產業")),
                 start_date=args.get("start_date"),
                 end_date=args.get("end_date"),
-                top_k=RETRIEVAL_TOP_K,
+                top_k=top_k_eff,
             )
             lines = []
             if raw_result.get("stocks"):
