@@ -326,6 +326,21 @@ flash_router_model = StreamUsageChatOpenAI(
     temperature=1,
     model_kwargs={},
 )
+
+# Flash 前置「檢索用問句整理」：`ainvoke` 非串流，禁 `stream_options`；宜用小型／廉價模型減輕成本與延遲
+_FLASH_REWRITE_MODEL = os.getenv("FLASH_REWRITE_MODEL", "gpt-4o-mini").strip()
+_flash_rewrite_kw: Dict[str, Any] = {}
+_fr_mx = os.getenv("FLASH_REWRITE_MAX_COMPLETION_TOKENS", "256").strip()
+if _fr_mx:
+    try:
+        _flash_rewrite_kw["max_completion_tokens"] = int(_fr_mx)
+    except ValueError:
+        pass
+flash_rewrite_model = StreamUsageChatOpenAI(
+    model=_FLASH_REWRITE_MODEL,
+    temperature=0,
+    model_kwargs=_flash_rewrite_kw,
+)
 # 2. 分析模型 (Analyst): 深度思考、文筆詳盡
 analyst_model = StreamUsageChatOpenAI(
     model="gpt-5",

@@ -844,8 +844,9 @@ async def get_ai_response(
             await event_queue.put(None)
 
     async def background_flash_runner():
-        """快捷模式：預設略過 Router LLM（可 `FLASH_SKIP_ROUTER=0` 關閉）；
-        僅呼叫 `search_stock_news`（底層 `search_news`，預設每輪 top_k=`FLASH_RETRIEVAL_TOP_K`）；Analyst 用 `FLASH_ANALYST_MODEL`。"""
+        """快捷模式：`flash_plan_and_retrieve`（預設略過 Router；
+        可 `FLASH_SKIP_ROUTER=0`／`FLASH_LLM_QUERY_REWRITE=1` 等調整）。
+        Analyst 見 `FLASH_ANALYST_MODEL`。"""
         start_total = time.time()
         accumulated_steps: list = []
         accumulated_retrieved: list = []
@@ -861,17 +862,16 @@ async def get_ai_response(
 
         try:
             from app.backend.agent.flash_pipeline import (
-                flash_router_phase,
-                flash_run_tools,
+                flash_plan_and_retrieve,
                 build_flash_analyst_messages,
                 flash_analyst_astream,
             )
 
             messages_lc = initial_state["messages"]
 
-            router_msg, normalized, router_trace_step, _ = await flash_router_phase(
-                messages_lc, clean_query
-            )
+            flash_out = await flash_plan_and_retrieve(messages_lc, clean_query)
+            router_msg = flash_out.router_msg
+            router_trace_step = flash_out.router_trace_steps[0]
             accumulated_steps.append(router_trace_step)
             thought = router_trace_step.get("thought") or ""
             if thought:
@@ -910,16 +910,51 @@ async def get_ai_response(
                 if log_id is not None:
                     pending_token_log_ids.append(log_id)
 
-            for tc in normalized:
+            rew_msg = flash_out.rewrite_message
+            if rew_msg is not None:
+                bp_rw, bc_rw = parse_usage_from_llm_message(rew_msg)
+                round_model_rw = acc_model_name
+                resp_meta_rw = getattr(rew_msg, "response_metadata", None)
+                if isinstance(resp_meta_rw, dict) and resp_meta_rw.get("model_name"):
+                    round_model_rw = str(resp_meta_rw["model_name"])
+                inner_rw = extract_model_label_from_lc_output(rew_msg)
+                if inner_rw:
+                    round_model_rw = inner_rw
+                acc_model_name = round_model_rw
+                acc_prompt_tokens += bp_rw
+                acc_completion_tokens += bc_rw
+                log_token_usage_parse_shape(
+                    event_name="flash_query_rewrite",
+                    batch_p=bp_rw,
+                    batch_c=bc_rw,
+                    model_label=round_model_rw,
+                    output=rew_msg,
+                    tags=None,
+                    meta_keys=None,
+                )
+                if bp_rw > 0 or bc_rw > 0:
+                    log_id = await record_token_usage(
+                        user_id=current_user_id,
+                        chat_id=request.chat_id,
+                        message_id=None,
+                        model_name=round_model_rw,
+                        prompt_tokens=bp_rw,
+                        completion_tokens=bc_rw,
+                        caller="flash_query_rewrite",
+                    )
+                    if log_id is not None:
+                        pending_token_log_ids.append(log_id)
+
+            for tc in flash_out.sse_tool_specs:
                 args = tc.get("args") or {}
                 await event_queue.put(_sse("tool_start", {
                     "tool": tc.get("name", ""),
                     "query": args.get("query"),
                 }))
 
-            accumulated_retrieved = await flash_run_tools(normalized)
+            accumulated_retrieved = flash_out.retrieved_data
 
-            for tc in normalized:
+            for tc in flash_out.sse_tool_specs:
                 await event_queue.put(_sse("tool_done", {"tool": tc.get("name", "unknown")}))
 
             full_messages = build_flash_analyst_messages(messages_lc, accumulated_retrieved)

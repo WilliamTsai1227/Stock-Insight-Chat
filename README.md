@@ -142,6 +142,12 @@ ToolMessage（精簡 800 chars）  → state["messages"]      → Router 判斷�
 | `FLASH_RETRIEVAL_TOP_K` | `10` | 快捷 **`search_news`** 每輪向量取回上限（思考模式仍用程式內 `RETRIEVAL_TOP_K`） |
 | `FLASH_REF_MAX_BODY_CHARS` | `2200` | 快捷注入 Analyst【完整參考資料】時每段正文長度上限 |
 | `FLASH_DATE_RANGE_DAYS` | `80` | 快捷 `search_stock_news` 預設 `start_date`／`end_date` 區間跨度（回溯天數） |
+| `FLASH_LLM_QUERY_REWRITE` | `0` | 快捷：`1` 時在檢索前用小模型（`FLASH_REWRITE_MODEL`）將使用者問句收成檢索用 query（JSON）。預設關閉以免額外延遲／成本 |
+| `FLASH_REWRITE_DUAL_SEARCH` | `1` | 與 `FLASH_LLM_QUERY_REWRITE=1` 時：`1`＝原文與改寫結果**各搜一次並合併去重**（牆鐘時間通常接近兩次檢索中較慢者）；`0`＝僅依改寫結果搜一次 |
+| `FLASH_REWRITE_MODEL` | `gpt-4o-mini` | 問句收成用模型 ID（請以你環境可用者為準） |
+| `FLASH_REWRITE_MAX_COMPLETION_TOKENS` | `256` | 改寫請求的 `max_completion_tokens`（宜小以降低延遲） |
+| `FLASH_REWRITE_TIMEOUT_SEC` | `12` | 改寫 LLM 逾時秒數；逾時時並行模式下仍會完成原版向量搜尋，改寫第二軌視同略過 |
+| `FLASH_MERGED_RETRIEVE_CAP` | `max(k×2,16)`，`k`= `FLASH_RETRIEVAL_TOP_K` | **雙軌並搜**合併後最多保留幾段參考，避免 Analyst 前文過長拖慢收尾 |
 
 **各參數控制範圍對照**：
 
@@ -257,7 +263,24 @@ MONGO_DB=stock_insight
 # Qdrant (向量目標)
 QDRANT_HOST=localhost
 QDRANT_PORT=6333
+
+# ── 快捷模式（選用）：檢索前「問句收成」用小模型 ──詳見下方 #### 快捷模式 小節
+# （程式預設收成關閉。若要開啟：取消下列三行前綴 `#`）
+# （不啟用可整段省略，或將 FLASH_LLM_QUERY_REWRITE=0）
+# FLASH_LLM_QUERY_REWRITE=1        # 1＝開啟：檢索前以小模型將使用者發話收成向量檢索用 query（JSON）；0／不設定＝關閉
+# FLASH_REWRITE_DUAL_SEARCH=1       # 1＝收成開啟時：原文問句與收成後 query 各搜一次、結果合併去重（牆鐘通常不等於「改寫時間＋兩倍檢索」相加）；0＝只依收成後問句搜一次
+# FLASH_REWRITE_MODEL=gpt-4o-mini   # 收成步驟使用的模型 ID（請改為你環境可用的便宜／小模型）
 ```
+
+**問句收成三變數說明**：下表「範例設定」為「若你要啟用問句收成」時常見的 `.env` 寫法，**並非程式必填**；程式內預設值仍以本節下方完整表格為準。
+
+| 變數 | 範例設定 | 意義 |
+|------|----------|------|
+| `FLASH_LLM_QUERY_REWRITE` | `1` | **要不要**在向量新聞檢索**之前**，多打一個「小／便宜」的 LLM，把使用者隨口的說法收成較適合向量庫用的檢索 `query`（程式要求模型回傳 JSON，含 `{"query":"..."}`）。`1`＝開；`0` 或不設定＝不做這一步（為程式預設）。 |
+| `FLASH_REWRITE_DUAL_SEARCH` | `1` | 當 `FLASH_LLM_QUERY_REWRITE` 為開時：**要不要**跑「雙軌」檢索——**同時**以使用者原文問句搜向量庫、並等小模型收成；若收成結果與原文不同，再以收成後的 `query` 搜第二次，並把兩批結果**合併**、依 **`mongo_id` 去重**。`1`＝並行／雙軌（牆鐘時間通常比「收成完才開始第一次檢索」省很多，但向量查詢約變為兩次）；`0`＝只吃收成後那條 `query` **搜一次**。 |
+| `FLASH_REWRITE_MODEL` | `gpt-4o-mini` | **收成這一步**要呼叫哪個 Chat 模型（請選帳號上相對**便宜、快**的名稱，且須與 OpenAI／供應商 API 所列一致）。**最後作答**仍可另由 `FLASH_ANALYST_MODEL` 指定模型，不一定要與收成用同一顆。 |
+
+小提醒：**變數行尾的空白**在大多數環境不影響解析；若想檔案整齊，可去掉值後多餘空白（例如 `gpt-4o-mini ` → `gpt-4o-mini`）。
 
 #### 快捷模式（`response_mode: flash`）相關 `.env` 變數（選用）
 
@@ -273,6 +296,12 @@ QDRANT_PORT=6333
 | `FLASH_RETRIEVAL_TOP_K` | `10` | **`search_news`（快捷）** 每輪取回筆數；思考模式不依此變數 |
 | `FLASH_REF_MAX_BODY_CHARS` | `2200` | 每段「參考正文」注入 Analyst【完整參考資料】前的截斷上限；字數愈少通常愈快 |
 | `FLASH_DATE_RANGE_DAYS` | `80` | 快捷兩工具預設 `start_date`／`end_date` 的回溯天數；不寫入時同樣為 `80` |
+| `FLASH_LLM_QUERY_REWRITE` | `0` | `1`＝檢索前以小模型收成 query；預設關閉 |
+| `FLASH_REWRITE_DUAL_SEARCH` | `1` | `1`＝並行／雙軌搜尋＋合併去重（較不保證最便宜，但不把延遲變成「改寫＋檢索」完全相加） |
+| `FLASH_REWRITE_MODEL` | `gpt-4o-mini` | 收成用模型 |
+| `FLASH_REWRITE_MAX_COMPLETION_TOKENS` | `256` | 收成回覆 token 上限 |
+| `FLASH_REWRITE_TIMEOUT_SEC` | `12` | 收成逾時（秒） |
+| `FLASH_MERGED_RETRIEVE_CAP` | `max(FLASH_RETRIEVAL_TOP_K×2,16)` | 雙軌合併後參考上限 |
 
 > **為什麼回答只有一兩行？**  
 > `.env` 若仍是 **`FLASH_ANALYST_MAX_TOKENS=900`**（或其他過小數值），在 **`gpt-5-mini`** 上很常發生：**`max_completion_tokens` 多半先被內部推理用掉**，對使用者可見的段落幾乎寫不完，看起來像只有標題＋半截句子。請改 **`2800` 或以上**、或**刪除此變數／留空**讓程式用新預設或不設上限。
@@ -281,7 +310,7 @@ QDRANT_PORT=6333
 
 - **想換模型**：例如 `FLASH_ANALYST_MODEL=gpt-4o-mini`（以你帳號／供應商實際可用模型為準）。
 - **想要品質、可接受較慢**：例如 `FLASH_SKIP_ROUTER=0`、將 `FLASH_ANALYST_MAX_TOKENS` 調大、將 `FLASH_RETRIEVAL_TOP_K` 調大。
-- **想再壓低延遲**：例如略降 `FLASH_RETRIEVAL_TOP_K`、`FLASH_REF_MAX_BODY_CHARS`。（**請勿對 `gpt-5-mini`** 將 `FLASH_ANALYST_MAX_TOKENS` 設得過低，否則可見正文極易被截斷。）
+- **想再壓低延遲**：例如略降 `FLASH_RETRIEVAL_TOP_K`、`FLASH_REF_MAX_BODY_CHARS`。若曾開 **`FLASH_LLM_QUERY_REWRITE=1`**，可改 **`FLASH_REWRITE_DUAL_SEARCH=0`**（只搜一次較便宜）或將 **`FLASH_MERGED_RETRIEVE_CAP`** 調小。（**請勿對 `gpt-5-mini`** 將 `FLASH_ANALYST_MAX_TOKENS` 設得過低，否則可見正文極易被截斷。）
 
 **結論**：不必為了「有預設值」而把整張表複製進 `.env`；依需求只覆寫少數鍵即可。其餘 Router／歷史載入相關變數仍見前文「可調整的環境變數」表格。
 

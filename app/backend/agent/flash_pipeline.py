@@ -4,16 +4,20 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import re
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from langchain_core.messages import AIMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.backend.agent.chat import (
     flash_analyst_model,
+    flash_rewrite_model,
     call_tools,
     flash_router_model,
     tools,
@@ -38,14 +42,151 @@ def _safe_int_env(name: str, default: int) -> int:
     except (TypeError, ValueError):
         return default
 
+def _positive_float_env(name: str, default: float, minimum: float) -> float:
+    raw = (os.getenv(name) or "").strip()
+    src = raw if raw else str(default)
+    try:
+        v = float(src)
+    except (TypeError, ValueError):
+        v = float(default)
+    return max(minimum, v)
 
-# 預設略過 Router：省下 ~數秒～十餘秒的規劃 LLM；設 FLASH_SKIP_ROUTER=0 可改回 Router 規劃
+
+# FLASH_SKIP_ROUTER：預設略過規劃用 Router LLM（較省時）；設 `0` 啟動 Router。
 FLASH_SKIP_ROUTER = _truthy_env("FLASH_SKIP_ROUTER", "1")
 FLASH_RETRIEVAL_TOP_K = max(1, _safe_int_env("FLASH_RETRIEVAL_TOP_K", 10))
 FLASH_REF_MAX_BODY_CHARS = max(400, _safe_int_env("FLASH_REF_MAX_BODY_CHARS", 2200))
 FLASH_DATE_RANGE_DAYS = max(1, _safe_int_env("FLASH_DATE_RANGE_DAYS", 80))
+# FLASH_LLM_QUERY_REWRITE：啟用小模型將使用者問句收成「適合向量新聞」的檢索句（獨立於 Router）。
+FLASH_LLM_QUERY_REWRITE = _truthy_env("FLASH_LLM_QUERY_REWRITE", "0")
+# 與原版問句並行各搜一次並合併去重（牆鐘時間通常接近 max(原版檢索, 改寫+改版檢索)，而非相加）
+FLASH_REWRITE_DUAL_SEARCH = _truthy_env("FLASH_REWRITE_DUAL_SEARCH", "1")
+FLASH_REWRITE_TIMEOUT_SEC = _positive_float_env("FLASH_REWRITE_TIMEOUT_SEC", 12.0, 0.8)
+# 並行合併後最多保留多少則向量段落（再大會拖慢 Analyst 注入）
+_FLASH_MERGED_DEFAULT = max(FLASH_RETRIEVAL_TOP_K * 2, 16)
+FLASH_MERGED_RETRIEVE_CAP = max(
+    FLASH_RETRIEVAL_TOP_K,
+    _safe_int_env("FLASH_MERGED_RETRIEVE_CAP", _FLASH_MERGED_DEFAULT),
+)
 
 FLASH_TOOL_NAMES: Tuple[str, ...] = ("search_stock_news",)
+
+_FLASH_REWRITE_SYSTEM = (
+    "你是台股市場新聞向量檢索的前處理器。將使用者的發話濃縮成一條檢索用 query。\n"
+    "規範：\n"
+    "1）保留標的與時間線索：股號如（2330）、公司名、「OO-KY」、產業關鍵字；移除寒暄。\n"
+    "2）必要時補上用於檢索的正式名稱或常見中英同義詞，勿杜撰數字或未出現的交易價位。\n"
+    "3）只輸出**一個** JSON 物件，勿 markdown fences，無多餘說明。鍵：`query`（字串）。\n"
+    "範例：{\"query\":\"台積電 2330 法說會 展望\"}"
+)
+
+
+@dataclass
+class FlashRetrievalOutcome:
+    """快捷模式：Router（可省略）＋檢索（含可選問句 LLM 改寫／並行）之結果."""
+
+    router_msg: AIMessage
+    router_trace_steps: List[Dict[str, Any]]
+    retrieved_data: List[Dict[str, Any]]
+    router_elapsed: float
+    sse_tool_specs: List[Dict[str, Any]]
+    rewrite_message: Optional[AIMessage] = None
+
+
+def _stringify_lc_message_content(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: List[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and isinstance(block.get("text"), str):
+                parts.append(block["text"])
+        return "".join(parts)
+    return str(content)
+
+
+def _parse_rewrite_query_json(text: str) -> Optional[str]:
+    """從 rewrite LLM 回傳中提取 `query` 字串。"""
+    stripped = (text or "").strip()
+    if not stripped:
+        return None
+    fenced = re.search(r"```(?:json)?\s*([\s\S]*?)```", stripped, re.IGNORECASE)
+    if fenced:
+        stripped = fenced.group(1).strip()
+    brace_start = stripped.find("{")
+    brace_end = stripped.rfind("}")
+    if brace_start < 0 or brace_end <= brace_start:
+        return None
+    inner = stripped[brace_start : brace_end + 1]
+    try:
+        obj = json.loads(inner)
+    except json.JSONDecodeError:
+        line = stripped.splitlines()[0].strip()
+        return line[:500] if line else None
+    if not isinstance(obj, dict):
+        return None
+    q = obj.get("query") or obj.get("q") or ""
+    if not isinstance(q, str):
+        return None
+    q = q.strip()
+    return q[:500] if q else None
+
+
+def _rewrite_search_query_from_ai_message(ai: AIMessage) -> Optional[str]:
+    txt = _stringify_lc_message_content(getattr(ai, "content", ""))
+    return _parse_rewrite_query_json(txt)
+
+
+def _merge_news_retrieved(
+    primary: List[Dict[str, Any]],
+    secondary: List[Dict[str, Any]],
+    cap: int,
+) -> List[Dict[str, Any]]:
+    """
+    將兩次 news 向量召回合併，依 mongo_id 去重並保留順序：
+    先 primary、再穿插 secondary 中未曾出現的 mongo_id。
+    """
+    merged: List[Dict[str, Any]] = []
+    seen: set = set()
+
+    def _key(it: Dict[str, Any]) -> Tuple[str, Any]:
+        mid = it.get("mongo_id")
+        if mid is not None and str(mid).strip():
+            return ("id", str(mid))
+        return ("tit", str(it.get("title", "")), str(it.get("publishAt", "")))
+
+    for lst in (primary, secondary):
+        for it in lst:
+            k = _key(it)
+            if k in seen:
+                continue
+            seen.add(k)
+            merged.append(it)
+            if len(merged) >= cap:
+                return merged
+    return merged
+
+
+def _sse_tool_specs_from_normalized_batches(
+    batches: List[List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for batch in batches:
+        for tc in batch:
+            out.append({"name": tc["name"], "args": dict(tc.get("args") or {})})
+    return out
+
+
+async def _flash_invoke_query_rewrite_llm(raw_user_query: str) -> AIMessage:
+    uq = (raw_user_query or "").strip()
+    return await flash_rewrite_model.ainvoke([
+        SystemMessage(content=_FLASH_REWRITE_SYSTEM),
+        HumanMessage(content=uq),
+    ])
 
 
 def _default_date_range_iso() -> Tuple[str, str]:
@@ -213,17 +354,118 @@ async def flash_run_tools(normalized_tool_calls: List[Dict[str, Any]]) -> List[D
 async def flash_plan_and_retrieve(
     messages_lc: List[Any],
     user_query: str,
-) -> Tuple[AIMessage, List[Dict[str, Any]], List[Dict[str, Any]], float]:
+) -> FlashRetrievalOutcome:
     """
-    Router 規劃（可省略）→ 正規化 `search_stock_news` → call_tools。
-
-    回傳：(router_ai_message, trace_router_steps, retrieved_data, router_seconds)
+    Router 規劃（可省略）→ 正規化 `search_stock_news` → 可選問句 LLM 改寫 → call_tools。
     """
-    router_msg, normalized, trace_step, router_elapsed = await flash_router_phase(
+    router_msg, normalized_orig, trace_step, router_elapsed = await flash_router_phase(
         messages_lc, user_query
     )
-    retrieved = await flash_run_tools(normalized)
-    return router_msg, [trace_step], retrieved, router_elapsed
+    start_iso, end_iso = _default_date_range_iso()
+    rewrite_ai: Optional[AIMessage] = None
+    rewrite_meta: Dict[str, Any] = {
+        "enabled": FLASH_LLM_QUERY_REWRITE,
+        "dual_search": False,
+        "timeout_sec": FLASH_REWRITE_TIMEOUT_SEC,
+        "effective_queries_for_search": [
+            ((normalized_orig[0].get("args") or {}).get("query")),
+        ],
+    }
+
+    if not FLASH_LLM_QUERY_REWRITE:
+        retrieved = await flash_run_tools(normalized_orig)
+        trace_step.setdefault("extras", {})
+        trace_step["extras"]["flash_query_rewrite"] = rewrite_meta | {"pattern": "off"}
+        return FlashRetrievalOutcome(
+            router_msg=router_msg,
+            router_trace_steps=[trace_step],
+            retrieved_data=retrieved,
+            router_elapsed=router_elapsed,
+            sse_tool_specs=_sse_tool_specs_from_normalized_batches([normalized_orig]),
+            rewrite_message=None,
+        )
+
+    batches_for_sse: List[List[Dict[str, Any]]] = []
+
+    if FLASH_REWRITE_DUAL_SEARCH:
+        rewrite_meta["dual_search"] = True
+        rew_task = asyncio.create_task(_flash_invoke_query_rewrite_llm(user_query))
+        orig_search_task = asyncio.create_task(flash_run_tools(normalized_orig))
+        try:
+            rewrite_ai = await asyncio.wait_for(
+                rew_task,
+                timeout=FLASH_REWRITE_TIMEOUT_SEC,
+            )
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            rewrite_ai = None
+        except Exception:
+            rewrite_ai = None
+
+        rew_q = _rewrite_search_query_from_ai_message(rewrite_ai) if rewrite_ai else None
+        rew_q_eff = rew_q.strip() if rew_q else None
+        uq_cmp = (user_query or "").strip()
+
+        normalized_rw: Optional[List[Dict[str, Any]]] = None
+        if rewrite_ai is not None and rew_q_eff and rew_q_eff != uq_cmp:
+            normalized_rw = normalize_flash_tool_calls(
+                router_msg, rew_q_eff, start_iso, end_iso
+            )
+            rewrite_meta["effective_queries_for_search"].append(
+                (normalized_rw[0].get("args") or {}).get("query"))
+
+        rw_tools_task: Optional[asyncio.Task[List[Dict[str, Any]]]] = None
+        if normalized_rw is not None:
+            rw_tools_task = asyncio.create_task(flash_run_tools(normalized_rw))
+
+        r_orig = await orig_search_task
+        r_rw = await rw_tools_task if rw_tools_task is not None else []
+        retrieved = _merge_news_retrieved(r_orig, r_rw, FLASH_MERGED_RETRIEVE_CAP)
+
+        if normalized_rw is not None:
+            batches_for_sse = [normalized_orig, normalized_rw]
+        else:
+            batches_for_sse = [normalized_orig]
+
+        rewrite_meta["pattern"] = "parallel_dual"
+        rewrite_meta["rewrite_ok"] = rewrite_ai is not None
+        rewrite_meta["rewrite_applied_second_search"] = normalized_rw is not None
+    else:
+        try:
+            rewrite_ai = await asyncio.wait_for(
+                _flash_invoke_query_rewrite_llm(user_query),
+                timeout=FLASH_REWRITE_TIMEOUT_SEC,
+            )
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            rewrite_ai = None
+        except Exception:
+            rewrite_ai = None
+
+        rew_q = _rewrite_search_query_from_ai_message(rewrite_ai) if rewrite_ai else None
+        q_eff = (rew_q.strip() if rew_q else None) or (user_query or "").strip() or "股市 概況"
+
+        normalized_eff = normalize_flash_tool_calls(
+            router_msg, q_eff, start_iso, end_iso
+        )
+        rewrite_meta["effective_queries_for_search"] = [
+            (normalized_eff[0].get("args") or {}).get("query"),
+        ]
+        retrieved = await flash_run_tools(normalized_eff)
+        batches_for_sse = [normalized_eff]
+        rewrite_meta["pattern"] = "sequential_rewrite"
+        rewrite_meta["rewrite_ok"] = rewrite_ai is not None
+        rewrite_meta["rewrite_applied_second_search"] = False
+
+    trace_step.setdefault("extras", {})
+    trace_step["extras"]["flash_query_rewrite"] = rewrite_meta
+
+    return FlashRetrievalOutcome(
+        router_msg=router_msg,
+        router_trace_steps=[trace_step],
+        retrieved_data=retrieved,
+        router_elapsed=router_elapsed,
+        sse_tool_specs=_sse_tool_specs_from_normalized_batches(batches_for_sse),
+        rewrite_message=rewrite_ai,
+    )
 
 
 def build_flash_analyst_messages(
