@@ -282,6 +282,61 @@ QDRANT_PORT=6333
 
 小提醒：**變數行尾的空白**在大多數環境不影響解析；若想檔案整齊，可去掉值後多餘空白（例如 `gpt-4o-mini ` → `gpt-4o-mini`）。
 
+#### 雙軌檢索策略（`FLASH_REWRITE_DUAL_SEARCH`）
+
+> 僅在 **`FLASH_LLM_QUERY_REWRITE=1`**（問句收成已開啟）時有意義；收成關閉時此變數不生效。
+
+| 值 | 模式 | 行為 |
+|----|------|------|
+| **`1`**（預設） | **雙軌／並行** | **同時**做：① 用**原文**搜向量庫 ② 用 `FLASH_REWRITE_MODEL`（預設 `gpt-4o-mini`）收成問句。若收成成功且結果與原文**字串不同**（各先 `.strip()` 比對），再以收成後的 `query` **搜第二次**；兩批結果經 `_merge_news_retrieved` **合併、去重**。牆鐘時間通常接近「較慢的那條路」，而不是「收成時間 + 兩次檢索」完全相加。 |
+| **`0`** | **單軌／循序** | **先**等收成完成，**只**用收成後的 `query` 搜**一次**（收成失敗／逾時／解析失敗則退回原文）。較省向量查詢次數，但無「原文並行保底」；牆鐘 ≈ 收成時間 + 一次檢索。 |
+
+**何時會跑第二次搜尋？**（雙軌 `=1` 時，三者須同時成立；實作見 `app/backend/agent/flash_pipeline.py`）
+
+1. 收成 LLM **成功回覆**（未逾時、未 API 錯誤）
+2. 從 JSON 解析出的 `query` **非空**
+3. 收成字串 **≠** 使用者原文（純字串相等比較，非語意相似度）
+
+若 LLM 回傳與原文相同、解析失敗或逾時，則**不**跑第二次，僅保留第一次（原文）搜尋結果 `r_orig` 作為保底。
+
+**雙軌流程圖**（`FLASH_LLM_QUERY_REWRITE=1` 且 `FLASH_REWRITE_DUAL_SEARCH=1`）：
+
+```
+使用者問句
+    │
+    ├─ 第 1 次搜尋（原文）─────────→ r_orig  [最多 FLASH_RETRIEVAL_TOP_K 篇，預設 10]
+    │
+    └─ 4o-mini 收成 → 若 query 與原文不同
+           │
+           └─ 第 2 次搜尋（收成 query）→ r_rw   [最多 FLASH_RETRIEVAL_TOP_K 篇]
+                    │
+                    ▼
+         _merge_news_retrieved(r_orig, r_rw, cap=FLASH_MERGED_RETRIEVE_CAP)
+                    │
+         ┌──────────┴──────────┐
+         │ 1. 先保留 r_orig 全部 │
+         │ 2. 再補 r_rw 新篇     │
+         │ 3. 依 mongo_id 去重   │
+         │ 4. 最多 cap 篇        │  ← 預設 max(TOP_K×2, 16)，TOP_K=10 時為 20
+         └──────────┬──────────┘
+                    ▼
+         build_flash_analyst_messages（每篇正文截 FLASH_REF_MAX_BODY_CHARS 字）
+                    ▼
+              FLASH_ANALYST_MODEL 作答（預設 gpt-5-mini）
+```
+
+**合併去重重點**（`_merge_news_retrieved`，`app/backend/agent/flash_pipeline.py`）：
+
+| 問題 | 答案 |
+|------|------|
+| 第一次結果會被採納嗎？ | **會**，且排在前面、優先保留 |
+| 第二次結果呢？ | **會**，只補第一次沒有的新聞 |
+| 兩次都搜到同一篇？ | **只留第一次那份**（依 `mongo_id` 去重；無 `mongo_id` 時退而用 `title` + `publishAt`） |
+| 會重新依分數排序嗎？ | **不會**，維持「第一次順序 + 第二次新增」 |
+| 最多幾篇？ | `FLASH_MERGED_RETRIEVE_CAP`（預設 `max(FLASH_RETRIEVAL_TOP_K×2, 16)`） |
+
+> **設計取捨**：雙軌的本質是 **第一次當主結果 + 第二次當補充召回**，不是「第二次取代第一次」。若收成 query 幾乎每次都與原文不同，牆鐘時間通常**不會**比單軌（收成 → 只搜一次）更快，但會多一次向量查詢；換取的是原文保底與更廣的召回。想壓低成本可設 `FLASH_REWRITE_DUAL_SEARCH=0`。
+
 #### 快捷模式（`response_mode: flash`）相關 `.env` 變數（選用）
 
 下列變數**僅影響快捷模式**；程式內皆已有預設值，**不必**為了啟用快捷而強制寫入 `.env`。只有當你要**覆寫**預設（換模型、調速度／品質權衡、改檢索區間等）時，再在專案根目錄的 `.env` 中新增即可。修改後請重啟後端（或重建容器）讓環境變數生效。
