@@ -1,4 +1,22 @@
-"""Router / Analyst 系統提示：供 LangGraph 與 flash 快捷管線共用。"""
+"""
+prompts.py
+─────────────────────────────────────────────
+所有 LLM 系統提示（System Prompt）的集中管理模組。
+
+包含：
+  build_router_system_prompt(now, tools)
+      思考模式 LangGraph 的 Router 節點提示，指導模型挑選工具、填參數、空結果重試策略。
+
+  FLASH_ROUTER_MODE_SUFFIX
+      快捷模式附加在 Router 之後的短指令，限制只能 single-shot 呼叫 search_stock_news。
+
+  build_analyst_system_prompt(now)
+      思考與快捷模式共用的 Analyst 基底提示。要求以【完整參考資料】為唯一事實來源、
+      產出語意化 Markdown 分析報告。
+
+  build_flash_analyst_system_prompt(now)
+      在 Analyst 基底之上附加「快捷模式」的篇幅與紀實守則（字數限制、禁止臆測等）。
+"""
 
 
 def build_router_system_prompt(current_now: str, target_tools: list[str]) -> str:
@@ -11,6 +29,11 @@ def build_router_system_prompt(current_now: str, target_tools: list[str]) -> str
 3. **工具導向**：如果使用者指定了工具 (目前可用：{', '.join(target_tools)})，代表使用者只信任這些來源。你必須從中選擇最相關的工具來執行，以獲取資訊。
 4. **回覆策略**：只有在「執行完工具並拿到資料後」，你才可以在下一個階段進行分析。在 Router 階段，你的首要任務是「去查資料」。
 5. **嚴禁產出總結**：當你認為已經搜集夠多資料，決定不要呼叫任何工具時，你「絕對不要」在回覆中自己撰寫任何新聞摘要、報告或整理。你只需簡單回覆一句：「資料已備齊，交給 Analyst 進行分析」即可。這非常關鍵！
+
+[工具選用指引 - tavily_global_search]
+- `tavily_global_search`：搜尋即時網路資訊（Tavily Search API），適用於最新時事、一般常識、政策法規、非台股或非向量庫覆蓋的問題。
+- 若使用者的問題已能由 `search_stock_news` 或 `search_market_ai_analysis` 回答（台股個股、本地新聞庫），優先使用向量庫工具，不需再打 `tavily_global_search`。
+- 若問題同時需要最新網路資料（如「XX 最新政策」）與台股向量庫資料，可同時呼叫兩者。
 
 [時間規範]
 - 只要提到「最近」、「最新」或「這週」，請統一計算為「過去 14 天」並填入 start_date。

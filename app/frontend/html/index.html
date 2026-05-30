@@ -121,8 +121,7 @@
             <div id="chat-messages" class="chat-messages">
                 <!-- 歡迎畫面 -->
                 <div class="welcome-hero">
-                    <h1>您今天想研究哪檔股票？</h1>
-                    <p>我具備即時搜尋與分析能力，能為您追蹤供應鏈動向。</p>
+                    <h1>您今天想問些什麼？</h1>
                 </div>
             </div>
 
@@ -159,33 +158,62 @@
             <!-- 輸入區塊 -->
             <footer class="chat-input-area">
                 <div class="input-container">
-                    <div class="toolbar">
-                        <div class="tool-settings">
-                            <button id="tool-toggle-btn" class="tool-btn" title="切換工具權限">
-                                <i data-lucide="settings-2"></i>
-                            </button>
-                            <div id="tool-popover" class="tool-popover hidden">
-                                <h5>工具權限控制</h5>
-                                <label><input type="checkbox" id="tool-auto" checked> 自動 (Smart Mode)</label>
-                                <div id="manual-tools" class="disabled-group">
-                                    <label><input type="checkbox" class="tool-check" value="search_stock_news"> 股市新聞搜尋</label>
-                                    <label><input type="checkbox" class="tool-check" value="search_market_ai_analysis"> 市場報告分析</label>
-                                    <label><input type="checkbox" class="tool-check" value="get_market_recommendations"> 推薦名單提取</label>
+                    <!-- 上方：使用者輸入 -->
+                    <div class="input-top-row">
+                        <textarea id="user-input" placeholder="問問台積電的供應商風險..." rows="1"></textarea>
+                    </div>
+                    <!-- 下方：工具列 -->
+                    <div class="input-bottom-row">
+                        <div class="input-bottom-left">
+                            <!-- 工具設定 -->
+                            <div class="tool-settings">
+                                <button id="tool-toggle-btn" class="tool-btn" title="切換工具權限">
+                                    <i data-lucide="settings-2"></i>
+                                </button>
+                                <div id="tool-popover" class="tool-popover hidden">
+                                    <h5>工具權限控制</h5>
+                                    <label><input type="checkbox" id="tool-auto" checked> 自動 (Smart Mode)</label>
+                                    <div id="manual-tools" class="disabled-group">
+                                        <label><input type="checkbox" class="tool-check" value="search_stock_news"> 股市新聞搜尋</label>
+                                        <label><input type="checkbox" class="tool-check" value="search_market_ai_analysis"> 市場報告分析</label>
+                                        <label><input type="checkbox" class="tool-check" value="get_market_recommendations"> 推薦名單提取</label>
+                                        <label><input type="checkbox" class="tool-check" value="tavily_global_search"> 網路搜尋</label>
+                                    </div>
                                 </div>
                             </div>
+                            <!-- 聊天模式選擇 -->
+                            <div class="chat-mode-wrap">
+                                <button type="button" id="chat-mode-btn" class="chat-mode-btn" aria-haspopup="listbox" aria-expanded="false" title="選擇聊天模式">
+                                    <span id="chat-mode-label">股市 Agent</span>
+                                    <i data-lucide="chevron-up" class="chat-mode-chevron"></i>
+                                </button>
+                                <ul id="chat-mode-menu" class="chat-mode-menu hidden" role="listbox">
+                                    <li tabindex="0" role="option" data-value="general" class="chat-mode-option">
+                                        <span class="chat-mode-option-title">一般對話</span>
+                                        <span class="chat-mode-option-desc">日常問答，直接與 AI 對話</span>
+                                    </li>
+                                    <li tabindex="0" role="option" data-value="stock_agent" class="chat-mode-option selected">
+                                        <span class="chat-mode-option-title">股市 Agent</span>
+                                        <span class="chat-mode-option-desc">使用工具搜尋分析股市資料</span>
+                                    </li>
+                                </ul>
+                            </div>
+                        </div>
+                        <div class="input-bottom-right">
+                            <!-- 回覆模式（思考 / 快捷）：一般對話時反灰 -->
+                            <div class="response-mode-wrap">
+                                <button type="button" id="response-mode-btn" class="response-mode-btn" aria-haspopup="listbox" aria-expanded="false" title="思考（搜尋執行時間較長，回覆較完整）">
+                                    <span id="response-mode-label">思考</span>
+                                    <i data-lucide="chevron-up" class="response-mode-chevron"></i>
+                                </button>
+                                <ul id="response-mode-menu" class="response-mode-menu hidden" role="listbox"></ul>
+                            </div>
+                            <!-- 送出 -->
+                            <button id="send-btn" class="send-btn">
+                                <i data-lucide="arrow-up"></i>
+                            </button>
                         </div>
                     </div>
-                    <textarea id="user-input" placeholder="問問台積電的供應商風險..." rows="1"></textarea>
-                    <div class="response-mode-wrap">
-                        <button type="button" id="response-mode-btn" class="response-mode-btn" aria-haspopup="listbox" aria-expanded="false" title="快捷（搜尋執行時間較短，回覆較簡潔）">
-                            <span id="response-mode-label">快捷</span>
-                            <i data-lucide="chevron-down" class="response-mode-chevron"></i>
-                        </button>
-                        <ul id="response-mode-menu" class="response-mode-menu hidden" role="listbox"></ul>
-                    </div>
-                    <button id="send-btn" class="send-btn">
-                        <i data-lucide="arrow-up"></i>
-                    </button>
                 </div>
                 <p class="disclaimer">⚠重要聲明：本系統僅為大語言模型之資料檢索與結構化摘要工具，產出內容皆來自公開歷史資訊，不代表本平台之任何投資推薦或建議。投資人應獨立思考並自負盈虧。</p>
             </footer>

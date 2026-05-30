@@ -2,6 +2,8 @@
 
 這份文件記錄了系統在日常營運與除錯時，常用的資料庫進入方式與查詢語法大全。
 
+> **Docker 啟停、重啟 backend、重建映像、各服務 log**：請見 [`docker_ops_handbook.md`](./docker_ops_handbook.md)。
+
 ## 0. 查看 Docker 後端日誌（backend）
 
 Compose 檔為 `deploy/docker-compose.yml`，**後端服務名稱為 `backend`**（FastAPI + Agent，對外埠為 `8000`）。
@@ -192,6 +194,8 @@ shasum -a 256 app/backend/agent/stream_usage_chat_openai.py
 ---
 
 ## 1. 進入資料庫 (PostgreSQL)
+
+> **Schema 變更、migration 流程、init_db 與既有 volume 的差異**：請見 [`sql_dev_handbook.md`](./sql_dev_handbook.md)。
 
 本專案使用 Docker Compose 部署，資料庫預設在 `db` container 中執行。以下方式為標準登入做法：
 

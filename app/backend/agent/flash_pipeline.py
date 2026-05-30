@@ -1,5 +1,40 @@
 """
-快捷（flash）模式：預設略過 Router LLM + 僅 `search_news`（經 `search_stock_news`）+ 輕量 Analyst。
+flash_pipeline.py（股市 Agent — 快捷模式管線）
+─────────────────────────────────────────────
+快捷（flash）模式的完整非同步管線，不使用 LangGraph 圖，而是直接串接：
+
+  flash_router_phase  → flash_run_tools  → flash_analyst_astream
+  （規劃/可省略）       （向量新聞檢索）   （串流輸出）
+
+主要流程（flash_plan_and_retrieve）
+  1. Router 階段（可選）
+     FLASH_SKIP_ROUTER=1（預設）→ 直接以使用者原文填檢索參數，省去 Router LLM 延遲。
+     FLASH_SKIP_ROUTER=0 → 呼叫 flash_router_model 規劃工具參數。
+
+  2. 問句 LLM 收成（可選）
+     FLASH_LLM_QUERY_REWRITE=1 → 呼叫 flash_rewrite_model（小型廉價模型）將使用者發話
+       收成成向量庫用的 query JSON。
+     FLASH_REWRITE_DUAL_SEARCH=1（預設）→ 原文與收成後 query 並行各搜一次，
+       結果依 mongo_id 去重合併（牆鐘時間 ≈ max(原文搜, 收成+收成搜)）。
+     FLASH_REWRITE_DUAL_SEARCH=0 → 只搜收成後 query 一次（更省算力但不提供原文備援）。
+
+  3. 工具執行
+     flash_run_tools 呼叫 search_stock_news，結果放入 retrieved_data。
+
+  4. Analyst 串流
+     build_flash_analyst_messages 組裝【完整參考資料】→ flash_analyst_astream 串流輸出。
+
+回傳型別 FlashRetrievalOutcome（dataclass）：
+  router_msg, router_trace_steps, retrieved_data,
+  router_elapsed, sse_tool_specs, rewrite_message
+
+環境變數一覽（與 README / specifications 一致）：
+  FLASH_SKIP_ROUTER, FLASH_RETRIEVAL_TOP_K, FLASH_REF_MAX_BODY_CHARS,
+  FLASH_DATE_RANGE_DAYS, FLASH_LLM_QUERY_REWRITE, FLASH_REWRITE_DUAL_SEARCH,
+  FLASH_REWRITE_MODEL, FLASH_REWRITE_MAX_COMPLETION_TOKENS,
+  FLASH_REWRITE_TIMEOUT_SEC, FLASH_MERGED_RETRIEVE_CAP
+
+注意：一般對話（chat_mode=general）不使用本模組，請見 general_chat.py。
 """
 
 from __future__ import annotations
@@ -68,6 +103,9 @@ FLASH_MERGED_RETRIEVE_CAP = max(
     FLASH_RETRIEVAL_TOP_K,
     _safe_int_env("FLASH_MERGED_RETRIEVE_CAP", _FLASH_MERGED_DEFAULT),
 )
+
+# FLASH_ENABLE_WEB_SEARCH：快捷模式是否並行執行 Tavily 網路搜尋（預設關閉；開啟後每次多約 $0.01）
+FLASH_ENABLE_WEB_SEARCH = _truthy_env("FLASH_ENABLE_WEB_SEARCH", "0")
 
 FLASH_TOOL_NAMES: Tuple[str, ...] = ("search_stock_news",)
 
@@ -351,12 +389,37 @@ async def flash_run_tools(normalized_tool_calls: List[Dict[str, Any]]) -> List[D
     return tool_out.get("retrieved_data") or []
 
 
+async def _flash_run_tavily(user_query: str) -> List[Dict[str, Any]]:
+    """快捷模式：呼叫 Tavily 並回傳 retrieved_data 格式列表。失敗時靜默回空列表。"""
+    from app.backend.tools.global_search import tavily_search, TavilySearchError
+    try:
+        result = await tavily_search(user_query)
+        return [
+            {
+                "source_tool": "web",
+                "title": r.get("title", ""),
+                "url": r.get("url", ""),
+                "content": r.get("content", ""),
+                "publishAt": r.get("published_date"),
+                "score": r.get("score", 0),
+            }
+            for r in result.get("results", [])
+        ]
+    except TavilySearchError as e:
+        print(f"[Flash/Tavily] 搜尋失敗（靜默略過）: {e}")
+        return []
+    except Exception as e:
+        print(f"[Flash/Tavily] 未預期錯誤（靜默略過）: {e}")
+        return []
+
+
 async def flash_plan_and_retrieve(
     messages_lc: List[Any],
     user_query: str,
 ) -> FlashRetrievalOutcome:
     """
     Router 規劃（可省略）→ 正規化 `search_stock_news` → 可選問句 LLM 改寫 → call_tools。
+    若 FLASH_ENABLE_WEB_SEARCH=1，同時並行呼叫 Tavily 網路搜尋並將結果合併至 retrieved_data。
     """
     router_msg, normalized_orig, trace_step, router_elapsed = await flash_router_phase(
         messages_lc, user_query
@@ -372,8 +435,16 @@ async def flash_plan_and_retrieve(
         ],
     }
 
+    # Tavily 任務：在整個 flash 流程最開始就啟動，與後續 news 搜尋並行（牆鐘時間不增加）
+    tavily_task: Optional[asyncio.Task] = (
+        asyncio.create_task(_flash_run_tavily(user_query))
+        if FLASH_ENABLE_WEB_SEARCH else None
+    )
+
     if not FLASH_LLM_QUERY_REWRITE:
         retrieved = await flash_run_tools(normalized_orig)
+        tavily_results = (await tavily_task) if tavily_task is not None else []
+        retrieved = retrieved + tavily_results
         trace_step.setdefault("extras", {})
         trace_step["extras"]["flash_query_rewrite"] = rewrite_meta | {"pattern": "off"}
         return FlashRetrievalOutcome(
@@ -419,7 +490,8 @@ async def flash_plan_and_retrieve(
 
         r_orig = await orig_search_task
         r_rw = await rw_tools_task if rw_tools_task is not None else []
-        retrieved = _merge_news_retrieved(r_orig, r_rw, FLASH_MERGED_RETRIEVE_CAP)
+        tavily_results = (await tavily_task) if tavily_task is not None else []
+        retrieved = _merge_news_retrieved(r_orig, r_rw, FLASH_MERGED_RETRIEVE_CAP) + tavily_results
 
         if normalized_rw is not None:
             batches_for_sse = [normalized_orig, normalized_rw]
@@ -449,7 +521,9 @@ async def flash_plan_and_retrieve(
         rewrite_meta["effective_queries_for_search"] = [
             (normalized_eff[0].get("args") or {}).get("query"),
         ]
-        retrieved = await flash_run_tools(normalized_eff)
+        news_retrieved = await flash_run_tools(normalized_eff)
+        tavily_results = (await tavily_task) if tavily_task is not None else []
+        retrieved = news_retrieved + tavily_results
         batches_for_sse = [normalized_eff]
         rewrite_meta["pattern"] = "sequential_rewrite"
         rewrite_meta["rewrite_ok"] = rewrite_ai is not None

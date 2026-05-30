@@ -185,7 +185,8 @@ async def list_all_projects(
     current_user: asyncpg.Record = Depends(get_current_user),
 ):
     """
-    讀取目前登入使用者建立的所有專案。
+    讀取目前登入使用者建立的所有專案，依 updated_at 由近到遠排序。
+    （在專案內發送訊息後，該專案會因 updated_at 更新而移至最上方）
 
     安全設計：
     - user_id 由 JWT 取得，前端不需也不應傳遞
@@ -202,10 +203,10 @@ async def list_all_projects(
     try:
         rows = await db.fetch(
             """
-            SELECT id, name, created_at
+            SELECT id, name, created_at, updated_at
             FROM projects
             WHERE user_id = $1
-            ORDER BY created_at DESC
+            ORDER BY updated_at DESC
             """,
             user_id,
         )
@@ -222,6 +223,7 @@ async def list_all_projects(
                 "id": str(row["id"]),
                 "name": row["name"],
                 "created_at": row["created_at"].isoformat(),
+                "updated_at": row["updated_at"].isoformat(),
             }
             for row in rows
         ],

@@ -44,6 +44,13 @@ HISTORY_ASSISTANT_MAX_CHARS: int = int(
     os.getenv("HISTORY_ASSISTANT_MAX_CHARS", "800")
 )
 
+# 一般對話的歷史截斷上限（字元數）
+# 一般對話的 assistant 回覆本身就是對話主體，截太短會導致 LLM 看不懂後續短回覆
+# 預設 4000 chars，可透過環境變數 HISTORY_GENERAL_ASSISTANT_MAX_CHARS 覆蓋
+HISTORY_GENERAL_ASSISTANT_MAX_CHARS: int = int(
+    os.getenv("HISTORY_GENERAL_ASSISTANT_MAX_CHARS", "4000")
+)
+
 
 async def fetch_ancestor_chain_rows(
     conn: asyncpg.Connection,
@@ -139,14 +146,19 @@ async def fetch_prior_context_for_agent(
     )
 
 
-def rows_to_langchain_messages(rows: Sequence[Any]) -> List[BaseMessage]:
+def rows_to_langchain_messages(
+    rows: Sequence[Any],
+    *,
+    max_chars: int = HISTORY_ASSISTANT_MAX_CHARS,
+) -> List[BaseMessage]:
     """
     將 DB 列轉成 LangChain 訊息（僅 user / assistant）。
 
-    assistant 訊息（Analyst 報告）截斷至 HISTORY_ASSISTANT_MAX_CHARS：
-    - Router 只需知道上輪討論主題，不需要完整舊報告
-    - Analyst 實際分析數據來自本輪新檢索的 retrieved_data，舊報告僅供主題對齊
-    - 載入完整舊報告會把每輪基礎 prompt 增加 ~5000 tokens，是 context explosion 主因
+    max_chars 控制 assistant 訊息的截斷上限：
+    - 股市 Agent（router / analyst）：800（預設）。只需知道上輪主題，不需完整舊報告；
+      完整舊報告會讓每輪基礎 prompt 膨脹 ~5000 tokens（context explosion）。
+    - 一般對話：建議 HISTORY_GENERAL_ASSISTANT_MAX_CHARS（預設 4000）。
+      一般對話的 assistant 回覆本身就是對話主體，截太短會導致 LLM 看不懂後續短回覆。
     """
     out: List[BaseMessage] = []
     for r in rows:
@@ -155,10 +167,9 @@ def rows_to_langchain_messages(rows: Sequence[Any]) -> List[BaseMessage]:
         if role == "user":
             out.append(HumanMessage(content=content))
         elif role == "assistant":
-            # 截斷舊報告：Router/Analyst 只需知道上一輪主題，不需完整舊內容
-            if len(content) > HISTORY_ASSISTANT_MAX_CHARS:
+            if len(content) > max_chars:
                 content = (
-                    content[:HISTORY_ASSISTANT_MAX_CHARS]
+                    content[:max_chars]
                     + "\n\n…（舊對話已截斷，完整內容將於畫面上呼叫）"
                 )
             out.append(AIMessage(content=content))

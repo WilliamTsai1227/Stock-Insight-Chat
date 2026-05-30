@@ -22,16 +22,24 @@ ON CONFLICT (name) DO UPDATE SET
     max_projects = EXCLUDED.max_projects;
 
 -- 3. 建立 users 表 (會員系統核心)
+--    Google SSO：以 OIDC 「sub」存於 google_sub 作為綁定主鍵列；password_hash 可 NULL（僅 OAuth）。
+--    詳見 specifications/google_sso.md
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email VARCHAR(255) UNIQUE NOT NULL,
     username VARCHAR(100) UNIQUE NOT NULL,
-    password_hash TEXT NOT NULL,
+    password_hash TEXT, -- NULL：純 Google／尚未設本地密碼
+    google_sub TEXT UNIQUE, -- Google OIDC subject；NULL：未綁定 Google（UNIQUE 允許多筆 NULL）
+    email_verified BOOLEAN NOT NULL DEFAULT FALSE,
+    last_login_provider VARCHAR(32), -- e.g. 'password', 'google'（可 NULL）
     status VARCHAR(20) DEFAULT 'active', -- active, disabled, pending
     tier_id UUID REFERENCES subscription_tiers(id) ON DELETE SET NULL, -- 關聯訂閱等級
     last_login_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT users_has_password_or_google CHECK (
+        password_hash IS NOT NULL OR google_sub IS NOT NULL
+    )
 );
 
 -- 4. 建立 user_usage_quotas 表 (使用者當前週期的 Token 用量累計)
@@ -99,8 +107,12 @@ CREATE TABLE IF NOT EXISTS projects (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(255) NOT NULL,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 對已存在資料庫進行 migration（冪等）
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
 
 -- 11. 建立 chats 表 (隸屬於專案下的對話視窗)
 -- project_id 為 nullable：chat 可獨立存在於 project 之外（對應前端 sidebar 的「最近」區塊）
@@ -113,8 +125,12 @@ CREATE TABLE IF NOT EXISTS chats (
     title VARCHAR(255) NOT NULL,
     title_generated BOOLEAN NOT NULL DEFAULT FALSE,
     summary TEXT, -- 存儲 LLM 產生的對話摘要，優化下次載入 Context 的速度
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 對已存在資料庫進行 migration（冪等）
+ALTER TABLE chats ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
 
 -- 12. 建立 messages 表 (存放每一筆對話記錄)
 -- 透過 parent_id 實現訊息與回覆的精確對齊與溯源
@@ -163,9 +179,11 @@ CREATE INDEX IF NOT EXISTS idx_token_usage_logs_created_at ON token_usage_logs(c
 
 -- 專案與對話 (最核心的查詢路徑)
 CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id);
+CREATE INDEX IF NOT EXISTS idx_projects_updated_at ON projects(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_chats_project_id ON chats(project_id);
 CREATE INDEX IF NOT EXISTS idx_chats_user_id ON chats(user_id);
 CREATE INDEX IF NOT EXISTS idx_chats_created_at ON chats(created_at);
+CREATE INDEX IF NOT EXISTS idx_chats_updated_at ON chats(updated_at DESC);
 
 -- 訊息表 (支援 Parent ID 遞迴查詢與對話流讀取)
 CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id);

@@ -2,6 +2,8 @@
 
 本專案使用 **PostgreSQL** 作為關聯式資料庫，用於管理會員、訂閱、專案、對話、訊息以及上傳的文件。向量數據則存儲於 **Qdrant**。
 
+> **開發時如何進 Docker 改 SQL、套用 migration、重置本機 DB**：請見 [`sql_dev_handbook.md`](./sql_dev_handbook.md)。
+
 ## 1. 實體關係圖 (ERD)
 
 ```mermaid

@@ -4,6 +4,7 @@
     --text-main: #e0e0e0;
     --text-dim: #888888;
     --accent: #b0b0b0; /* 高級灰 */
+    --accent-rgb: 176, 176, 176;
     --accent-glow: rgba(176, 176, 176, 0.2);
     --border: #2a2a2a;
     --card-bg: rgba(255, 255, 255, 0.03);
@@ -553,13 +554,15 @@ body {
 
 .header-actions {
     flex-shrink: 0;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 1.2rem;
 }
 
-/* 專案頁（project-view）：桌機仍隱藏頂列以保留全幅版面；≤1024px 保留頂列讓漢堡可開側欄 */
-@media (min-width: 1025px) {
-    .main-content.project-view-mode .chat-header {
-        display: none;
-    }
+/* 專案頁保留 chat-header（含使用者頭像選單）；縮減內容區上緣留白（原 5rem 是配合隱藏 header 用） */
+.main-content.project-view-mode .project-view {
+    padding-top: 1.5rem;
 }
 
 .chat-header {
@@ -1160,13 +1163,13 @@ body {
     margin: 0 auto;
     background: var(--bubble-user);
     border: 1px solid var(--border);
-    border-radius: 24px;
-    padding: 0.8rem 1.2rem;
+    border-radius: 20px;
+    padding: 0.75rem 1rem 0.6rem;
     display: flex;
-    align-items: flex-end;
-    gap: 12px;
+    flex-direction: column;
+    gap: 0;
     box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-    transition: 0.3s;
+    transition: border-color 0.3s, box-shadow 0.3s;
 }
 
 .input-container:focus-within {
@@ -1174,16 +1177,47 @@ body {
     box-shadow: 0 0 15px var(--accent-glow);
 }
 
+/* 上方：textarea */
+.input-top-row {
+    display: flex;
+    align-items: flex-start;
+    padding: 0 0.2rem;
+}
+
+/* 下方：工具列 */
+.input-bottom-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-top: 0.5rem;
+    gap: 8px;
+}
+
+.input-bottom-left {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.input-bottom-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
 textarea {
     flex: 1;
+    width: 100%;
     background: transparent;
     border: none;
     color: var(--text-main);
     resize: none;
     font-family: inherit;
     font-size: 1rem;
-    padding: 8px 0;
+    padding: 6px 0;
+    min-height: 52px;
     max-height: 200px;
+    line-height: 1.5;
 }
 
 textarea:focus {
@@ -1215,27 +1249,128 @@ textarea:disabled {
     align-items: center;
     justify-content: center;
     transition: 0.3s;
+    flex-shrink: 0;
 }
 
 .send-btn:disabled {
     opacity: 0.3;
 }
 
+/* ── 聊天模式選擇（chat-mode-btn，仿照 response-mode-btn） ── */
+.chat-mode-wrap {
+    position: relative;
+    flex-shrink: 0;
+}
+
+.chat-mode-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 5px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: rgba(0, 0, 0, 0.2);
+    color: var(--text-dim);
+    font-size: 0.82rem;
+    cursor: pointer;
+    transition: 0.2s;
+}
+
+#chat-mode-label {
+    color: var(--text-main);
+    font-weight: 600;
+}
+
+.chat-mode-btn:hover {
+    border-color: var(--accent);
+}
+
+.chat-mode-btn:hover #chat-mode-label {
+    color: #fff;
+}
+
+.chat-mode-chevron {
+    width: 14px;
+    height: 14px;
+    opacity: 0.7;
+    transition: transform 0.2s;
+}
+
+.chat-mode-menu {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 0;
+    min-width: 210px;
+    max-width: min(94vw, 300px);
+    margin: 0;
+    padding: 6px;
+    list-style: none;
+    background: var(--bubble-user);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    z-index: 50;
+}
+
+.chat-mode-menu.hidden {
+    display: none;
+}
+
+.chat-mode-option {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    white-space: normal;
+    transition: background 0.15s ease;
+}
+
+.chat-mode-option-title {
+    font-size: 0.9rem;
+    font-weight: 600;
+    line-height: 1.25;
+    color: rgba(245, 245, 245, 0.92);
+}
+
+.chat-mode-option-desc {
+    font-size: 0.78rem;
+    color: var(--text-dim);
+    line-height: 1.4;
+}
+
+.chat-mode-option:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.chat-mode-option:hover .chat-mode-option-title {
+    color: #fff;
+}
+
+.chat-mode-option.selected {
+    background: rgba(var(--accent-rgb, 0,200,150), 0.15);
+}
+
+.chat-mode-option.selected .chat-mode-option-title {
+    color: var(--accent);
+}
+
 /* --- 輸入列：思考 / 快捷（對應 API response_mode） --- */
 .response-mode-wrap {
     position: relative;
     flex-shrink: 0;
-    align-self: center;
 }
 
 .response-mode-btn {
     display: flex;
     align-items: center;
     gap: 4px;
-    padding: 6px 10px;
+    padding: 5px 10px;
     border-radius: 999px;
     border: 1px solid var(--border);
-    background: rgba(0, 0, 0, 0.25);
+    background: rgba(0, 0, 0, 0.2);
     color: var(--text-dim);
     font-size: 0.82rem;
     cursor: pointer;
@@ -1248,12 +1383,19 @@ textarea:disabled {
     font-weight: 600;
 }
 
-.response-mode-btn:hover {
+.response-mode-btn:hover:not(:disabled) {
     border-color: var(--accent);
 }
 
-.response-mode-btn:hover #response-mode-label {
+.response-mode-btn:hover:not(:disabled) #response-mode-label {
     color: #ffffff;
+}
+
+/* 一般對話模式：response-mode-btn 反灰 */
+.response-mode-wrap.mode-locked .response-mode-btn {
+    opacity: 0.35;
+    cursor: not-allowed;
+    pointer-events: none;
 }
 
 .response-mode-chevron {

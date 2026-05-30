@@ -1,4 +1,18 @@
-"""舊版 langchain-openai 會略過 choices 為空的串流最後一包（OpenAI 在 stream_options.include_usage 下於該包回傳 usage）。"""
+"""
+stream_usage_chat_openai.py
+─────────────────────────────────────────────
+LangChain ChatOpenAI 的串流使用量補丁。
+
+問題：舊版 langchain-openai 在 stream_options.include_usage=true 時，OpenAI
+最後會送出一個 choices=[] 的 chunk 附帶 usage，但原始實作直接略過這包，
+導致 token 用量永遠無法從串流事件中取得。
+
+解法：繼承 ChatOpenAI 並覆寫 _astream，補上對 choices 為空時的 usage 解析，
+將其包成帶 response_metadata["token_usage"] 的 AIMessageChunk 向上傳遞。
+
+用途：被整個專案所有需要計費的模型（Router、Analyst、Flash Analyst、Rewrite）
+      共同繼承，是唯一的 LLM 客戶端類別。
+"""
 
 from __future__ import annotations
 

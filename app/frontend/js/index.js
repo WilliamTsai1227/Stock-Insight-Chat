@@ -11,6 +11,8 @@ const MAX_PARKED_STAGING_CHATS = 8;
 
 let newChatComposeLock = false;
 
+/** localStorage key：對話模式（`general` / `stock_agent`） */
+const CHAT_MODE_STORAGE_KEY = 'sicChatMode';
 /** localStorage：`thinking`（LangGraph）／`flash`（單輪新聞向量檢索） */
 const RESPONSE_MODE_STORAGE_KEY = 'sicChatResponseMode';
 /** 回覆模式：收合為短名，下拉為主標題 + 副行說明 */
@@ -24,8 +26,10 @@ const RESPONSE_MODE_META = {
         subtitle: '搜尋執行時間較短，回覆較簡潔',
     },
 };
+/** @type {'general' | 'stock_agent'} */
+let chatMode = 'stock_agent';
 /** @type {'thinking' | 'flash'} */
-let chatResponseMode = 'flash';
+let chatResponseMode = 'thinking';
 
 function getStreamStagingRoot() {
     let el = document.getElementById('stream-staging');
@@ -252,10 +256,10 @@ function updateSendButtonForStreamingState() {
 
 // --- 全域狀態 ---
 // 注意：所有資料皆從後端載入，不放任何假資料
-//   projects     : { id, name, created_at }[]                     ← /api/project/all 載入
+//   projects     : { id, name, created_at, updated_at }[]              ← /api/project/all 載入
 //   chats        : { [projectId]: { id, title }[] }               ← /api/project?project_id=... 載入
 //   files        : { [projectId]: File[] }                        ← 同上
-//   recentChats  : { id, title, created_at }[]（已按 created_at DESC）← /api/chat/all 載入
+//   recentChats  : { id, title, created_at, updated_at }[]（已按 updated_at DESC）← /api/chat/all 載入
 //   pendingDeleteProject : 暫存「刪除確認 modal」要刪除的專案物件
 let state = {
     projects: [],
@@ -273,6 +277,20 @@ marked.setOptions({
     gfm: true,
     breaks: true,
     smartLists: true,
+});
+
+// 讓 Markdown 正文中的所有連結都在新分頁開啟，避免跳轉當前頁面
+// marked.js v5+ 的 renderer 改用 token 物件傳入
+marked.use({
+    renderer: {
+        link(token) {
+            const href  = token.href  || '';
+            const title = token.title || '';
+            const text  = token.text  || href;
+            const titleAttr = title ? ` title="${title}"` : '';
+            return `<a href="${href}"${titleAttr} target="_blank" rel="noopener noreferrer">${text}</a>`;
+        }
+    }
 });
 
 /**
@@ -337,25 +355,122 @@ function syncResponseModeMenuSelection() {
     });
 }
 
+// ── Chat Mode（一般對話 / 股市 Agent）──────────────────────────────────────
+
+const CHAT_MODE_META = {
+    general:     { label: '一般對話' },
+    stock_agent: { label: '股市 Agent' },
+};
+
+function applyChatModeLabel() {
+    const label = document.getElementById('chat-mode-label');
+    if (!label) return;
+    const m = CHAT_MODE_META[chatMode] || CHAT_MODE_META.stock_agent;
+    label.textContent = m.label;
+}
+
+function syncChatModeMenuSelection() {
+    const menu = document.getElementById('chat-mode-menu');
+    if (!menu) return;
+    menu.querySelectorAll('.chat-mode-option').forEach((li) => {
+        li.classList.toggle('selected', li.getAttribute('data-value') === chatMode);
+    });
+}
+
+/** 套用 chatMode：同步 response-mode 反灰、工具鎖定、placeholder */
+function applyChatModeUI() {
+    const isGeneral = chatMode === 'general';
+
+    // response-mode wrap：一般對話反灰（mode-locked），不可點擊
+    const rmWrap = document.querySelector('.response-mode-wrap');
+    if (rmWrap) {
+        rmWrap.classList.toggle('mode-locked', isGeneral);
+        // 若切到一般對話，把已展開的 response-mode 選單收起
+        if (isGeneral) {
+            const rmMenu = document.getElementById('response-mode-menu');
+            const rmBtn  = document.getElementById('response-mode-btn');
+            if (rmMenu) rmMenu.classList.add('hidden');
+            if (rmBtn)  rmBtn.setAttribute('aria-expanded', 'false');
+        }
+    }
+
+    // 工具設定：一般對話永遠鎖定
+    syncToolSettingsWithResponseMode();
+
+    // placeholder
+    const textarea = document.getElementById('user-input');
+    if (textarea) {
+        textarea.placeholder = isGeneral
+            ? '問我任何事…'
+            : '問問台積電的供應商風險…';
+    }
+
+    applyChatModeLabel();
+    syncChatModeMenuSelection();
+
+    try { localStorage.setItem(CHAT_MODE_STORAGE_KEY, chatMode); } catch (_) {}
+}
+
+function initChatModeSelector() {
+    try {
+        const s = localStorage.getItem(CHAT_MODE_STORAGE_KEY);
+        if (s === 'general' || s === 'stock_agent') chatMode = s;
+    } catch (_) {}
+
+    const btn  = document.getElementById('chat-mode-btn');
+    const menu = document.getElementById('chat-mode-menu');
+    if (!btn || !menu) return;
+
+    menu.classList.add('hidden');
+    btn.setAttribute('aria-expanded', 'false');
+
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        syncChatModeMenuSelection();
+        const willOpen = menu.classList.contains('hidden');
+        menu.classList.toggle('hidden', !willOpen);
+        btn.setAttribute('aria-expanded', String(willOpen));
+    });
+    menu.addEventListener('click', (e) => e.stopPropagation());
+
+    menu.querySelectorAll('.chat-mode-option').forEach((li) => {
+        li.addEventListener('click', () => {
+            const v = li.getAttribute('data-value');
+            if (v !== 'general' && v !== 'stock_agent') return;
+            chatMode = v;
+            applyChatModeUI();
+            menu.classList.add('hidden');
+            btn.setAttribute('aria-expanded', 'false');
+        });
+    });
+
+    applyChatModeUI();
+}
+
 /** 快捷模式僅檢索新聞向量庫，與「工具權限」無關；反灰並關閉選單。 */
 function syncToolSettingsWithResponseMode() {
     const toggle = document.getElementById('tool-toggle-btn');
     const popover = document.getElementById('tool-popover');
     const wrap = document.querySelector('.chat-input-area .tool-settings');
 
-    const flash = chatResponseMode === 'flash';
-    if (wrap) wrap.classList.toggle('tool-settings--flash-lock', flash);
+    // 一般對話 或 flash 模式都鎖定工具
+    const lock = chatMode === 'general' || chatResponseMode === 'flash';
+    if (wrap) wrap.classList.toggle('tool-settings--flash-lock', lock);
 
     if (toggle) {
-        toggle.disabled = flash;
-        if (flash) toggle.setAttribute('aria-disabled', 'true');
+        toggle.disabled = lock;
+        if (lock) toggle.setAttribute('aria-disabled', 'true');
         else toggle.removeAttribute('aria-disabled');
         toggle.setAttribute(
             'title',
-            flash ? '快捷模式僅檢索新聞，無須調整工具' : '切換工具權限'
+            chatMode === 'general'
+                ? '一般對話不使用工具'
+                : chatResponseMode === 'flash'
+                    ? '快捷模式僅檢索新聞，無須調整工具'
+                    : '切換工具權限'
         );
     }
-    if (flash && popover) popover.classList.add('hidden');
+    if (lock && popover) popover.classList.add('hidden');
 }
 
 function initResponseModeSelector() {
@@ -366,7 +481,7 @@ function initResponseModeSelector() {
     renderResponseModeMenuOptions();
     applyResponseModeLabel();
     syncResponseModeMenuSelection();
-    syncToolSettingsWithResponseMode();
+    initChatModeSelector();   // chat-mode tab 初始化（含首次 syncToolSettings）
 
     const btn = document.getElementById('response-mode-btn');
     const menu = document.getElementById('response-mode-menu');
@@ -449,7 +564,7 @@ function initEventListeners() {
     const toolPopover = document.getElementById('tool-popover');
     if (toolToggle && toolPopover) {
         toolToggle.onclick = (e) => {
-            if (chatResponseMode === 'flash') {
+            if (chatMode === 'general' || chatResponseMode === 'flash') {
                 e.preventDefault();
                 e.stopPropagation();
                 return;
@@ -464,6 +579,11 @@ function initEventListeners() {
         const rb = document.getElementById('response-mode-btn');
         if (rm) rm.classList.add('hidden');
         if (rb) rb.setAttribute('aria-expanded', 'false');
+        // 同步關閉 chat-mode 選單
+        const cm = document.getElementById('chat-mode-menu');
+        const cb = document.getElementById('chat-mode-btn');
+        if (cm) cm.classList.add('hidden');
+        if (cb) cb.setAttribute('aria-expanded', 'false');
     });
     if (toolPopover) {
         toolPopover.onclick = (e) => e.stopPropagation();
@@ -533,6 +653,7 @@ async function loadProjectsFromServer() {
             id: p.id,
             name: p.name,
             created_at: p.created_at,
+            updated_at: p.updated_at,
         }));
 
         // 清掉已不存在的 chats / files 快取
@@ -711,6 +832,7 @@ async function loadRecentChatsFromServer() {
             id: c.id,
             title: c.title,
             created_at: c.created_at,
+            updated_at: c.updated_at,
         }));
 
         renderRecentChats();
@@ -722,7 +844,7 @@ async function loadRecentChatsFromServer() {
 
 /**
  * 渲染左側 sidebar「最近」區塊。
- * 資料來源：state.recentChats（由 GET /api/chat/all 載入，後端已按時間由近到遠排序）
+ * 資料來源：state.recentChats（由 GET /api/chat/all 載入，後端已按 updated_at 由近到遠排序）
  *
  * 每個 <li>：
  *   - id="recent-chat-${chat.id}"
@@ -1356,7 +1478,7 @@ function clearChatMessages() {
     const hero = document.createElement('div');
     hero.className = 'welcome-hero';
     const h1 = document.createElement('h1');
-    h1.textContent = '準備好開始新的研究了嗎？';
+    h1.textContent = '準備好開始新對話了嗎？';
     hero.appendChild(h1);
     container.appendChild(hero);
 }
@@ -1591,7 +1713,9 @@ async function sendMessage() {
     }
 
     // 建立 AI 訊息容器（先放到畫面上，後續逐步填入）
-    const { msgDiv, toolsContainer, bubble, streamCursor, initialPlaceholder } = createStreamingMessageUI();
+    // 依模式決定等待提示文字：一般對話用「思考中...」，股市 Agent 用「正在分析問題...」
+    const initPlaceholderText = chatMode === 'general' ? '思考中...' : '正在分析問題...';
+    const { msgDiv, toolsContainer, bubble, streamCursor, initialPlaceholder } = createStreamingMessageUI(initPlaceholderText);
     const container = document.getElementById('chat-messages');
     const welcome = container.querySelector('.welcome-hero');
     if (welcome) welcome.remove();
@@ -1668,6 +1792,7 @@ async function sendMessage() {
                 query,
                 chat_id: streamTargetChatId,   // 與發送瞬間鎖定，勿用 state.currentChatId（使用者可能 await 時已換對話）
                 agent_config: { enabled_tools },
+                chat_mode: chatMode,
                 response_mode: chatResponseMode === 'flash' ? 'flash' : 'thinking',
             })
         });
@@ -1787,6 +1912,8 @@ async function sendMessage() {
 
                     // LLM 逐字 token（僅 analyst 節點）
                     case 'token': {
+                        // 第一個 token 進來時移除初始等待提示（一般對話不經過 tool_start，需在此清除）
+                        if (initialPlaceholder.parentNode) initialPlaceholder.remove();
                         hideThinkingRow();
                         addBubbleIfNeeded();
                         rawStreamText += payload.text || '';
@@ -1930,7 +2057,7 @@ function makeSvgCheck(size) {
 // 建立串流訊息 UI 骨架
 // ============================================================
 
-function createStreamingMessageUI() {
+function createStreamingMessageUI(placeholderText) {
     const msgDiv = document.createElement('div');
     msgDiv.className = 'message ai';
 
@@ -1938,14 +2065,14 @@ function createStreamingMessageUI() {
     const toolsContainer = document.createElement('div');
     toolsContainer.className = 'tools-container';
 
-    // 初始佔位列（分析中...）
+    // 初始佔位列（等待 LLM 回應時的轉圈提示）
     const initialPlaceholder = document.createElement('div');
     initialPlaceholder.className = 'tool-status';
     const initIconWrap = document.createElement('span');
     initIconWrap.className = 'tool-status-icon spinning';
     initIconWrap.appendChild(makeSvgSpinner(14));
     const initText = document.createElement('span');
-    initText.textContent = '正在分析問題...';
+    initText.textContent = placeholderText || '正在分析問題...';
     initialPlaceholder.appendChild(initIconWrap);
     initialPlaceholder.appendChild(initText);
     toolsContainer.appendChild(initialPlaceholder);

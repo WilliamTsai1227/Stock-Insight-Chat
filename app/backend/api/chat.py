@@ -17,6 +17,8 @@ from app.backend.database.postgresql import get_db, get_pool
 from app.backend.module.chat_context import (
     fetch_prior_context_for_agent,
     rows_to_langchain_messages,
+    HISTORY_ASSISTANT_MAX_CHARS,
+    HISTORY_GENERAL_ASSISTANT_MAX_CHARS,
 )
 from app.backend.module.jwt import get_current_user, get_current_user_id
 from app.backend.module.token_usage import (
@@ -39,9 +41,20 @@ class MessageRequest(BaseModel):
     query: str
     chat_id: UUID                       # 必填：必須先呼叫 POST /api/chat 取得
     agent_config: Optional[AgentConfig] = None
+    chat_mode: Literal["general", "stock_agent"] = Field(
+        default="stock_agent",
+        description=(
+            "general=一般對話（直打 LLM，無工具）；"
+            "stock_agent=股市 Agent（依 response_mode 走 thinking/flash）"
+        ),
+    )
     response_mode: Literal["thinking", "flash"] = Field(
         default="thinking",
-        description="thinking=LangGraph；flash=單輪新聞檢索（預設 top_k=10）+Analyst",
+        description=(
+            "chat_mode=stock_agent 時生效。"
+            "thinking=LangGraph 多輪 Router+Analyst；"
+            "flash=單輪新聞檢索+輕量 Analyst"
+        ),
     )
 
 
@@ -149,6 +162,17 @@ async def _insert_user_message(
             chat_id,
             prev_id,
             content,
+        )
+        await db.execute(
+            "UPDATE chats SET updated_at = NOW() WHERE id = $1",
+            chat_id,
+        )
+        await db.execute(
+            """
+            UPDATE projects SET updated_at = NOW()
+            WHERE id = (SELECT project_id FROM chats WHERE id = $1 AND project_id IS NOT NULL)
+            """,
+            chat_id,
         )
     return row["id"]
 
@@ -306,7 +330,8 @@ async def list_all_chats(
     current_user: asyncpg.Record = Depends(get_current_user),
 ):
     """
-    讀取目前登入使用者的所有聊天，依 created_at 由近到遠排序。
+    讀取目前登入使用者的所有聊天，依 updated_at 由近到遠排序。
+    （重新使用舊對話後，該對話會因 updated_at 更新而移至最上方）
 
     安全設計：
     - user_id 由 JWT 解析，前端不需也不應傳遞（避免越權讀取他人 chats）
@@ -323,10 +348,10 @@ async def list_all_chats(
     try:
         rows = await db.fetch(
             """
-            SELECT id, title, created_at
+            SELECT id, title, created_at, updated_at
             FROM chats
             WHERE user_id = $1
-            ORDER BY created_at DESC
+            ORDER BY updated_at DESC
             """,
             user_id,
         )
@@ -343,6 +368,7 @@ async def list_all_chats(
                 "id": str(row["id"]),
                 "title": row["title"],
                 "created_at": row["created_at"].isoformat(),
+                "updated_at": row["updated_at"].isoformat(),
             }
             for row in rows
         ],
@@ -564,7 +590,14 @@ async def get_ai_response(
             chat_id=request.chat_id,
             user_message_id=user_message_id,
         )
-        history_lc = rows_to_langchain_messages(prior_rows)
+        history_lc = rows_to_langchain_messages(
+            prior_rows,
+            max_chars=(
+                HISTORY_GENERAL_ASSISTANT_MAX_CHARS
+                if request.chat_mode == "general"
+                else HISTORY_ASSISTANT_MAX_CHARS
+            ),
+        )
     except HTTPException:
         raise
     except asyncpg.PostgresError as e:
@@ -584,6 +617,7 @@ async def get_ai_response(
         "trace": {},
         "retrieved_data": [],
         "enabled_tools": enabled_tools,
+        "web_search_calls": 0,
     }
     config = {"configurable": {"thread_id": chat_id_str}}
 
@@ -843,6 +877,153 @@ async def get_ai_response(
             # 放一個 None 當作結束標記
             await event_queue.put(None)
 
+    async def background_general_runner():
+        """一般對話模式：可選先呼叫 Tavily 取得即時資料，再串流 LLM 回應。"""
+        start_total = time.time()
+        pending_token_log_ids: List[UUID] = []
+        acc_model_name: str = os.getenv("GENERAL_CHAT_MODEL", "gpt-4o-mini")
+        web_results: list = []
+
+        title_task: Optional[asyncio.Task] = (
+            asyncio.create_task(_generate_title_via_llm(request.query))
+            if should_generate_title else None
+        )
+
+        try:
+            from app.backend.agent.general_chat import (
+                general_chat_astream,
+                GENERAL_CHAT_MODEL,
+                GENERAL_CHAT_ENABLE_WEB_SEARCH,
+            )
+            from app.backend.tools.global_search import tavily_search, TavilySearchError
+            from app.backend.module.token_usage import parse_usage_from_llm_message
+
+            messages_lc = initial_state["messages"]
+
+            # ── Tavily 網路搜尋（若開啟）──────────────────────────────────────
+            if GENERAL_CHAT_ENABLE_WEB_SEARCH:
+                await event_queue.put(_sse("tool_start", {"tool": "tavily_global_search"}))
+                try:
+                    tavily_out = await tavily_search(clean_query)
+                    web_results = tavily_out.get("results", [])
+                except TavilySearchError as e:
+                    print(f"[General/Tavily] 失敗（繼續無搜尋）: {e}")
+                    web_results = []
+                await event_queue.put(_sse("tool_done", {"tool": "tavily_global_search"}))
+
+            final_content = ""
+            last_chunk = None
+            async for chunk in general_chat_astream(messages_lc, web_context=web_results or None):
+                last_chunk = chunk
+                tok = chunk.content or ""
+                if tok:
+                    final_content += tok
+                    await event_queue.put(_sse("token", {"text": tok}))
+
+            # Token 計費
+            bp, bc = parse_usage_from_llm_message(last_chunk)
+            resp_meta = getattr(last_chunk, "response_metadata", None) if last_chunk else None
+            if isinstance(resp_meta, dict) and resp_meta.get("model_name"):
+                acc_model_name = str(resp_meta["model_name"])
+            inner = extract_model_label_from_lc_output(last_chunk)
+            if inner:
+                acc_model_name = inner
+            log_token_usage_parse_shape(
+                event_name="general_chat",
+                batch_p=bp,
+                batch_c=bc,
+                model_label=acc_model_name,
+                output=last_chunk,
+                tags=None,
+                meta_keys=None,
+            )
+            if bp > 0 or bc > 0:
+                log_id = await record_token_usage(
+                    user_id=current_user_id,
+                    chat_id=request.chat_id,
+                    message_id=None,
+                    model_name=acc_model_name,
+                    prompt_tokens=bp,
+                    completion_tokens=bc,
+                    caller="general_chat",
+                )
+                if log_id is not None:
+                    pending_token_log_ids.append(log_id)
+
+            total_time = round(time.time() - start_total, 3)
+            web_sources = [
+                {"title": r.get("title", ""), "url": r.get("url", ""), "source_tool": "web"}
+                for r in web_results
+            ]
+            await event_queue.put(_sse("done", {
+                "status": "success",
+                "chat_id": chat_id_str,
+                "total_execution_time": total_time,
+                "steps": [],
+                "final_content": final_content,
+                "retrieval_sources": web_sources,
+                "response_mode": "general",
+            }))
+
+            assistant_message_id = await _insert_assistant_message(
+                chat_id=request.chat_id,
+                parent_id=user_message_id,
+                content=final_content,
+                context_refs=None,
+                metadata={
+                    "total_execution_time": total_time,
+                    "response_mode": "general",
+                },
+            )
+            if assistant_message_id and pending_token_log_ids:
+                await attach_token_usage_logs_to_message(
+                    current_user_id,
+                    assistant_message_id,
+                    pending_token_log_ids,
+                )
+
+            # Title
+            if title_task is not None:
+                try:
+                    new_title = await asyncio.wait_for(title_task, timeout=3.0)
+                except (asyncio.TimeoutError, Exception):
+                    new_title = None
+                if new_title:
+                    try:
+                        async with get_pool().acquire() as conn:
+                            await conn.execute(
+                                "UPDATE chats SET title=$1, title_generated=TRUE WHERE id=$2",
+                                new_title, request.chat_id,
+                            )
+                        await event_queue.put(_sse("title_update", {
+                            "chat_id": chat_id_str,
+                            "title": new_title,
+                        }))
+                    except Exception:
+                        pass
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            if title_task is not None and not title_task.done():
+                title_task.cancel()
+            err_text = f"一般對話執行失敗: {str(e)}"
+            await event_queue.put(_sse("error", {"message": err_text}))
+            err_assistant_id = await _insert_assistant_message(
+                chat_id=request.chat_id,
+                parent_id=user_message_id,
+                content=err_text,
+                metadata={"error": str(e), "response_mode": "general"},
+            )
+            if err_assistant_id and pending_token_log_ids:
+                await attach_token_usage_logs_to_message(
+                    current_user_id,
+                    err_assistant_id,
+                    pending_token_log_ids,
+                )
+        finally:
+            await event_queue.put(None)
+
     async def background_flash_runner():
         """快捷模式：`flash_plan_and_retrieve`（預設略過 Router；
         可 `FLASH_SKIP_ROUTER=0`／`FLASH_LLM_QUERY_REWRITE=1` 等調整）。
@@ -1011,15 +1192,15 @@ async def get_ai_response(
 
             total_time = round(time.time() - start_total, 3)
             retrieval_sources = [
-                {
-                    "tool": item.get("source_tool"),
-                    "title": item.get("title"),
-                    "publishAt": item.get("publishAt"),
-                    "url": item.get("url"),
-                    "mongo_id": item.get("mongo_id"),
-                    "content_preview": item.get("content", "")[:100] + "...",
-                }
-                for item in accumulated_retrieved
+                    {
+                        "tool": item.get("source_tool"),
+                        "title": item.get("title"),
+                        "publishAt": item.get("publishAt"),
+                        "url": item.get("url"),
+                        "mongo_id": item.get("mongo_id"),
+                        "content_preview": item.get("content", "")[:100] + "...",
+                    }
+                    for item in accumulated_retrieved
             ]
             await event_queue.put(_sse("done", {
                 "status": "success",
@@ -1104,7 +1285,9 @@ async def get_ai_response(
             await event_queue.put(None)
 
     # 啟動背景生產者任務
-    if request.response_mode == "flash":
+    if request.chat_mode == "general":
+        asyncio.create_task(background_general_runner())
+    elif request.response_mode == "flash":
         asyncio.create_task(background_flash_runner())
     else:
         asyncio.create_task(background_agent_runner())

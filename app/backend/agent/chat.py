@@ -1,3 +1,35 @@
+"""
+chat.py（股市 Agent 核心）
+─────────────────────────────────────────────
+思考模式（thinking）的 LangGraph Agent 全部定義都在這裡。
+
+主要職責
+  1. 工具定義（@tool）
+     - search_stock_news          向量新聞庫混合搜尋（dense + BM25 RRF）
+     - search_market_ai_analysis  AI 分析報告向量搜尋
+     - get_market_recommendations 推薦個股 / 產業向量搜尋
+
+  2. 模型實例
+     - router_model_base       思考模式 Router，綁工具、多輪、支援串流 usage
+     - flash_router_model      快捷模式 Router，單次 ainvoke，不帶 stream_options
+     - flash_rewrite_model     快捷前置 query 收成模型（小型低延遲）
+     - analyst_model           思考模式 Analyst（gpt-5 等大模型，串流）
+     - flash_analyst_model     快捷模式 Analyst（gpt-5-mini 等，max_completion_tokens 限制）
+
+  3. LangGraph 圖結構（思考模式）
+     router → retry_check → tools（→ router） → analyst → END
+     - call_router     決定呼叫哪些工具（支援 ROUTER_MAX_CYCLES 限制）
+     - call_tools      並行執行工具，累積 retrieved_data
+     - call_analyst    組裝【完整參考資料】後串流輸出分析報告
+     - retry_check     空結果偵測，觸發重試提示
+
+  4. 輔助函式
+     - _format_retrieved_data_for_analyst  retrieved_data → Analyst 參考區塊
+     - _slim_messages_for_router           裁切歷史 context 給 Router
+     - _analyst_turn_messages              去除 ToolMessage 給 Analyst
+
+注意：一般對話（chat_mode=general）不使用本模組，請見 general_chat.py。
+"""
 import os
 import time
 import asyncio
@@ -73,6 +105,11 @@ def _format_retrieved_data_for_analyst(
             snt = it.get("source_news_titles") or []
             if snt:
                 lines.append("參考新聞: " + "; ".join(str(x) for x in snt[:5]))
+        elif st == "web":
+            if it.get("url"):
+                lines.append(f"網址: {it['url']}")
+            if it.get("publishAt"):
+                lines.append(f"時間: {it['publishAt'][:10] if it['publishAt'] else ''}")
         elif st == "recommendations":
             if it.get("publishAt"):
                 lines.append(f"時間: {it['publishAt']}")
@@ -91,6 +128,8 @@ RETRIEVAL_TOP_K = 5
 MAX_TOOL_ITEM_CHARS = int(os.getenv("MAX_TOOL_ITEM_CHARS", "500"))
 # Router 歷史 slim context：只保留最近 N 輪的對話（每輪 = 1 問 + 1 答 = 2 則）
 ROUTER_HISTORY_TURNS = int(os.getenv("ROUTER_HISTORY_TURNS", "2"))
+# 每次使用者提問，tavily_global_search 最多可呼叫幾次（跨工具輪次累計）
+TAVILY_MAX_CALLS_PER_TURN: int = int(os.getenv("TAVILY_MAX_CALLS_PER_TURN", "2"))
 
 
 def _strip_tool_calls_for_orphan_ai(m: BaseMessage) -> BaseMessage:
@@ -155,6 +194,8 @@ class AgentState(TypedDict):
     retrieved_data: Annotated[List[Dict[str, Any]], lambda x, y: x + y]
     # 前端指定的可用工具列表 (可選)
     enabled_tools: List[str]
+    # 本輪（單次使用者提問）已呼叫 tavily_global_search 的累計次數
+    web_search_calls: int
 
 # --- 2. 封裝工具 (Tool Wrappers) ---
 # 這裡將之前寫好的 async 函式封裝成 LangChain 可識別的 @tool
@@ -308,7 +349,35 @@ async def get_market_recommendations(start_date: str = None, end_date: str = Non
 
     return output
 
-tools = [search_stock_news, search_market_ai_analysis, get_market_recommendations]
+@tool
+async def tavily_global_search(query: str):
+    """
+    搜尋即時網路資訊（透過 Tavily Search API）。
+    適用於：最新時事、一般知識、產品說明、政策法規、非股市專業問題等。
+    注意：若問題能由股市新聞庫（search_stock_news）或 AI 分析報告（search_market_ai_analysis）回答，請優先使用那些工具。
+    參數:
+        query: 搜尋關鍵字（中英文皆可）。
+    """
+    from app.backend.tools.global_search import tavily_search, TavilySearchError
+    try:
+        result = await tavily_search(query)
+    except TavilySearchError as e:
+        return f"網路搜尋失敗：{e}"
+
+    if not result["results"]:
+        return "找不到相關網路資訊。"
+
+    lines: List[str] = []
+    if result.get("answer"):
+        lines.append(f"即時摘要：{result['answer']}\n")
+    for r in result["results"]:
+        date_str = f" ({r['published_date'][:10]})" if r.get("published_date") else ""
+        body = _clip_for_llm(r.get("content", ""), MAX_TOOL_ITEM_CHARS)
+        lines.append(f"【{r['title']}】{date_str}\n來源：{r['url']}\n{body}")
+    return "\n\n---\n".join(lines)
+
+
+tools = [search_stock_news, search_market_ai_analysis, get_market_recommendations, tavily_global_search]
 
 # OpenAI streaming：在尾包帶 usage（供 astream_events / on_chat_model_end 聚合）
 _OPENAI_STREAM_OPTS: Dict[str, Any] = {"stream_options": {"include_usage": True}}
@@ -467,7 +536,7 @@ async def call_router(state: AgentState):
     # 取得前端指定的工具清單
     enabled = state.get("enabled_tools", [])
     # 這裡列出我們系統中「真正實作」的工具名稱
-    all_tool_names = ["search_stock_news", "search_market_ai_analysis", "get_market_recommendations"]
+    all_tool_names = ["search_stock_news", "search_market_ai_analysis", "get_market_recommendations", "tavily_global_search"]
     
     # 邏輯：過濾掉前端傳入但不認識的名稱，確保 AI 不會試圖呼叫不存在的工具
     valid_enabled = [t for t in enabled if t in all_tool_names]
@@ -681,6 +750,38 @@ async def call_tools(state: AgentState, *, retrieval_top_k: Optional[int] = None
             ai_content = "\n".join(lines) if lines else "找不到推薦資訊。"
             for s in raw_result.get("sources", []):
                 retrieved.append({**s, "source_tool": "recommendations"})
+        elif tool_name == "tavily_global_search":
+            from app.backend.tools.global_search import tavily_search, TavilySearchError
+            query_text = args.get("query", "")
+            # 檢查本輪已呼叫次數是否達上限
+            if state.get("web_search_calls", 0) >= TAVILY_MAX_CALLS_PER_TURN:
+                ai_content = f"本輪網路搜尋已達上限（{TAVILY_MAX_CALLS_PER_TURN} 次），請根據已有資料作答。"
+                raw_result = {"results": [], "answer": None}
+            else:
+                try:
+                    raw_result = await tavily_search(query_text)
+                except TavilySearchError as e:
+                    ai_content = f"網路搜尋失敗：{e}"
+                    raw_result = {"results": [], "answer": None}
+                else:
+                    lines: List[str] = []
+                    if raw_result.get("answer"):
+                        lines.append(f"即時摘要：{raw_result['answer']}\n")
+                    for r in raw_result.get("results", []):
+                        date_str = f" ({r['published_date'][:10]})" if r.get("published_date") else ""
+                        body = _clip_for_llm(r.get("content", ""), MAX_TOOL_ITEM_CHARS)
+                        lines.append(f"【{r['title']}】{date_str}\n來源：{r['url']}\n{body}")
+                    ai_content = "\n\n---\n".join(lines) if lines else "找不到相關網路資訊。"
+            for r in raw_result.get("results", []):
+                retrieved.append({
+                    "source_tool": "web",
+                    "title": r.get("title", ""),
+                    "url": r.get("url", ""),
+                    "content": r.get("content", ""),
+                    "publishAt": r.get("published_date"),
+                    "score": r.get("score", 0),
+                })
+
         else:
             ai_content = f"錯誤：找不到工具 {tool_name}"
 
@@ -697,7 +798,18 @@ async def call_tools(state: AgentState, *, retrieval_top_k: Optional[int] = None
     for r in results:
         new_retrieved_data.extend(r[1])
 
-    return {"messages": tool_messages, "retrieved_data": new_retrieved_data}
+    # 計算本批次實際執行了幾次 tavily_global_search（未達上限才真正執行的才算）
+    tavily_executed = sum(
+        1 for tc in last_message.tool_calls
+        if tc["name"] == "tavily_global_search"
+        and state.get("web_search_calls", 0) < TAVILY_MAX_CALLS_PER_TURN
+    )
+
+    return {
+        "messages": tool_messages,
+        "retrieved_data": new_retrieved_data,
+        "web_search_calls": state.get("web_search_calls", 0) + tavily_executed,
+    }
 
 # --- 4. 定義邊界邏輯 (Conditional Edges) ---
 

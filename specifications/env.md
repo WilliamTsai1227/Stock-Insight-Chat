@@ -14,6 +14,8 @@ env_file:
   - ../.env
 ```
 
+修改 `.env` 後需重啟 backend 才會生效，指令見 [`docker_ops_handbook.md`](./docker_ops_handbook.md) §3.1。
+
 請在專案根目錄建立 `.env`（已列入 `.gitignore`，**勿提交至版本控制**）：
 
 ```bash
