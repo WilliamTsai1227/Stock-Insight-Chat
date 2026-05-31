@@ -646,6 +646,9 @@ body {
     background-color: var(--bubble-ai);
     border-bottom-left-radius: 4px;
     border: 1px solid var(--border);
+    overflow-wrap: break-word;  /* 長單字/無空格文字自動換行 */
+    word-break: break-word;     /* 長網址不溢出氣泡 */
+    min-width: 0;               /* 防止 flex 子元素忽略 overflow 限制 */
 }
 
 /* ============================================
@@ -852,7 +855,8 @@ body {
 }
 
 /* --- 行內程式碼 (用於股票代碼等) --- */
-.ai .bubble code {
+/* 行內 code（不在 pre 裡的）才套用灰底灰字 */
+.ai .bubble :not(pre) > code {
     background: rgba(176, 176, 176, 0.12);
     padding: 2px 6px;
     border-radius: 4px;
@@ -864,18 +868,79 @@ body {
 /* --- 程式碼區塊 --- */
 .ai .bubble pre {
     margin: 1rem 0;
-    border-radius: 10px;
+    border-radius: 0 0 10px 10px;
     overflow-x: auto;
     background: #0a0a0a;
     border: 1px solid var(--border);
+    border-top: none;
 }
 
-.ai .bubble pre code {
+.code-block-wrapper pre code {
     display: block;
-    padding: 1rem 1.2rem;
+    padding: 1.1rem 1.4rem;
     background: transparent;
     font-size: 0.85rem;
-    line-height: 1.6;
+    line-height: 1.65;
+    font-family: 'SF Mono', 'Fira Code', 'Fira Mono', 'Consolas', monospace;
+}
+
+/* highlight.js 背景透明，不蓋掉 wrapper 的深色底；
+   不設 padding / color，讓各 token class 的顏色正常顯示 */
+.ai .bubble .hljs {
+    background: transparent;
+}
+
+/* 程式碼區塊外框 */
+.code-block-wrapper {
+    margin: 1rem 0;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.code-block-wrapper pre {
+    margin: 0;
+    border: none;
+    border-radius: 0;
+}
+
+/* Header bar：語言標籤 + 複製按鈕 */
+.code-block-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 12px;
+    background: rgba(255, 255, 255, 0.04);
+    border-bottom: 1px solid var(--border);
+    min-height: 34px;
+}
+
+.code-lang-label {
+    font-size: 0.75rem;
+    color: var(--text-muted, #888);
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    text-transform: lowercase;
+    letter-spacing: 0.5px;
+}
+
+.code-copy-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    color: var(--text-muted, #888);
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    line-height: 1;
+}
+
+.code-copy-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-main, #ddd);
 }
 
 /* --- 連結 --- */
@@ -884,6 +949,8 @@ body {
     text-decoration: none;
     border-bottom: 1px solid transparent;
     transition: 0.2s;
+    word-break: break-all;  /* 網址中沒有空格，強制在任意字元位置換行 */
+    overflow-wrap: anywhere;
 }
 
 .ai .bubble a:hover {

@@ -289,20 +289,108 @@ marked.use({
             const text  = token.text  || href;
             const titleAttr = title ? ` title="${title}"` : '';
             return `<a href="${href}"${titleAttr} target="_blank" rel="noopener noreferrer">${text}</a>`;
+        },
+        // 程式碼區塊：語法高亮 + 語言標籤 + 複製按鈕
+        code(token) {
+            const lang    = (token.lang || '').trim();
+            const rawCode = token.text || '';
+            let highlighted;
+            if (lang && window.hljs && hljs.getLanguage(lang)) {
+                highlighted = hljs.highlight(rawCode, { language: lang }).value;
+            } else if (window.hljs) {
+                highlighted = hljs.highlightAuto(rawCode).value;
+            } else {
+                // hljs 未載入時 fallback 純文字
+                highlighted = rawCode
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;');
+            }
+            const langLabel = lang
+                ? `<span class="code-lang-label">${lang}</span>`
+                : '';
+            const copyBtn =
+                `<button class="code-copy-btn" data-action="copy-code" title="複製">
+                    <i data-lucide="copy" size="14"></i>
+                 </button>`;
+            return (
+                `<div class="code-block-wrapper">` +
+                    `<div class="code-block-header">${langLabel}${copyBtn}</div>` +
+                    `<pre><code class="hljs ${lang ? `language-${lang}` : ''}">${highlighted}</code></pre>` +
+                `</div>`
+            );
         }
     }
+});
+
+/** 複製程式碼區塊內容（事件委派，DOMPurify 安全） */
+document.addEventListener('click', function (e) {
+    const btn = e.target.closest('[data-action="copy-code"]');
+    if (!btn) return;
+    const code = btn.closest('.code-block-wrapper')?.querySelector('code');
+    if (!code) return;
+    navigator.clipboard.writeText(code.innerText).then(() => {
+        const icon = btn.querySelector('i');
+        if (icon) {
+            icon.setAttribute('data-lucide', 'check');
+            lucide.createIcons();
+        }
+        setTimeout(() => {
+            if (icon) {
+                icon.setAttribute('data-lucide', 'copy');
+                lucide.createIcons();
+            }
+        }, 1500);
+    });
 });
 
 /**
  * 進階 Markdown 渲染
  */
 function renderMarkdown(raw) {
-    let html = marked.parse(raw || '');
+    // 前處理：偵測裸 JSON 區塊（LLM 未加 code fence 時的 fallback）
+    // 規則：段落以 { 或 [ 開頭，內含多行，且結尾為 } 或 ]，視為 JSON 自動包 fence
+    const preprocessed = (raw || '').replace(
+        /(^|\n)([ \t]*[{\[][^`][\s\S]*?[}\]][ \t]*)(?=\n|$)/gm,
+        (match, prefix, block) => {
+            // 若已在 code fence 內則跳過
+            if (/^\s*```/.test(block)) return match;
+            // 若 block 看起來像 JSON（至少有一個 key: value 或 array item）
+            const trimmed = block.trim();
+            try {
+                JSON.parse(trimmed);
+                return `${prefix}\`\`\`json\n${trimmed}\n\`\`\``;
+            } catch {
+                return match;
+            }
+        }
+    );
+    let html = marked.parse(preprocessed);
     html = html.replace(
         /<strong>(\d{4,5})<\/strong>/g,
         '<strong class="stock-ticker">$1</strong>'
     );
     return html;
+}
+
+/**
+ * bubble 元素寫入 Markdown 並補初始化 lucide icon（程式碼區塊複製按鈕用）。
+ * 使用 DOMPurify 消毒 HTML，防止 XSS 攻擊。
+ * Markdown 渲染需插入 HTML 結構（語法高亮、連結、表格等），
+ * 因此使用 DOMPurify.sanitize() 消毒後再寫入，禁止直接寫入未消毒內容。
+ */
+function applyMarkdown(el, raw) {
+    const html = renderMarkdown(raw);
+    // FORCE_BODY 確保片段 HTML 不被包進 <body> 包裝；
+    // ADD_ATTR 允許 target / rel（link renderer）、data-action（複製按鈕事件委派用）
+    const clean = window.DOMPurify
+        ? DOMPurify.sanitize(html, {
+            ADD_ATTR: ['target', 'rel', 'data-action'],
+            FORCE_BODY: true,
+        })
+        : html;
+    el.innerHTML = clean;
+    if (window.lucide) lucide.createIcons({ el });
 }
 
 function applyResponseModeLabel() {
@@ -1474,7 +1562,7 @@ function showChatView() {
 
 function clearChatMessages() {
     const container = document.getElementById('chat-messages');
-    container.innerHTML = '';
+    while (container.firstChild) container.removeChild(container.firstChild);
     const hero = document.createElement('div');
     hero.className = 'welcome-hero';
     const h1 = document.createElement('h1');
@@ -1554,7 +1642,7 @@ function appendAssistantHistoryMessage(record) {
 
     const bubble = document.createElement('div');
     bubble.className = 'bubble';
-    bubble.innerHTML = renderMarkdown(record.content || '');
+    applyMarkdown(bubble, record.content || '');
     msgDiv.appendChild(bubble);
 
     const meta = record.metadata;
@@ -1917,7 +2005,13 @@ async function sendMessage() {
                         hideThinkingRow();
                         addBubbleIfNeeded();
                         rawStreamText += payload.text || '';
-                        bubble.innerHTML = renderMarkdown(rawStreamText);
+                        const streamHtml = window.DOMPurify
+                            ? DOMPurify.sanitize(renderMarkdown(rawStreamText), {
+                                ADD_ATTR: ['target', 'rel', 'data-action'],
+                                FORCE_BODY: true,
+                              })
+                            : renderMarkdown(rawStreamText);
+                        bubble.innerHTML = streamHtml;
                         bubble.appendChild(streamCursor);
                         scrollToBottom(streamTargetChatId);
                         break;
@@ -1933,7 +2027,7 @@ async function sendMessage() {
                         addBubbleIfNeeded();
                         cleanup();
                         const finalText = payload.final_content || rawStreamText;
-                        bubble.innerHTML = renderMarkdown(finalText);
+                        applyMarkdown(bubble, finalText);
                         appendStepsAndSources(msgDiv, payload.steps, payload.retrieval_sources);
                         appendCopyBar(msgDiv, finalText, payload.retrieval_sources);
                         lucide.createIcons();

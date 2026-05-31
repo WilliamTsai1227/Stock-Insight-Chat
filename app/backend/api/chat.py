@@ -877,6 +877,102 @@ async def get_ai_response(
             # 放一個 None 當作結束標記
             await event_queue.put(None)
 
+    # 明確不需要搜尋的純功能詞 pre-filter（感謝、確認、空話）
+    _NO_SEARCH_PATTERNS = {
+        "好", "嗯", "ok", "okay", "好的", "我知道了", "謝謝", "感謝", "收到",
+        "yes", "no", "是", "否", "對", "不對", "好喔", "哦", "喔",
+    }
+
+    async def _rewrite_search_query(
+        user_query: str,
+        history: list,
+    ) -> str:
+        """
+        根據對話歷史，判斷本輪是否需要網路搜尋，並生成最佳搜尋詞。
+
+        流程：
+        1. Pre-filter：純功能詞（謝謝/好的）直接跳過
+        2. 其他所有輸入：一律進 LLM 改寫，由 LLM 結合上下文決定搜尋詞或輸出 __NO_SEARCH__
+        3. Fallback：LLM 失敗時使用原始 query（截斷到 350 字）
+
+        改寫模型由 GENERAL_REWRITE_LLM 環境變數控制（預設 gpt-4o-mini）。
+        """
+        stripped = user_query.strip().rstrip("？?！!。，,.")
+        _TAVILY_MAX_CHARS = 350  # Tavily 上限 400，留 50 字緩衝
+
+        # Step 1：純功能詞，完全不需要搜尋
+        if stripped in _NO_SEARCH_PATTERNS:
+            print(f"[General/QueryRewrite] 純功能詞，跳過搜尋（原始：{user_query[:50]!r}）")
+            return ""
+
+        try:
+            from langchain_openai import ChatOpenAI
+            from langchain_core.messages import SystemMessage, HumanMessage as HM
+
+            model_name = os.getenv("GENERAL_REWRITE_LLM", "gpt-4o-mini").strip()
+            rewrite_model = ChatOpenAI(
+                model=model_name,
+                temperature=1,
+                model_kwargs={"max_completion_tokens": 80},
+            )
+
+            # 最多帶最近 6 則歷史；人類訊息保留 500 字（主題關鍵詞都在裡面），AI 訊息保留 200 字
+            recent = history[-7:] if len(history) > 7 else history
+            history_text = "\n".join(
+                f"{'使用者' if m.type == 'human' else 'AI'}: "
+                f"{(m.content or '')[:500 if m.type == 'human' else 200]}"
+                for m in recent
+            )
+
+            # ── DEBUG：印出餵入 rewrite LLM 的完整資料 ──────────────────────────
+            print(f"[General/QueryRewrite][DEBUG] user_query={user_query!r}")
+            print(f"[General/QueryRewrite][DEBUG] history 筆數={len(history)}，recent 筆數={len(recent)}")
+            print(f"[General/QueryRewrite][DEBUG] history_text=\n{history_text or '（空）'}")
+            # ─────────────────────────────────────────────────────────────────────
+
+            # 長查詢（>40字）額外說明，讓 LLM 知道要壓縮
+            long_hint = ""
+            if len(user_query) > 40:
+                long_hint = (
+                    "注意：使用者輸入很長，可能包含引用自 AI 回覆的內容。"
+                    "你必須把重點濃縮成一個 10–25 字的精確搜尋詞，或輸出 __NO_SEARCH__。\n\n"
+                )
+
+            system = (
+                "你是一個搜尋意圖分析助理。根據對話歷史與使用者最新輸入，決定是否要網路搜尋以及搜尋什麼。\n\n"
+                + long_hint +
+                "判斷規則：\n"
+                "1. 若使用者輸入是詢問新資訊（人名、地點、事件、解釋等），輸出最佳搜尋詞（繁體中文，10–25 字）。\n"
+                "2. 若使用者輸入是對上文主題的補充細節或追加條件（如天數、預算、地點偏好、數量），"
+                "   請把對話歷史中的**核心主題**（目的地、主題等）與新細節合成一個精確搜尋詞。\n"
+                "   - 例：上文問福岡旅遊，使用者說「5天」→ 福岡 5天自由行 行程規劃\n"
+                "   - 例：上文問台北咖啡廳，使用者說「有插座的」→ 台北 咖啡廳 有插座 適合工作\n"
+                "3. 若使用者輸入是模糊的續接詞（如「再來」、「繼續」、「還有呢」），"
+                "   你必須看對話歷史判斷：\n"
+                "   - 如果上文 AI 已做完分析/整理，使用者是要求繼續展開同一份回覆 → 輸出 __NO_SEARCH__\n"
+                "   - 如果上文在找資料/推薦（如餐廳、新聞、店家），使用者是要求更多同類資料 → 用上文主題合成搜尋詞\n"
+                "4. 若使用者輸入是純聊天（感謝、確認、情緒），輸出 __NO_SEARCH__。\n\n"
+                "重要：只輸出搜尋詞或 __NO_SEARCH__，不要輸出任何其他文字。\n\n"
+                "範例：\n"
+                "  輸入「台積電最新財報」→ 台積電 2025 財報 EPS\n"
+                "  輸入「5天的旅遊」（上文問福岡行程）→ 福岡 5天自由行 行程 機票住宿\n"
+                "  輸入「預算2萬以內」（上文問東京旅遊）→ 東京 自由行 預算2萬 行程規劃\n"
+                "  輸入「再來」（上文 AI 在整理逐玉劇的分析）→ __NO_SEARCH__\n"
+                "  輸入「再來」（上文在找台北墨西哥塔可餐廳）→ 台北 墨西哥 塔可餐廳 推薦\n"
+                "  輸入「再詳細說第三點」（上文 AI 列出 8 個管理建議）→ __NO_SEARCH__\n"
+            )
+            prompt = f"對話歷史：\n{history_text}\n\n使用者最新輸入：{user_query}"
+            result = await rewrite_model.ainvoke([SystemMessage(content=system), HM(content=prompt)])
+            query = (result.content or "").strip()
+            print(f"[General/QueryRewrite] 原始={user_query!r} → 改寫={query!r}")
+            if query == "__NO_SEARCH__":
+                return ""
+            # 最後保險：不管怎麼改寫，超過 _TAVILY_MAX_CHARS 一律截斷
+            return (query or user_query)[:_TAVILY_MAX_CHARS]
+        except Exception as e:
+            print(f"[General/QueryRewrite] 改寫失敗，fallback 原始查詢: {e}")
+            return user_query[:_TAVILY_MAX_CHARS]
+
     async def background_general_runner():
         """一般對話模式：可選先呼叫 Tavily 取得即時資料，再串流 LLM 回應。"""
         start_total = time.time()
@@ -902,14 +998,19 @@ async def get_ai_response(
 
             # ── Tavily 網路搜尋（若開啟）──────────────────────────────────────
             if GENERAL_CHAT_ENABLE_WEB_SEARCH:
-                await event_queue.put(_sse("tool_start", {"tool": "tavily_global_search"}))
-                try:
-                    tavily_out = await tavily_search(clean_query)
-                    web_results = tavily_out.get("results", [])
-                except TavilySearchError as e:
-                    print(f"[General/Tavily] 失敗（繼續無搜尋）: {e}")
-                    web_results = []
-                await event_queue.put(_sse("tool_done", {"tool": "tavily_global_search"}))
+                # 傳 history_lc（純上下文，不含本輪 user 訊息），避免 LLM 誤判
+                search_query = await _rewrite_search_query(clean_query, history_lc)
+                if search_query:
+                    await event_queue.put(_sse("tool_start", {"tool": "tavily_global_search"}))
+                    try:
+                        tavily_out = await tavily_search(search_query)
+                        web_results = tavily_out.get("results", [])
+                    except TavilySearchError as e:
+                        print(f"[General/Tavily] 失敗（繼續無搜尋）: {e}")
+                        web_results = []
+                    await event_queue.put(_sse("tool_done", {"tool": "tavily_global_search"}))
+                else:
+                    print(f"[General/Tavily] LLM 判斷本輪無需搜尋（原始查詢：{clean_query!r}）")
 
             final_content = ""
             last_chunk = None
