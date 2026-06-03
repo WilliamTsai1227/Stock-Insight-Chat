@@ -22,24 +22,19 @@ ON CONFLICT (name) DO UPDATE SET
     max_projects = EXCLUDED.max_projects;
 
 -- 3. 建立 users 表 (會員系統核心)
---    Google SSO：以 OIDC 「sub」存於 google_sub 作為綁定主鍵列；password_hash 可 NULL（僅 OAuth）。
+--    僅支援 Google SSO 登入；google_sub 為 Google OIDC subject，不可為 NULL。
 --    詳見 specifications/google_sso.md
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email VARCHAR(255) UNIQUE NOT NULL,
     username VARCHAR(100) UNIQUE NOT NULL,
-    password_hash TEXT, -- NULL：純 Google／尚未設本地密碼
-    google_sub TEXT UNIQUE, -- Google OIDC subject；NULL：未綁定 Google（UNIQUE 允許多筆 NULL）
-    email_verified BOOLEAN NOT NULL DEFAULT FALSE,
-    last_login_provider VARCHAR(32), -- e.g. 'password', 'google'（可 NULL）
+    google_sub TEXT UNIQUE NOT NULL, -- Google OIDC subject，必填；以此作為身分主鍵
+    last_login_provider VARCHAR(32) DEFAULT 'google', -- 目前固定為 'google'
     status VARCHAR(20) DEFAULT 'active', -- active, disabled, pending
     tier_id UUID REFERENCES subscription_tiers(id) ON DELETE SET NULL, -- 關聯訂閱等級
     last_login_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT users_has_password_or_google CHECK (
-        password_hash IS NOT NULL OR google_sub IS NOT NULL
-    )
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 4. 建立 user_usage_quotas 表 (使用者當前週期的 Token 用量累計)

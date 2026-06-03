@@ -1,335 +1,426 @@
 """
-Auth API (認證相關接口)
-========================
-使用 asyncpg 原生連線操作 PostgreSQL。
+Auth API（Google SSO 認證）
+============================
+僅支援 Google OAuth 2.0 + OIDC 登入。
 
-asyncpg 語法注意事項：
-- 參數佔位符：$1, $2, $3...（位置參數）
-- 取單列：await db.fetchrow(sql, *args)
-- 取單值：await db.fetchval(sql, *args)
-- 寫入/更新/刪除：await db.execute(sql, *args)
-- 多個寫入需原子性時，用 async with db.transaction()
+流程：
+  1. GET /api/user/auth/google/start   → 產生 state、設 HttpOnly Cookie、302 到 Google
+  2. GET /api/user/auth/google/callback → 驗 state、換 token、upsert user、簽發 RT Cookie
+  3. POST /api/user/logout              → 撤銷 RT、清 Cookie
+  4. POST /api/user/refresh             → RT Rotation：換新 AT + 新 RT
+
+所需環境變數：
+  GOOGLE_CLIENT_ID         Google OAuth Client ID
+  GOOGLE_CLIENT_SECRET     Google OAuth Client Secret
+  GOOGLE_OAUTH_REDIRECT_URI  Callback URI（需與 Google Console 完全一致）
+  FRONTEND_URL             前端根網址（callback 後重導用）
+  COOKIE_SECURE            true = 僅 HTTPS 送出 Cookie（正式環境）
+
+asyncpg 語法：$1 $2 位置參數；fetchrow / fetchval / execute。
 """
 
 import os
-import asyncpg
-from fastapi import APIRouter, Depends, HTTPException, status, Response, Cookie
-from pydantic import BaseModel, EmailStr
+import secrets
+from datetime import datetime, timedelta, timezone
 from typing import Optional
+from urllib.parse import urlencode
 from uuid import UUID
-from datetime import datetime, timezone, timedelta
-from asyncpg.exceptions import UniqueViolationError
 
-# secure=True 只在 HTTPS 下 Cookie 才會被瀏覽器送出
-# 本機 HTTP 開發時必須設為 False，否則 RT Cookie 永遠不會被帶回來
-COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
+import asyncpg
+import httpx
+from asyncpg.exceptions import UniqueViolationError
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
+from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
 
 from app.backend.database.postgresql import get_db
 from app.backend.module.jwt import (
-    hash_password,
-    verify_password,
+    REFRESH_TOKEN_EXPIRE_DAYS,
     create_access_token,
     create_refresh_token,
-    REFRESH_TOKEN_EXPIRE_DAYS,
+    decode_token,
 )
+
+# ── 設定 ──────────────────────────────────────────────────────────────────────
+COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+GOOGLE_REDIRECT_URI = os.getenv(
+    "GOOGLE_OAUTH_REDIRECT_URI",
+    "http://localhost:8000/api/user/auth/google/callback",
+)
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost")
+
+_GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+_GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+_GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 
 router = APIRouter(tags=["User Authentication"])
 
 
-# --- Request/Response Schemas ---
+# ── Response Schemas ──────────────────────────────────────────────────────────
 
-class RegisterRequest(BaseModel):
-    email: EmailStr
-    username: str
-    password: str
-
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
-
-class UserResponse(BaseModel):
-    id: UUID
-    username: str
-    email: str
-    tier: Optional[str] = "free"
-
-class LoginResponse(BaseModel):
+class TokenRefreshResponse(BaseModel):
     status: str = "success"
     access_token: str
     token_type: str = "bearer"
-    user: UserResponse
 
 
-# --- API Endpoints ---
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-@router.post("/api/user/register", status_code=status.HTTP_201_CREATED)
-async def register(
-    request: RegisterRequest,
-    db: asyncpg.Connection = Depends(get_db)
-):
-    """使用者註冊接口"""
-
-    # 所有寫入操作包在一個 transaction 中，確保原子性
-    async with db.transaction():
-
-        # 1. 檢查 Email 是否已存在
-        existing_email = await db.fetchval(
-            "SELECT id FROM users WHERE email = $1",
-            request.email
-        )
-        if existing_email:
-            raise HTTPException(status_code=400, detail="Email already registered")
-
-        # 2. 檢查 Username 是否已存在
-        existing_username = await db.fetchval(
-            "SELECT id FROM users WHERE username = $1",
-            request.username
-        )
-        if existing_username:
-            raise HTTPException(status_code=400, detail="Username already taken")
-
-        # 3. 建立使用者，tier_id 指向 free 等級
-        new_user_id = await db.fetchval(
-            """
-            INSERT INTO users (email, username, password_hash, tier_id)
-            VALUES ($1, $2, $3,
-                    (SELECT id FROM subscription_tiers WHERE name = 'free' LIMIT 1))
-            RETURNING id
-            """,
-            request.email,
-            request.username,
-            hash_password(request.password)
-        )
-
-        # 4. 初始化使用量配額
-        await db.execute(
-            """
-            INSERT INTO user_usage_quotas (user_id, current_period_start, used_tokens)
-            VALUES ($1, $2, 0)
-            """,
-            new_user_id,
-            datetime.now(timezone.utc)
-        )
-
-    return {
-        "status": "success",
-        "message": "User registered successfully",
-        "user_id": str(new_user_id)
-    }
-
-
-@router.post("/api/user/login", response_model=LoginResponse)
-async def login(
-    request: LoginRequest,
-    response: Response,
-    db: asyncpg.Connection = Depends(get_db)
-):
-    """使用者登入接口"""
-
-    # 1. 查詢使用者
-    user = await db.fetchrow(
-        "SELECT id, email, username, password_hash FROM users WHERE email = $1",
-        request.email
+def _fe_error(error_code: str) -> RedirectResponse:
+    """重導到前端並帶上錯誤代碼（Query String）。"""
+    return RedirectResponse(
+        url=f"{FRONTEND_URL}/?error={error_code}",
+        status_code=302,
     )
 
-    if not user or not verify_password(request.password, user["password_hash"]):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
 
-    # 2. 產生 Tokens
-    user_id_str = str(user["id"])
-    user_data = {"sub": user_id_str, "email": user["email"]}
-    access_token = create_access_token(data=user_data)
-
-    # 3. 寫入 Refresh Token 並更新最後登入時間（原子操作）
-    # 避免極端情況下 refresh token 撞 unique constraint，做少量重試
-    refresh_token_str = None
-    expires_at = None
+async def _issue_refresh_token(
+    db: asyncpg.Connection,
+    user_id: UUID,
+    user_data: dict,
+) -> str:
+    """產生並寫入 Refresh Token（含 jti 碰撞重試），回傳 token 字串。"""
+    expires_at = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
     for _ in range(3):
         candidate = create_refresh_token(data=user_data)
-        candidate_expires = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
         try:
-            async with db.transaction():
-                await db.execute(
-                    "INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)",
-                    user["id"],
-                    candidate,
-                    candidate_expires
-                )
-                await db.execute(
-                    "UPDATE users SET last_login_at = $1 WHERE id = $2",
-                    datetime.now(timezone.utc),
-                    user["id"]
-                )
-            refresh_token_str = candidate
-            expires_at = candidate_expires
-            break
+            await db.execute(
+                "INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)",
+                user_id,
+                candidate,
+                expires_at,
+            )
+            return candidate
         except UniqueViolationError:
             continue
+    raise RuntimeError("Failed to generate unique refresh token after 3 attempts")
 
-    if not refresh_token_str:
-        raise HTTPException(status_code=500, detail="Failed to create refresh token. Please try again.")
 
-    # 4. 清理該用戶自己的過期 RT（fire-and-forget）
+# ── Endpoints ─────────────────────────────────────────────────────────────────
+
+@router.get("/api/user/auth/google/start")
+async def google_start():
+    """
+    啟動 Google OAuth 登入流程。
+
+    產生隨機 state → 存入 HttpOnly Cookie → 302 重導到 Google 授權頁面。
+    前端只需將使用者導向此端點（或直接超連結）。
+    """
+    if not GOOGLE_CLIENT_ID:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Google OAuth is not configured on this server.",
+        )
+
+    state = secrets.token_urlsafe(32)
+
+    params = {
+        "client_id": GOOGLE_CLIENT_ID,
+        "redirect_uri": GOOGLE_REDIRECT_URI,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state,
+        "access_type": "offline",
+        "prompt": "select_account",  # 讓使用者每次都能切換 Google 帳號
+    }
+    # RedirectResponse 必須直接呼叫 set_cookie；
+    # 若用 injected Response 物件設 Cookie 再 return RedirectResponse，
+    # FastAPI 不會合併兩者的 headers，Cookie 不會送出。
+    redirect = RedirectResponse(
+        url=f"{_GOOGLE_AUTH_URL}?{urlencode(params)}",
+        status_code=302,
+    )
+    redirect.set_cookie(
+        key="oauth_state",
+        value=state,
+        httponly=True,
+        secure=COOKIE_SECURE,
+        samesite="lax",
+        max_age=600,  # 10 分鐘內完成 OAuth flow
+    )
+    return redirect
+
+
+@router.get("/api/user/auth/google/callback")
+async def google_callback(
+    db: asyncpg.Connection = Depends(get_db),
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+    oauth_state: Optional[str] = Cookie(None),
+):
+    """
+    Google OAuth Callback。
+
+    流程：驗 state → 換 token → 取 UserInfo → Upsert user → 簽發 RT Cookie → 302 回前端。
+    前端偵測到 refresh_token Cookie 後，呼叫 POST /api/user/refresh 取得 Access Token。
+    """
+    # 0. 使用者在 Google 頁面取消授權
+    if error:
+        return _fe_error("oauth_cancelled")
+
+    # 1. 防 CSRF：驗 state
+    if not state or not oauth_state or state != oauth_state:
+        return _fe_error("invalid_state")
+    # oauth_state Cookie 有 max_age=600，驗過後自然過期，無需主動刪除
+
+    # 2. 用 code 換 Google Access Token
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            token_resp = await client.post(
+                _GOOGLE_TOKEN_URL,
+                data={
+                    "code": code,
+                    "client_id": GOOGLE_CLIENT_ID,
+                    "client_secret": GOOGLE_CLIENT_SECRET,
+                    "redirect_uri": GOOGLE_REDIRECT_URI,
+                    "grant_type": "authorization_code",
+                },
+            )
+            token_resp.raise_for_status()
+            token_data = token_resp.json()
+    except httpx.HTTPError as e:
+        print(f"[Google OAuth] Token exchange failed: {e}")
+        return _fe_error("token_exchange_failed")
+
+    google_at = token_data.get("access_token")
+    if not google_at:
+        return _fe_error("no_access_token")
+
+    # 3. 取 Google UserInfo（sub、email、name）
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            userinfo_resp = await client.get(
+                _GOOGLE_USERINFO_URL,
+                headers={"Authorization": f"Bearer {google_at}"},
+            )
+            userinfo_resp.raise_for_status()
+            userinfo = userinfo_resp.json()
+    except httpx.HTTPError as e:
+        print(f"[Google OAuth] UserInfo fetch failed: {e}")
+        return _fe_error("userinfo_failed")
+
+    google_sub: Optional[str] = userinfo.get("sub")
+    email: Optional[str] = userinfo.get("email")
+    display_name: str = userinfo.get("name") or (email.split("@")[0] if email else "user")
+
+    if not google_sub or not email:
+        return _fe_error("missing_user_info")
+
+    # 4. Upsert user
+    now = datetime.now(timezone.utc)
+    try:
+        user = await db.fetchrow(
+            "SELECT id, email, username FROM users WHERE google_sub = $1",
+            google_sub,
+        )
+
+        if not user:
+            # 4a. 相同 email 的既有帳號（舊密碼帳號升級或帳號合併）→ 補綁 google_sub
+            existing = await db.fetchrow(
+                "SELECT id, email, username FROM users WHERE email = $1",
+                email,
+            )
+            if existing:
+                await db.execute(
+                    """
+                    UPDATE users
+                    SET google_sub = $1, last_login_at = $2, last_login_provider = 'google'
+                    WHERE id = $3
+                    """,
+                    google_sub,
+                    now,
+                    existing["id"],
+                )
+                user = existing
+            else:
+                # 4b. 全新帳號 — 確保 username 唯一
+                base = display_name.lower().replace(" ", "_")[:40]
+                username = base
+                i = 1
+                while await db.fetchval(
+                    "SELECT id FROM users WHERE username = $1", username
+                ):
+                    username = f"{base}_{i}"
+                    i += 1
+
+                async with db.transaction():
+                    user_id = await db.fetchval(
+                        """
+                        INSERT INTO users
+                            (email, username, google_sub, last_login_provider, last_login_at, tier_id)
+                        VALUES
+                            ($1, $2, $3, 'google', $4,
+                             (SELECT id FROM subscription_tiers WHERE name = 'free' LIMIT 1))
+                        RETURNING id
+                        """,
+                        email,
+                        username,
+                        google_sub,
+                        now,
+                    )
+                    await db.execute(
+                        """
+                        INSERT INTO user_usage_quotas (user_id, current_period_start, used_tokens)
+                        VALUES ($1, $2, 0)
+                        """,
+                        user_id,
+                        now,
+                    )
+
+                user = await db.fetchrow(
+                    "SELECT id, email, username FROM users WHERE id = $1",
+                    user_id,
+                )
+        else:
+            # 4c. 已存在帳號 — 更新最後登入時間
+            await db.execute(
+                "UPDATE users SET last_login_at = $1, last_login_provider = 'google' WHERE id = $2",
+                now,
+                user["id"],
+            )
+
+    except Exception as e:
+        print(f"[Google OAuth] DB error: {e}")
+        return _fe_error("db_error")
+
+    # 5. 簽發自有 AT + RT
+    user_data = {"sub": str(user["id"]), "email": user["email"]}
+    try:
+        rt = await _issue_refresh_token(db, user["id"], user_data)
+    except RuntimeError as e:
+        print(f"[Google OAuth] RT issue error: {e}")
+        return _fe_error("session_error")
+
+    # 清理該使用者過期的 RT（fire-and-forget）
     await db.execute(
         "DELETE FROM refresh_tokens WHERE user_id = $1 AND expires_at <= NOW()",
-        user["id"]
+        user["id"],
     )
 
-    # 5. 設定 HttpOnly Cookie
-    response.set_cookie(
+    # 6. 設定 HttpOnly RT Cookie 並 302 回前端
+    # 注意：必須在 RedirectResponse 上直接呼叫 set_cookie，
+    # 不可用 injected Response 物件——FastAPI 不會合併其 headers 到 RedirectResponse。
+    redirect = RedirectResponse(url=FRONTEND_URL, status_code=302)
+    redirect.set_cookie(
         key="refresh_token",
-        value=refresh_token_str,
+        value=rt,
         httponly=True,
-        secure=COOKIE_SECURE,   # 本機 HTTP: False；正式 HTTPS: True
+        secure=COOKIE_SECURE,
         samesite="lax",
-        max_age=REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600
+        max_age=REFRESH_TOKEN_EXPIRE_DAYS * 86400,
     )
-
-    return {
-        "status": "success",
-        "access_token": access_token,
-        "token_type": "bearer",
-        "user": {
-            "id": user["id"],
-            "username": user["username"],
-            "email": user["email"]
-        }
-    }
+    return redirect
 
 
 @router.post("/api/user/logout")
 async def logout(
     response: Response,
     refresh_token: Optional[str] = Cookie(None),
-    db: asyncpg.Connection = Depends(get_db)
+    db: asyncpg.Connection = Depends(get_db),
 ):
-    """使用者登出接口"""
+    """登出：撤銷 Refresh Token 並清除 Cookie。"""
     if refresh_token:
         await db.execute(
             "DELETE FROM refresh_tokens WHERE token = $1",
-            refresh_token
+            refresh_token,
         )
-
     response.delete_cookie("refresh_token")
     return {"status": "success", "message": "Logged out successfully"}
 
 
-@router.post("/api/user/refresh")
+@router.post("/api/user/refresh", response_model=TokenRefreshResponse)
 async def refresh_access_token(
     response: Response,
     refresh_token: Optional[str] = Cookie(None),
-    db: asyncpg.Connection = Depends(get_db)
+    db: asyncpg.Connection = Depends(get_db),
 ):
     """
-    RT Rotation：使用 Refresh Token 換取新的 AT + 新的 RT。
+    RT Rotation：使用 Refresh Token Cookie 換取新的 AT + 新的 RT。
 
     安全機制：
-    - 使用 DELETE...RETURNING 原子操作消費舊 RT，確保同一 RT 只能被使用一次。
-    - 若 RT 不在 DB（已被消費）但簽名仍有效 → 判定為 Token Reuse 攻擊，
-      立刻撤銷該 user 所有 Session，駭客與正常用戶同時被踢下線。
-    - 若 RT 簽名無效或已過期 → 直接 401，不查 DB。
+    - DELETE...RETURNING 原子消費舊 RT，確保同一 RT 只能用一次。
+    - 若 RT 已被消費（JWT 有效但 DB 無記錄）→ Token Reuse 攻擊，撤銷該 user 所有 Session。
     """
     if not refresh_token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Refresh token missing"
+            detail="Refresh token missing",
         )
 
-    # 1. 純 Stateless 驗證 RT 簽名與 exp（不查 DB）。
-    #    對偽造或已過期的 token 在此快速失敗，避免浪費 DB 連線。
-    #    同時驗證 type == "refresh"，防止用 AT 冒充 RT。
-    from app.backend.module.jwt import decode_token
+    # 1. Stateless 驗簽名 + exp
     payload = decode_token(refresh_token)
     if not payload or payload.get("type") != "refresh":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Refresh token invalid or expired. Please login again."
+            detail="Refresh token invalid or expired. Please login again.",
         )
 
-    # 2. 原子消費：DELETE...RETURNING（只有一個 concurrent request 能成功）。
-    #    此時 payload 已驗證有效，DB 若找不到 → 表示 RT 已被消費 → Reuse 攻擊。
+    # 2. 原子消費
     consumed = await db.fetchrow(
         """
         DELETE FROM refresh_tokens
         WHERE token = $1 AND expires_at > NOW()
         RETURNING user_id
         """,
-        refresh_token
+        refresh_token,
     )
 
     if not consumed:
-        # payload 有效（JWT 簽名 + exp 均通過），DB 卻無此紀錄 →
-        # 此 RT 已被消費過（正常 Rotation 已刪除），判定為 Token Reuse 攻擊。
-        # 立刻撤銷該 user 所有 Session，駭客與正常用戶同時被踢下線。
+        # Token Reuse 偵測：撤銷該 user 所有 Session
         user_id_str = payload.get("sub")
         if user_id_str:
             try:
                 uid = UUID(user_id_str)
                 await db.execute(
                     "DELETE FROM refresh_tokens WHERE user_id = $1",
-                    uid
+                    uid,
                 )
             except Exception:
                 pass
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Security alert: Token reuse detected. All sessions have been revoked. Please login again."
+            detail="Security alert: Token reuse detected. All sessions have been revoked. Please login again.",
         )
 
-    # 3. 取得使用者資料
+    # 3. 取使用者資料
     user = await db.fetchrow(
         "SELECT id, email FROM users WHERE id = $1",
-        consumed["user_id"]
+        consumed["user_id"],
     )
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found"
+            detail="User not found",
         )
 
-    # 4. 產生新 AT
+    # 4. 簽發新 AT
     user_data = {"sub": str(user["id"]), "email": user["email"]}
-    new_access_token = create_access_token(data=user_data)
+    new_at = create_access_token(data=user_data)
 
-    # 5. RT Rotation：產生新 RT 並存入 DB（含 jti 碰撞重試）
-    new_refresh_token_str = None
-    new_expires_at = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
-    for _ in range(3):
-        candidate = create_refresh_token(data=user_data)
-        try:
-            await db.execute(
-                "INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)",
-                user["id"],
-                candidate,
-                new_expires_at
-            )
-            new_refresh_token_str = candidate
-            break
-        except UniqueViolationError:
-            continue
-
-    if not new_refresh_token_str:
+    # 5. RT Rotation：新 RT 寫入 DB
+    try:
+        new_rt = await _issue_refresh_token(db, user["id"], user_data)
+    except RuntimeError:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to rotate refresh token. Please login again."
+            detail="Failed to rotate refresh token. Please login again.",
         )
 
-    # 6. 設定新 RT Cookie（舊 RT 已在步驟 2 被原子刪除）
+    # 6. 設定新 RT Cookie
     response.set_cookie(
         key="refresh_token",
-        value=new_refresh_token_str,
+        value=new_rt,
         httponly=True,
-        secure=COOKIE_SECURE,   # 本機 HTTP: False；正式 HTTPS: True
+        secure=COOKIE_SECURE,
         samesite="lax",
-        max_age=REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600
+        max_age=REFRESH_TOKEN_EXPIRE_DAYS * 86400,
     )
 
     return {
         "status": "success",
-        "access_token": new_access_token,
-        "token_type": "bearer"
+        "access_token": new_at,
+        "token_type": "bearer",
     }

@@ -1,235 +1,49 @@
 // ============================================
-// Login / Register Page Logic
-// Handles: 登入、註冊、表單切換、密碼強度
+// Login Page Logic（Google SSO Only）
 // ============================================
 
 const API_BASE = resolveStockInsightApiBase();
 
-// --- DOM Elements ---
-const loginForm = document.getElementById('login-form');
-const registerForm = document.getElementById('register-form');
+// ── OAuth 錯誤代碼對應訊息 ────────────────────────────────────────
+const OAUTH_ERROR_MESSAGES = {
+    oauth_cancelled:      '您已取消 Google 授權，請重新嘗試。',
+    invalid_state:        '登入驗證失敗（CSRF），請重新嘗試。',
+    token_exchange_failed:'與 Google 建立連線失敗，請稍後再試。',
+    userinfo_failed:      '無法取得 Google 帳號資訊，請稍後再試。',
+    missing_user_info:    'Google 未提供必要帳號資訊，請確認授權範圍。',
+    db_error:             '伺服器發生錯誤，請稍後再試。',
+    session_error:        '無法建立登入 Session，請稍後再試。',
+};
 
-// --- Form Switching ---
-document.getElementById('show-register').addEventListener('click', (e) => {
-    e.preventDefault();
-    loginForm.classList.remove('active');
-    registerForm.classList.add('active');
-    clearErrors();
-});
-
-document.getElementById('show-login').addEventListener('click', (e) => {
-    e.preventDefault();
-    registerForm.classList.remove('active');
-    loginForm.classList.add('active');
-    clearErrors();
-});
-
-// --- Password Visibility Toggle ---
-function setupPasswordToggle(toggleId, inputId) {
-    const toggle = document.getElementById(toggleId);
-    const input = document.getElementById(inputId);
-    if (!toggle || !input) return;
-    
-    toggle.addEventListener('click', () => {
-        const isPassword = input.type === 'password';
-        input.type = isPassword ? 'text' : 'password';
-        // 更新圖標
-        const icon = toggle.querySelector('i');
-        icon.setAttribute('data-lucide', isPassword ? 'eye-off' : 'eye');
-        lucide.createIcons();
-    });
-}
-
-setupPasswordToggle('toggle-login-pw', 'login-password');
-setupPasswordToggle('toggle-reg-pw', 'reg-password');
-
-// --- Password Strength Indicator ---
-const regPassword = document.getElementById('reg-password');
-if (regPassword) {
-    regPassword.addEventListener('input', () => {
-        const val = regPassword.value;
-        const fill = document.getElementById('strength-fill');
-        const text = document.getElementById('strength-text');
-        
-        let score = 0;
-        if (val.length >= 8) score++;
-        if (val.length >= 12) score++;
-        if (/[A-Z]/.test(val)) score++;
-        if (/[0-9]/.test(val)) score++;
-        if (/[^A-Za-z0-9]/.test(val)) score++;
-
-        const levels = [
-            { width: '0%', color: 'transparent', label: '' },
-            { width: '20%', color: '#ff6b6b', label: '很弱' },
-            { width: '40%', color: '#ffa94d', label: '弱' },
-            { width: '60%', color: '#ffd43b', label: '普通' },
-            { width: '80%', color: '#69db7c', label: '強' },
-            { width: '100%', color: '#00d68f', label: '很強' },
-        ];
-
-        const level = val.length === 0 ? levels[0] : levels[Math.min(score, 5)];
-        fill.style.width = level.width;
-        fill.style.background = level.color;
-        text.textContent = level.label;
-        text.style.color = level.color;
-    });
-}
-
-// --- Login ---
-document.getElementById('login-btn').addEventListener('click', async () => {
-    const email = document.getElementById('login-email').value.trim();
-    const password = document.getElementById('login-password').value;
-    const btn = document.getElementById('login-btn');
-    const errorEl = document.getElementById('login-error');
-
-    if (!email || !password) {
-        showError(errorEl, '請填寫所有欄位');
-        return;
-    }
-
-    setLoading(btn, true);
-    try {
-        const res = await fetch(`${API_BASE}/user/login`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include', // 接收 HttpOnly Cookie
-            body: JSON.stringify({ email, password })
-        });
-
-        const data = await res.json();
-
-        if (!res.ok) {
-            showError(errorEl, data.detail || '登入失敗，請確認帳號與密碼');
-            return;
-        }
-
-        // AT 不寫入 localStorage（防 XSS）
-        // index.html 載入時 auth.js 會用 RT Cookie 靜默換取 AT 存入記憶體
-        localStorage.setItem('user', JSON.stringify(data.user));
-
-        // 導向主頁
-        window.location.href = 'index.html';
-    } catch (err) {
-        showError(errorEl, '無法連線至伺服器，請確認後端是否已啟動');
-    } finally {
-        setLoading(btn, false);
-    }
-});
-
-// --- Register ---
-document.getElementById('register-btn').addEventListener('click', async () => {
-    const username = document.getElementById('reg-username').value.trim();
-    const email = document.getElementById('reg-email').value.trim();
-    const password = document.getElementById('reg-password').value;
-    const confirm = document.getElementById('reg-password-confirm').value;
-    const btn = document.getElementById('register-btn');
-    const errorEl = document.getElementById('register-error');
-    const successEl = document.getElementById('register-success');
-
-    // 前端驗證
-    if (!username || !email || !password || !confirm) {
-        showError(errorEl, '請填寫所有欄位');
-        return;
-    }
-    if (password.length < 8) {
-        showError(errorEl, '密碼長度至少需要 8 個字元');
-        return;
-    }
-    if (password !== confirm) {
-        showError(errorEl, '兩次輸入的密碼不一致');
-        return;
-    }
-
-    setLoading(btn, true);
-    try {
-        const res = await fetch(`${API_BASE}/user/register`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, username, password })
-        });
-
-        const data = await res.json();
-
-        if (!res.ok) {
-            showError(errorEl, data.detail || '註冊失敗');
-            return;
-        }
-
-        // 註冊成功：顯示成功訊息，並自動切換到登入表單
-        hideError(errorEl);
-        successEl.textContent = '帳號建立成功！正在跳轉至登入頁面...';
-        successEl.classList.remove('hidden');
-
-        setTimeout(() => {
-            successEl.classList.add('hidden');
-            registerForm.classList.remove('active');
-            loginForm.classList.add('active');
-            // 自動填入 email
-            document.getElementById('login-email').value = email;
-        }, 1500);
-    } catch (err) {
-        showError(errorEl, '無法連線至伺服器');
-    } finally {
-        setLoading(btn, false);
-    }
-});
-
-// --- Enter Key Support ---
-document.getElementById('login-password').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') document.getElementById('login-btn').click();
-});
-document.getElementById('reg-password-confirm').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') document.getElementById('register-btn').click();
-});
-
-// --- Utility Functions ---
-function showError(el, msg) {
-    if (typeof msg === 'object') {
-        // 處理 FastAPI 的 422 驗證錯誤 (通常是個 list)
-        if (Array.isArray(msg)) {
-            el.textContent = msg.map(e => e.msg).join(', ');
-        } else {
-            el.textContent = JSON.stringify(msg);
-        }
-    } else {
-        el.textContent = msg;
-    }
-    el.classList.remove('hidden');
-}
-
-function hideError(el) {
-    el.textContent = '';
-    el.classList.add('hidden');
-}
-
-function clearErrors() {
-    document.querySelectorAll('.error-msg, .success-msg').forEach(el => {
-        el.classList.add('hidden');
-        el.textContent = '';
-    });
-}
-
-function setLoading(btn, isLoading) {
-    const span = btn.querySelector('span');
-    const loader = btn.querySelector('.btn-loader');
-    if (isLoading) {
-        span.classList.add('hidden');
-        loader.classList.remove('hidden');
-        btn.disabled = true;
-    } else {
-        span.classList.remove('hidden');
-        loader.classList.add('hidden');
-        btn.disabled = false;
-    }
-}
-
-// --- Auto-redirect if already logged in ---
-// AT 已改為記憶體儲存，無法在 login 頁直接讀取
-// 改用 localStorage.user 做 UX 判斷（若有 user 資料，嘗試導向主頁）
-// 真正的認證由 index.html 載入時 auth.js 的 tryRefreshToken() 完成
+// ── 偵測 OAuth callback 錯誤 ─────────────────────────────────────
+// 若 Google SSO 失敗，後端會把錯誤代碼帶在 ?error= 重導回登入頁
 window.addEventListener('DOMContentLoaded', () => {
-    const user = localStorage.getItem('user');
-    if (user) {
+    // 已登入則直接跳主頁
+    if (localStorage.getItem('user')) {
         window.location.href = 'index.html';
+        return;
     }
+
+    const params = new URLSearchParams(window.location.search);
+    const errorCode = params.get('error');
+    if (errorCode) {
+        const msg = OAUTH_ERROR_MESSAGES[errorCode] || `登入失敗（${errorCode}），請重新嘗試。`;
+        const errorEl = document.getElementById('oauth-error');
+        errorEl.textContent = msg;
+        errorEl.classList.remove('hidden');
+
+        // 清掉 URL 上的 ?error= 參數（不影響頁面功能，美觀）
+        window.history.replaceState({}, '', window.location.pathname);
+    }
+});
+
+// ── Google SSO 按鈕 ───────────────────────────────────────────────
+document.getElementById('google-login-btn').addEventListener('click', () => {
+    const btn = document.getElementById('google-login-btn');
+    btn.disabled = true;
+    btn.querySelector('span').textContent = '跳轉至 Google...';
+
+    // 直接導向後端的 OAuth start 端點
+    // 後端會產生 state、設 Cookie、302 到 Google 授權頁面
+    window.location.href = `${API_BASE}/user/auth/google/start`;
 });

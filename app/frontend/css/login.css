@@ -371,6 +371,38 @@ body {
     cursor: not-allowed;
 }
 
+/* Google SSO 主按鈕（填色、大尺寸） */
+.social-btn.google-primary {
+    width: 100%;
+    padding: 14px 20px;
+    font-size: 1rem;
+    font-weight: 500;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 14px;
+    margin-top: 0.5rem;
+    transition: background 0.25s, border-color 0.25s, transform 0.15s;
+}
+
+.social-btn.google-primary:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.25);
+    transform: translateY(-1px);
+}
+
+.social-btn.google-primary:active:not(:disabled) {
+    transform: translateY(0);
+}
+
+/* SSO 說明小字 */
+.sso-note {
+    text-align: center;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    margin-top: 1.4rem;
+    line-height: 1.6;
+}
+
 /* --- Divider --- */
 .form-divider {
     display: flex;

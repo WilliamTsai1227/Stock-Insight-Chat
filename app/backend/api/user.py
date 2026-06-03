@@ -3,6 +3,8 @@ User Management API (使用者管理接口)
 ======================================
 使用 asyncpg 原生連線操作 PostgreSQL。
 asyncpg.Record 的欄位存取語法：record['column_name']
+
+注意：此系統僅支援 Google SSO 登入，無本地密碼功能。
 """
 
 import asyncpg
@@ -13,7 +15,6 @@ from datetime import datetime, timezone
 
 from app.backend.database.postgresql import get_db
 from app.backend.module.jwt import get_current_user
-from app.backend.module.jwt import hash_password, verify_password
 
 router = APIRouter(tags=["User Management"])
 
@@ -22,10 +23,6 @@ router = APIRouter(tags=["User Management"])
 
 class UserUpdate(BaseModel):
     username: Optional[str] = None
-
-class PasswordChange(BaseModel):
-    old_password: str
-    new_password: str
 
 class UserProfile(BaseModel):
     id: str
@@ -83,41 +80,6 @@ async def update_my_profile(
         "tier_id": str(updated["tier_id"]) if updated["tier_id"] else None
     }
 
-
-@router.patch("/api/user/password")
-async def change_password(
-    data: PasswordChange,
-    db: asyncpg.Connection = Depends(get_db),
-    current_user: asyncpg.Record = Depends(get_current_user)
-):
-    """
-    修改密碼。
-    成功後強制刪除該使用者所有 Refresh Token（全裝置登出）。
-    """
-    # 1. 驗證舊密碼
-    if not verify_password(data.old_password, current_user["password_hash"]):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Incorrect old password"
-        )
-
-    # 2. 更新密碼 + 撤銷所有 Session（原子操作）
-    async with db.transaction():
-        await db.execute(
-            "UPDATE users SET password_hash = $1, updated_at = $2 WHERE id = $3",
-            hash_password(data.new_password),
-            datetime.now(timezone.utc),
-            current_user["id"]
-        )
-        await db.execute(
-            "DELETE FROM refresh_tokens WHERE user_id = $1",
-            current_user["id"]
-        )
-
-    return {
-        "status": "success",
-        "message": "Password updated. Please login again on all devices."
-    }
 
 
 @router.delete("/api/user")

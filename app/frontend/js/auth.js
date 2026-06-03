@@ -261,14 +261,6 @@ function initUserMenu() {
         });
     }
 
-    const passwordBtn = document.getElementById('menu-password');
-    if (passwordBtn) {
-        passwordBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            openPasswordModal();
-        });
-    }
-
     const deleteBtn = document.getElementById('menu-delete');
     if (deleteBtn) {
         deleteBtn.addEventListener('click', (e) => {
@@ -347,58 +339,6 @@ async function saveProfile() {
 }
 
 
-// ─── 修改密碼 Modal ──────────────────────────────────────────────
-
-function openPasswordModal() {
-    closeAllModals();
-    document.getElementById('password-modal').classList.add('show');
-}
-
-async function savePassword() {
-    const oldPw = document.getElementById('pw-old').value;
-    const newPw = document.getElementById('pw-new').value;
-    const confirmPw = document.getElementById('pw-confirm').value;
-    const msgEl = document.getElementById('password-msg');
-
-    if (!oldPw || !newPw || !confirmPw) {
-        msgEl.textContent = '請填寫所有欄位';
-        msgEl.className = 'modal-msg error';
-        return;
-    }
-    if (newPw.length < 8) {
-        msgEl.textContent = '新密碼至少需要 8 個字元';
-        msgEl.className = 'modal-msg error';
-        return;
-    }
-    if (newPw !== confirmPw) {
-        msgEl.textContent = '兩次輸入的新密碼不一致';
-        msgEl.className = 'modal-msg error';
-        return;
-    }
-
-    try {
-        const res = await authFetch(`${AUTH_API}/user/password`, {
-            method: 'PATCH',
-            body: JSON.stringify({ old_password: oldPw, new_password: newPw })
-        });
-
-        if (!res || !res.ok) {
-            const err = await res.json();
-            msgEl.textContent = err.detail || '密碼更新失敗';
-            msgEl.className = 'modal-msg error';
-            return;
-        }
-
-        msgEl.textContent = '密碼已更新，請重新登入';
-        msgEl.className = 'modal-msg success';
-        setTimeout(() => logout(), 2000);
-    } catch {
-        msgEl.textContent = '無法連線至伺服器';
-        msgEl.className = 'modal-msg error';
-    }
-}
-
-
 // ─── 刪除帳號 Modal ──────────────────────────────────────────────
 
 function openDeleteModal() {
@@ -464,16 +404,29 @@ document.addEventListener('keydown', (e) => {
 
 
 // ─── 頁面初始化 ──────────────────────────────────────────────────
-// 頁面刷新後記憶體 AT 消失，優先用 RT Cookie 靜默換取新 AT
-// 若 RT 也失效（過期/被撤銷），導向登入頁
+// 頁面刷新後記憶體 AT 消失，優先用 RT Cookie 靜默換取新 AT。
+// Google SSO callback 後也走同一條路：後端設 RT Cookie → 302 回前端 →
+// 此處 tryRefreshToken() 取得 AT → 若 localStorage 無 user 則自動 fetch profile。
 
 window.addEventListener('DOMContentLoaded', async () => {
     const ok = await tryRefreshToken();
     if (!ok) {
-        // 清除 user，防止 login.html 看到 localStorage.user 又自動 redirect 回來（無限迴圈）
         localStorage.removeItem('user');
         window.location.href = 'login.html';
         return;
+    }
+
+    // Google SSO 首次登入：localStorage 無 user 資料，主動 fetch profile 並存入
+    if (!getUser()) {
+        try {
+            const res = await authFetch(`${AUTH_API}/user`);
+            if (res && res.ok) {
+                const profile = await res.json();
+                localStorage.setItem('user', JSON.stringify(profile));
+            }
+        } catch {
+            // 非致命錯誤，繼續執行（顯示名稱只是 UX，不影響功能）
+        }
     }
 
     initUserMenu();

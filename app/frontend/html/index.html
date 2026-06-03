@@ -97,10 +97,6 @@
                                 <i data-lucide="user"></i>
                                 <span>會員資料</span>
                             </a>
-                            <a href="#" class="dropdown-item" id="menu-password">
-                                <i data-lucide="key-round"></i>
-                                <span>修改密碼</span>
-                            </a>
                             <a href="#" class="dropdown-item" id="menu-settings">
                                 <i data-lucide="settings"></i>
                                 <span>偏好設定</span>
@@ -293,35 +289,6 @@
             <div class="modal-footer">
                 <button class="modal-btn secondary" onclick="closeAllModals()">取消</button>
                 <button class="modal-btn primary" onclick="saveProfile()">儲存變更</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- 修改密碼 Modal -->
-    <div class="modal-overlay" id="password-modal">
-        <div class="modal-card">
-            <div class="modal-header">
-                <h3><i data-lucide="key-round"></i> 修改密碼</h3>
-                <button class="modal-close" onclick="closeAllModals()"><i data-lucide="x"></i></button>
-            </div>
-            <div class="modal-body">
-                <div class="modal-field">
-                    <label>目前密碼</label>
-                    <input type="password" id="pw-old" placeholder="輸入目前密碼">
-                </div>
-                <div class="modal-field">
-                    <label>新密碼</label>
-                    <input type="password" id="pw-new" placeholder="至少 8 個字元">
-                </div>
-                <div class="modal-field">
-                    <label>確認新密碼</label>
-                    <input type="password" id="pw-confirm" placeholder="再次輸入新密碼">
-                </div>
-                <div id="password-msg" class="modal-msg"></div>
-            </div>
-            <div class="modal-footer">
-                <button class="modal-btn secondary" onclick="closeAllModals()">取消</button>
-                <button class="modal-btn primary" onclick="savePassword()">更新密碼</button>
             </div>
         </div>
     </div>

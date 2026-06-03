@@ -165,7 +165,7 @@ async def get_current_user(
 
     user = await db.fetchrow(
         """
-        SELECT id, email, username, password_hash, status, tier_id,
+        SELECT id, email, username, status, tier_id,
                last_login_at, created_at, updated_at
         FROM users
         WHERE id = $1

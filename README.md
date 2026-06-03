@@ -54,7 +54,7 @@ async def event_generator():
 
 - **鍵盤／視區與 fixed 版面**：`.app-container` 使用 **`100vh` + `100dvh`** 與 **`width/max-width: 100%`**，減少行動瀏覽器網址列與虛擬鍵盤造成的溢出；`**@media (max-width: 1024px)**` 內對 **`.chat-input-area`**、`env(safe-area-inset-*)` 調整留白，並搭配側欄抽屜、`min-width: 0` 的 flex 子項等，緩解小螢幕跑版（`app/frontend/css/index.css`）。
 - **智慧自動捲動**：`chat-messages` 的 `scroll` 監聽以距離底部的閾值更新 **`isUserScrolledUp`**；**`scrollToBottom`** 在非 **`force`** 時若使用者已往上讀舊訊息則不拉回底部；並以 **`targetChatId`** 對齊目前對話，**切換對話時**不會錯頻捲動（`app/frontend/js/index.js`）。
-- **登入錯誤顯示與測試帳號**：**`showError`** 對 `detail` 為物件／陣列（如 FastAPI 422）時轉成人可讀字串，避免畫面上出現 **`[object Object]`**（`app/frontend/js/login.js`）；登入表單在 **`login.html`** 對測試用 email／password 設 **`value`** 預填（僅開發便利性，正式環境請勿沿用）。
+- **Google SSO 登入**：登入頁（`login.html`）移除 email/password 表單，改為單一「以 Google 帳號登入」按鈕。點擊後導向後端 `/api/user/auth/google/start`，完成 OAuth 流程後自動取得 AT 並 fetch 用戶資料（`app/frontend/js/login.js`、`app/frontend/js/auth.js`）。
 - **複製回答（非 HTTPS 降級）**：優先 **`navigator.clipboard.writeText`**（需安全上下文）；否則以隱藏 **`textarea`** + **`document.execCommand('copy')`**，方便區網 **HTTP** 等環境仍可複製（`app/frontend/js/index.js` 內 **`copyToClipboard`**）。
 
 ---
@@ -704,26 +704,51 @@ flowchart TD
 
 ---
 
-### 流程一：登入（Login）
+### 流程一：Google SSO 登入
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant User as 前端瀏覽器
+    participant FE as login.html / index.html
     participant API as 後端 API
+    participant Google as Google OAuth
     participant DB as PostgreSQL
 
-    Note over User, DB: 登入階段
-    User->>API: POST /user/login（帳密）
-    API->>API: 驗證密碼（Argon2）
-    API->>API: 產生 AT（15min, HS256）
-    API->>API: 產生 RT（7天, HS256, 含 jti=uuid4）
-    API->>DB: INSERT refresh_tokens (user_id, token, expires_at)
-    API->>DB: UPDATE users SET last_login_at = NOW()
-    API-->>User: Body: { access_token } ＋ Set-Cookie: refresh_token (HttpOnly)
+    Note over User, DB: ① 觸發 Google 登入
+    User->>FE: 點擊「以 Google 帳號登入」
+    FE->>API: GET /api/user/auth/google/start
+    API->>API: 產生隨機 state（CSRF 防護）
+    API-->>FE: Set-Cookie: oauth_state（HttpOnly, 10min）\n302 → Google 授權 URL
 
-    Note over User: AT 存入 JS 記憶體變數
-    Note over User: RT 由瀏覽器自動存入 HttpOnly Cookie
+    Note over User, Google: ② 使用者在 Google 完成授權
+    FE->>Google: 瀏覽器重導至 Google
+    User->>Google: 選擇帳號 / 同意授權
+    Google-->>FE: 302 → /api/user/auth/google/callback?code=...&state=...
+
+    Note over API, DB: ③ Callback 處理
+    FE->>API: GET /api/user/auth/google/callback
+    API->>API: 驗證 state（對比 Cookie，防 CSRF）
+    API->>Google: 用 code 換取 Google Token
+    Google-->>API: id_token / access_token
+    API->>Google: GET UserInfo（取 sub, email, name）
+    Google-->>API: { sub, email, name }
+    API->>DB: UPSERT users（以 google_sub 查找；新用戶建立，舊用戶更新 last_login_at）
+    API->>API: 簽發 AT（15min）+ RT（7天）
+    API->>DB: INSERT refresh_tokens
+    API-->>FE: Set-Cookie: refresh_token（HttpOnly）\n302 → FRONTEND_URL（index.html）
+
+    Note over FE, DB: ④ 前端初始化（auth.js DOMContentLoaded）
+    FE->>API: POST /api/user/refresh（瀏覽器自動帶 RT Cookie）
+    API->>DB: DELETE...RETURNING（RT Rotation）
+    DB-->>API: user_id
+    API-->>FE: { access_token }（新 AT）\nSet-Cookie: 新 RT（HttpOnly）
+    Note over FE: AT 存入 JS 記憶體（防 XSS）
+
+    Note over FE: localStorage 無 user → 自動 fetch profile
+    FE->>API: GET /api/user（Bearer AT）
+    API-->>FE: { id, email, username, status, tier_id }
+    Note over FE: 存入 localStorage.user\n顯示使用者名稱、進入主頁面
 ```
 
 ---
