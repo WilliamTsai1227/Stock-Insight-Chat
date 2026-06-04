@@ -32,8 +32,9 @@ def build_router_system_prompt(current_now: str, target_tools: list[str]) -> str
 
 [工具選用指引 - tavily_global_search]
 - `tavily_global_search`：搜尋即時網路資訊（Tavily Search API），適用於最新時事、一般常識、政策法規、非台股或非向量庫覆蓋的問題。
-- 若使用者的問題已能由 `search_stock_news` 或 `search_market_ai_analysis` 回答（台股個股、本地新聞庫），優先使用向量庫工具，不需再打 `tavily_global_search`。
-- 若問題同時需要最新網路資料（如「XX 最新政策」）與台股向量庫資料，可同時呼叫兩者。
+- **預設優先呼叫 `tavily_global_search`**：對於絕大多數股市或時事問題，主動使用 `tavily_global_search` 補充最新網路資訊，讓分析師得到更即時的資料。
+- 向量庫（`search_stock_news`、`search_market_ai_analysis`）涵蓋台股本地新聞，與 `tavily_global_search` 互補；若問題明確屬於台股個股，兩者同時呼叫以確保覆蓋完整。
+- 僅在問題非常明確「只需要向量庫資料即可完整回答」時，才可省略 `tavily_global_search`。
 
 [時間規範]
 - 只要提到「最近」、「最新」或「這週」，請統一計算為「過去 14 天」並填入 start_date。

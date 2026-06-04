@@ -51,6 +51,14 @@ HISTORY_GENERAL_ASSISTANT_MAX_CHARS: int = int(
     os.getenv("HISTORY_GENERAL_ASSISTANT_MAX_CHARS", "4000")
 )
 
+# 歷史中 user 訊息的截斷上限（字元數）
+# 防止攻擊者在早期回合植入超長惡意指令進歷史（多輪投毒 / token flooding）
+# 設定比 query 即時輸入稍大，因歷史訊息可能包含合法的長段落（程式碼等）
+# 可透過環境變數 HISTORY_HUMAN_MAX_CHARS 覆蓋
+HISTORY_HUMAN_MAX_CHARS: int = int(
+    os.getenv("HISTORY_HUMAN_MAX_CHARS", "3000")
+)
+
 
 async def fetch_ancestor_chain_rows(
     conn: asyncpg.Connection,
@@ -165,6 +173,12 @@ def rows_to_langchain_messages(
         role = r["role"]
         content = r["content"] or ""
         if role == "user":
+            # 截斷歷史 user 訊息：防止攻擊者在早期回合植入超長惡意指令（多輪投毒）
+            if len(content) > HISTORY_HUMAN_MAX_CHARS:
+                content = (
+                    content[:HISTORY_HUMAN_MAX_CHARS]
+                    + "\n\n…（舊訊息已截斷）"
+                )
             out.append(HumanMessage(content=content))
         elif role == "assistant":
             if len(content) > max_chars:
