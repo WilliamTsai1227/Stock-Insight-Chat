@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS users (
 > 
 > 進入 DB 容器：
 > ```bash
-> docker-compose -f ./deploy/docker-compose.yml exec db psql -U postgres -d Stock_Insight_Chat
+> docker-compose -f ./deploy/docker-compose.yml exec db psql -U postgres -d Insight
 > ```
 
 ### 情境 A：開發環境（刪除所有舊帳號，乾淨重來）
@@ -140,7 +140,7 @@ ALTER TABLE users ALTER COLUMN last_login_provider SET DEFAULT 'google';
 #### 步驟一：進入 DB
 
 ```bash
-docker-compose -f ./deploy/docker-compose.yml exec db psql -U postgres -d Stock_Insight_Chat
+docker-compose -f ./deploy/docker-compose.yml exec db psql -U postgres -d Insight
 ```
 
 #### 步驟二：確認現有帳號

@@ -34,7 +34,7 @@
 - **Host（本機）**：`localhost`（port `5432` 已映射）
 - **User**：`postgres`
 - **Password**：`password123`
-- **Database**：`Stock_Insight_Chat`
+- **Database**：`Insight`
 
 ---
 
@@ -52,24 +52,24 @@ docker compose -f ./deploy/docker-compose.yml ps
 ### 3.2 進入 `db` 並開互動式 `psql`（最常用）
 
 ```bash
-docker compose -f ./deploy/docker-compose.yml exec db psql -U postgres -d Stock_Insight_Chat
+docker compose -f ./deploy/docker-compose.yml exec db psql -U postgres -d Insight
 ```
 
-成功後提示字元為：`Stock_Insight_Chat=#`  
+成功後提示字元為：`Insight=#`  
 離開：`\q`
 
 ### 3.3 不進互動模式，單次執行一條 SQL
 
 ```bash
 docker compose -f ./deploy/docker-compose.yml exec db \
-  psql -U postgres -d Stock_Insight_Chat -c "SELECT version();"
+  psql -U postgres -d Insight -c "SELECT version();"
 ```
 
 ### 3.4 從主機檔案執行整份 migration
 
 ```bash
 docker compose -f ./deploy/docker-compose.yml exec -T db \
-  psql -U postgres -d Stock_Insight_Chat \
+  psql -U postgres -d Insight \
   -f - < app/backend/database/migrations/V004__token_usage_logs_add_caller.sql
 ```
 
@@ -88,7 +88,7 @@ docker compose -f ./deploy/docker-compose.yml exec backend sh
 若 `5432` 已映射，也可不進容器：
 
 ```bash
-PGPASSWORD=password123 psql -h localhost -U postgres -d Stock_Insight_Chat
+PGPASSWORD=password123 psql -h localhost -U postgres -d Insight
 ```
 
 ---
@@ -166,7 +166,7 @@ COMMIT;
 
 ```bash
 docker compose -f ./deploy/docker-compose.yml exec db \
-  psql -U postgres -d Stock_Insight_Chat
+  psql -U postgres -d Insight
 ```
 
 貼上 migration 內容，或 §3.4 從檔案餵入。
@@ -288,4 +288,4 @@ UPDATE chats SET title = '測試標題' WHERE id = '...';
 | `exec db psql` 失敗 | `db` 未啟動 | `docker compose ... up -d db` |
 | `ALTER TABLE ... ADD CONSTRAINT` 失敗 | 舊資料不符合新約束 | 先 `SELECT` 找出異常列並修補或刪除 |
 | API 仍照 `created_at` 排序 | 只改了 DB，沒改 Python | 檢查 `app/backend/api/*.py` 的 SQL |
-| 後端啟動報 `column "updated_at" does not exist` | migration 未套用到目前連線的 DB | 對 **同一個** `Stock_Insight_Chat` 執行 §4.3 |
+| 後端啟動報 `column "updated_at" does not exist` | migration 未套用到目前連線的 DB | 對 **同一個** `Insight` 執行 §4.3 |

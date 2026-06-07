@@ -30,25 +30,45 @@ class UserProfile(BaseModel):
     username: str
     status: str
     tier_id: Optional[str] = None
+    tier_name: str = "free"
+
+
+def _serialize_user_profile(row: asyncpg.Record) -> dict:
+    """將 users JOIN subscription_tiers 的查詢結果序列化為 API 回應。"""
+    tier_name = row["tier_name"] if row["tier_name"] else "free"
+    return {
+        "id": str(row["id"]),
+        "email": row["email"],
+        "username": row["username"],
+        "status": row["status"],
+        "tier_id": str(row["tier_id"]) if row["tier_id"] else None,
+        "tier_name": tier_name,
+    }
+
+
+_USER_PROFILE_SELECT = """
+    SELECT u.id, u.email, u.username, u.status, u.tier_id, st.name AS tier_name
+    FROM users u
+    LEFT JOIN subscription_tiers st ON st.id = u.tier_id
+    WHERE u.id = $1
+"""
 
 
 # --- API Endpoints ---
 
 @router.get("/api/user", response_model=UserProfile)
 async def get_my_profile(
-    current_user: asyncpg.Record = Depends(get_current_user)
+    db: asyncpg.Connection = Depends(get_db),
+    current_user: asyncpg.Record = Depends(get_current_user),
 ):
     """
     取得目前登入使用者的個人資料
     asyncpg.Record 支援 dict-like 存取
     """
-    return {
-        "id": str(current_user["id"]),
-        "email": current_user["email"],
-        "username": current_user["username"],
-        "status": current_user["status"],
-        "tier_id": str(current_user["tier_id"]) if current_user["tier_id"] else None
-    }
+    row = await db.fetchrow(_USER_PROFILE_SELECT, current_user["id"])
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    return _serialize_user_profile(row)
 
 
 @router.patch("/api/user", response_model=UserProfile)
@@ -66,19 +86,11 @@ async def update_my_profile(
             current_user["id"]
         )
 
-    # 重新撈取最新資料
-    updated = await db.fetchrow(
-        "SELECT id, email, username, status, tier_id FROM users WHERE id = $1",
-        current_user["id"]
-    )
-
-    return {
-        "id": str(updated["id"]),
-        "email": updated["email"],
-        "username": updated["username"],
-        "status": updated["status"],
-        "tier_id": str(updated["tier_id"]) if updated["tier_id"] else None
-    }
+    # 重新撈取最新資料（含訂閱方案名稱）
+    updated = await db.fetchrow(_USER_PROFILE_SELECT, current_user["id"])
+    if updated is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    return _serialize_user_profile(updated)
 
 
 

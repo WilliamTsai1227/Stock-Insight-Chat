@@ -948,6 +948,10 @@ async def get_ai_response(
         try:
             from langchain_openai import ChatOpenAI
             from langchain_core.messages import SystemMessage, HumanMessage as HM
+            from app.backend.agent.general_chat import (
+                get_general_chat_current_time,
+                get_general_chat_current_year,
+            )
 
             model_name = os.getenv("GENERAL_REWRITE_LLM", "gpt-4o-mini").strip()
             rewrite_model = ChatOpenAI(
@@ -978,8 +982,12 @@ async def get_ai_response(
                     "你必須把重點濃縮成一個 10–25 字的精確搜尋詞，或輸出 __NO_SEARCH__。\n\n"
                 )
 
+            current_now = get_general_chat_current_time()
+            current_year = get_general_chat_current_year()
+
             system = (
-                "你是一個搜尋意圖分析助理。根據對話歷史與使用者最新輸入，決定是否要網路搜尋以及搜尋什麼。\n\n"
+                f"你是一個搜尋意圖分析助理。現在時間為：{current_now}。\n"
+                "根據對話歷史與使用者最新輸入，決定是否要網路搜尋以及搜尋什麼。\n\n"
                 + long_hint +
                 "判斷規則：\n"
                 "1. 若使用者輸入是詢問新資訊（人名、地點、事件、解釋等），輸出最佳搜尋詞（繁體中文，10–25 字）。\n"
@@ -991,10 +999,14 @@ async def get_ai_response(
                 "   你必須看對話歷史判斷：\n"
                 "   - 如果上文 AI 已做完分析/整理，使用者是要求繼續展開同一份回覆 → 輸出 __NO_SEARCH__\n"
                 "   - 如果上文在找資料/推薦（如餐廳、新聞、店家），使用者是要求更多同類資料 → 用上文主題合成搜尋詞\n"
-                "4. 若使用者輸入是純聊天（感謝、確認、情緒），輸出 __NO_SEARCH__。\n\n"
+                "4. 若使用者輸入是純聊天（感謝、確認、情緒），輸出 __NO_SEARCH__。\n"
+                "5. 若問題含「最近」「最新」「這週」「近期」等時效性用語，"
+                f"   搜尋詞須含當前年份或月份（例如「{current_year} 演唱會 近期」），"
+                "   避免只用泛用詞導致搜到過舊資料。\n\n"
                 "重要：只輸出搜尋詞或 __NO_SEARCH__，不要輸出任何其他文字。\n\n"
                 "範例：\n"
-                "  輸入「台積電最新財報」→ 台積電 2025 財報 EPS\n"
+                f"  輸入「台積電最新財報」→ 台積電 {current_year} 財報 EPS\n"
+                f"  輸入「最近有哪些演唱會」→ {current_year} 台灣 演唱會 近期\n"
                 "  輸入「5天的旅遊」（上文問福岡行程）→ 福岡 5天自由行 行程 機票住宿\n"
                 "  輸入「預算2萬以內」（上文問東京旅遊）→ 東京 自由行 預算2萬 行程規劃\n"
                 "  輸入「再來」（上文 AI 在整理逐玉劇的分析）→ __NO_SEARCH__\n"

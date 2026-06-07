@@ -46,25 +46,7 @@ CREATE TABLE IF NOT EXISTS user_usage_quotas (
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
--- 5. 建立 token_usage_logs 表 (Token 使用詳細流水帳)
--- 寫入時機：可為「每次 LLM 結束一筆」（同一 chat_id 多列），或舊版「每次對話結束一筆」；
--- 不在串流途中寫入。與 user_usage_quotas 分開：
---   quotas = 即時計數器；logs = append-only 對帳／報表／依模型統計
-CREATE TABLE IF NOT EXISTS token_usage_logs (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    chat_id UUID REFERENCES chats(id) ON DELETE SET NULL, -- 關聯到 chats 表，方便按對話查詢費用
-    message_id UUID,                                      -- 關聯到最後一則 assistant message (若有)
-    caller VARCHAR(50),                                   -- LLM 輪次來源：router、analyst 等（可 NULL）
-    model_name VARCHAR(100),
-    prompt_tokens INTEGER DEFAULT 0,
-    completion_tokens INTEGER DEFAULT 0,
-    total_tokens INTEGER DEFAULT 0,
-    cost_usd NUMERIC(10, 6),
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-);
-
--- 6. 建立 roles 表 (權限角色)
+-- 5. 建立 roles 表 (權限角色)
 CREATE TABLE IF NOT EXISTS roles (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(50) UNIQUE NOT NULL, -- admin, user, guest
@@ -127,7 +109,26 @@ CREATE TABLE IF NOT EXISTS chats (
 -- 對已存在資料庫進行 migration（冪等）
 ALTER TABLE chats ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
 
--- 12. 建立 messages 表 (存放每一筆對話記錄)
+-- 12. 建立 token_usage_logs 表 (Token 使用詳細流水帳)
+-- 須在 chats 之後建立（chat_id 外鍵）
+-- 寫入時機：可為「每次 LLM 結束一筆」（同一 chat_id 多列），或舊版「每次對話結束一筆」；
+-- 不在串流途中寫入。與 user_usage_quotas 分開：
+--   quotas = 即時計數器；logs = append-only 對帳／報表／依模型統計
+CREATE TABLE IF NOT EXISTS token_usage_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    chat_id UUID REFERENCES chats(id) ON DELETE SET NULL, -- 關聯到 chats 表，方便按對話查詢費用
+    message_id UUID,                                      -- 關聯到最後一則 assistant message (若有)
+    caller VARCHAR(50),                                   -- LLM 輪次來源：router、analyst 等（可 NULL）
+    model_name VARCHAR(100),
+    prompt_tokens INTEGER DEFAULT 0,
+    completion_tokens INTEGER DEFAULT 0,
+    total_tokens INTEGER DEFAULT 0,
+    cost_usd NUMERIC(10, 6),
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 13. 建立 messages 表 (存放每一筆對話記錄)
 -- 透過 parent_id 實現訊息與回覆的精確對齊與溯源
 CREATE TABLE IF NOT EXISTS messages (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -141,7 +142,7 @@ CREATE TABLE IF NOT EXISTS messages (
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
--- 13. 建立 files 表 (專案共用的知識庫文件)
+-- 14. 建立 files 表 (專案共用的知識庫文件)
 CREATE TABLE IF NOT EXISTS files (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -154,7 +155,7 @@ CREATE TABLE IF NOT EXISTS files (
 );
 
 -- =============================================
--- 14. 建立索引優化 (Performance Indexing)
+-- 15. 建立索引優化 (Performance Indexing)
 -- =============================================
 
 -- 使用者與權限相關

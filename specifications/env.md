@@ -74,7 +74,7 @@ cp .env.example .env   # 若有範本
 
 | 變數名稱 | 本機開發預設 | 正式環境必填 | 說明 |
 | :--- | :--- | :---: | :--- |
-| `DATABASE_URL` | `postgresql://postgres:password123@db:5432/Stock_Insight_Chat` | ✅ | asyncpg 連線字串 |
+| `DATABASE_URL` | `postgresql://postgres:password123@db:5432/Insight` | ✅ | asyncpg 連線字串 |
 
 - Docker Compose 本機環境已在 `docker-compose.yml` 的 `environment` 直接設定，不需寫進 `.env`
 - 正式環境請換成實際的 DB 主機、帳密、資料庫名稱

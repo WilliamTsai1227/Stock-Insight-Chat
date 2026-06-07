@@ -218,7 +218,7 @@ docker compose -f ./deploy/docker-compose.yml exec backend pip show openai
 ### 7.2 db（PostgreSQL / psql）
 
 ```bash
-docker compose -f ./deploy/docker-compose.yml exec db psql -U postgres -d Stock_Insight_Chat
+docker compose -f ./deploy/docker-compose.yml exec db psql -U postgres -d Insight
 ```
 
 Schema 變更流程見 [`sql_dev_handbook.md`](./sql_dev_handbook.md)。

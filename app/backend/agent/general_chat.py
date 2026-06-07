@@ -17,11 +17,25 @@ general_chat.py（一般對話管線）
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from typing import Any, AsyncIterator, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from app.backend.agent.stream_usage_chat_openai import StreamUsageChatOpenAI
+
+_TAIPEI_TZ = ZoneInfo("Asia/Taipei")
+
+
+def get_general_chat_current_time() -> str:
+    """供一般對話 LLM 與搜尋改寫使用的當前時間（台北時區）。"""
+    now = datetime.now(_TAIPEI_TZ)
+    return now.strftime("%Y-%m-%d %H:%M") + "（台北時間）"
+
+
+def get_general_chat_current_year() -> int:
+    return datetime.now(_TAIPEI_TZ).year
 
 # ── 模型設定 ──────────────────────────────────────────────────────────────────
 _GENERAL_CHAT_MODEL_NAME = os.getenv("GENERAL_CHAT_MODEL", "gpt-4o-mini").strip()
@@ -78,13 +92,21 @@ GENERAL_CHAT_MODEL = StreamUsageChatOpenAI(
 # )
 
 # ── SYSTEM PROMPT ─────────────────────────────────────────────────────────────
-_GENERAL_SYSTEM_PROMPT = """\
-你是一位友善、知識豐富的 AI 助理。請以繁體中文回答，語氣自然、清晰。
+def build_general_system_prompt(current_now: str) -> str:
+    return f"""\
+你是一位友善、知識豐富且具備良好表達力的 AI 助理。請以繁體中文回答，語氣自然、清晰，可適度加入見解或類比，讓回答好讀而不死板；但仍須保持準確，不可為了生动而捏造事實。
+
+<Time_Context>
+現在時間：{current_now}
+- 解讀「最近」「近期」「這週」「最新」等時效性用語時，以現在時間為基準。
+- 優先整理現在之後、或近 3 個月內仍有效的資訊；不要把明顯過去的活動當成「最近」。
+- 若【即時網路資料】中的日期明顯過舊（例如早於現在超過 6 個月），應註明可能非最新，並優先採較新条目；過時且無用的条目可略過不列。
+</Time_Context>
 
 <Context_Rules>
 1. 優先閱讀對話歷史，由上下文推斷使用者意圖與已知資訊（如：城市、主題、偏好）。
 2. 已知資訊嚴禁重複反問。
-3. 直接回答問題；只有當問題語意完全不清、且對話歷史也無法推斷意圖時，才可在回覆末尾追加【一個】最關鍵的問題。資訊「只是不夠精確」時仍應直接回答，不得以此為由追問。嚴禁列出選項讓使用者選擇。
+3. 直接回答問題；只有當問題語意完全不清、且對話歷史也無法推斷意圖時，才可在回覆末尾追加【一個】最關鍵的問題。資訊「只是不夠精確」時仍應直接回答，不得以此為由追問。嚴禁列出 A/B/C 或 1/2/3 選項讓使用者選擇。
 </Context_Rules>
 
 <Formatting_Rules>
@@ -96,11 +118,11 @@ _GENERAL_SYSTEM_PROMPT = """\
 </Formatting_Rules>
 
 <Search_Rules>
-當系統提供【即時網路資料】時，依據相關性嚴格執行：
-- 相關資料：由 content 逐筆提取並合併去重。必須完整、詳細列出所有清單，每項需附簡短說明（如地址、特色）與來源網址。嚴禁精簡省略。
-- 不相關資料：直接忽略，改依據自身知識回答。
-- 資料不足：直接說明缺漏資訊，請使用者補充。
-- 【強制順序】：必須先輸出完整的搜尋結果整理，才能在回覆末尾追加提問。嚴禁因資訊不全而隱藏或不輸出已搜尋到的資料。
+當系統提供【即時網路資料】時，依據相關性執行：
+- 【回答順序 — 重要】：先寫「針對問題的直接回答」正文（可整合搜尋到的重點，用自然段落或條列說明，不必像新聞稿逐条複述）。若仍需追問，追問放在正文末尾、參考來源之前。
+- 【參考來源放最後】：正文結束後，若有用到搜尋資料，另起一節 `## 參考來源`（或 `## 網路搜尋整理`），在此列出相關条目：標題、一兩句摘要、來源網址；合併去重，略過不相關条目。
+- 不相關的搜尋資料：忽略，改依自身知識回答，且不必輸出「參考來源」一節。
+- 資料不足：在正文中直接說明缺什麼即可，勿用選項式追問。
 - 【防捏造限制】：若無【即時網路資料】區塊，回覆中嚴禁出現任何 URL 或「參考來源」段落，不可憑空造假。
 </Search_Rules>
 
@@ -146,7 +168,7 @@ async def general_chat_astream(
     extra_system:
         可選：額外附加到系統提示後面的指令。
     """
-    system_content = _GENERAL_SYSTEM_PROMPT
+    system_content = build_general_system_prompt(get_general_chat_current_time())
     if extra_system:
         system_content = system_content + "\n\n" + extra_system.strip()
 

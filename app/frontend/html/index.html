@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0">
-    <title>Stock Insight Chat | AI Investment Analyst</title>
+    <title>Insight | AI Workspace</title>
     <link rel="stylesheet" href="/css/index.css">
     <!-- Google Fonts: Outfit & Inter -->
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
@@ -14,7 +14,7 @@
     <!-- DOMPurify — 消毒 HTML，防止 XSS -->
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
     <!-- Highlight.js — 程式碼語法高亮 -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/atom-one-dark.min.css">
+    <link id="hljs-theme" rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/atom-one-dark.min.css">
     <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/highlight.min.js"></script>
 </head>
 <body class="dark-theme">
@@ -24,7 +24,7 @@
             <div class="sidebar-header">
                 <div class="logo">
                     <i data-lucide="trending-up"></i>
-                    <span>StockInsight</span>
+                    <span>Insight</span>
                 </div>
             </div>
 
@@ -79,6 +79,9 @@
                     </div>
                 </div>
                 <div class="header-actions">
+                    <button type="button" id="theme-toggle-btn" class="icon-btn theme-toggle-btn" aria-label="切換淺色／深色模式" title="切換主題">
+                        <i data-lucide="contrast"></i>
+                    </button>
                     <button class="icon-btn"><i data-lucide="share-2"></i></button>
 
                     <!-- 使用者頭像 & 下拉選單 -->
@@ -89,7 +92,7 @@
                                 <div class="dropdown-avatar" id="dropdown-avatar-char">U</div>
                                 <div class="dropdown-user-info">
                                     <span class="dropdown-name" id="user-display-name">使用者</span>
-                                    <span class="dropdown-badge">Free</span>
+                                    <span class="dropdown-badge" id="user-tier-badge">Free</span>
                                 </div>
                             </div>
                             <div class="dropdown-divider"></div>
@@ -161,7 +164,7 @@
                 <div class="input-container">
                     <!-- 上方：使用者輸入 -->
                     <div class="input-top-row">
-                        <textarea id="user-input" placeholder="問問台積電的供應商風險..." rows="1"></textarea>
+                        <textarea id="user-input" placeholder="問我任何事…" rows="1"></textarea>
                     </div>
                     <!-- 下方：工具列 -->
                     <div class="input-bottom-row">
@@ -177,7 +180,7 @@
                                     <div id="manual-tools" class="disabled-group">
                                         <label><input type="checkbox" class="tool-check" value="search_stock_news"> 股市新聞搜尋</label>
                                         <label><input type="checkbox" class="tool-check" value="search_market_ai_analysis"> 市場報告分析</label>
-                                        <label><input type="checkbox" class="tool-check" value="get_market_recommendations"> 推薦名單提取</label>
+                                        <label><input type="checkbox" class="tool-check" value="get_market_recommendations"> 潛力名單提取</label>
                                         <label><input type="checkbox" class="tool-check" value="tavily_global_search"> 網路搜尋</label>
                                     </div>
                                 </div>
@@ -185,15 +188,15 @@
                             <!-- 聊天模式選擇 -->
                             <div class="chat-mode-wrap">
                                 <button type="button" id="chat-mode-btn" class="chat-mode-btn" aria-haspopup="listbox" aria-expanded="false" title="選擇聊天模式">
-                                    <span id="chat-mode-label">股市 Agent</span>
+                                    <span id="chat-mode-label">一般對話</span>
                                     <i data-lucide="chevron-up" class="chat-mode-chevron"></i>
                                 </button>
                                 <ul id="chat-mode-menu" class="chat-mode-menu hidden" role="listbox">
-                                    <li tabindex="0" role="option" data-value="general" class="chat-mode-option">
+                                    <li tabindex="0" role="option" data-value="general" class="chat-mode-option selected">
                                         <span class="chat-mode-option-title">一般對話</span>
                                         <span class="chat-mode-option-desc">日常問答，直接與 AI 對話</span>
                                     </li>
-                                    <li tabindex="0" role="option" data-value="stock_agent" class="chat-mode-option selected">
+                                    <li tabindex="0" role="option" data-value="stock_agent" class="chat-mode-option">
                                         <span class="chat-mode-option-title">股市 Agent</span>
                                         <span class="chat-mode-option-desc">使用工具搜尋分析股市資料</span>
                                     </li>
@@ -216,7 +219,7 @@
                         </div>
                     </div>
                 </div>
-                <p class="disclaimer">⚠重要聲明：本系統僅為大語言模型之資料檢索與結構化摘要工具，產出內容皆來自公開歷史資訊，不代表本平台之任何投資推薦或建議。投資人應獨立思考並自負盈虧。</p>
+                <p class="disclaimer">Insight 的回答由 AI 生成，內容可能有誤，請使用者自行查證並謹慎參考。</p>
             </footer>
         </main>
     </div>

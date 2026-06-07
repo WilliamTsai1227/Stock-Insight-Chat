@@ -204,7 +204,7 @@ shasum -a 256 app/backend/agent/stream_usage_chat_openai.py
 在**專案根目錄**執行：
 
 ```bash
-docker-compose -f ./deploy/docker-compose.yml exec db psql -U postgres -d Stock_Insight_Chat
+docker-compose -f ./deploy/docker-compose.yml exec db psql -U postgres -d Insight
 ```
 
 （Compose V2 使用者可將 `docker-compose` 改為 `docker compose`。）
@@ -213,15 +213,15 @@ docker-compose -f ./deploy/docker-compose.yml exec db psql -U postgres -d Stock_
 若知道 container 的明確名稱（可透過 `docker ps` 確認，如 `deploy-db-1`），可使用：
 
 ```bash
-docker exec -it <db_container_name> psql -U postgres -d Stock_Insight_Chat
+docker exec -it <db_container_name> psql -U postgres -d Insight
 ```
 
-成功登入後，終端機將出現 `Stock_Insight_Chat=#` 提示字元。
+成功登入後，終端機將出現 `Insight=#` 提示字元。
 *(若要離開請輸入 `\q` 並按下 Enter 即可)*
 
 ### 1-3 變更資料庫結構／新增或刪除索引（`token_usage_logs`）
 
-在已進入 **`Stock_Insight_Chat=#`** 後，若既有資料庫仍為舊版單欄索引（`idx_token_usage_logs_user_id`、`idx_token_usage_logs_chat_id`），可手動執行下列交易：**新增複合索引**並**移除已冗餘的單欄索引**。  
+在已進入 **`Insight=#`** 後，若既有資料庫仍為舊版單欄索引（`idx_token_usage_logs_user_id`、`idx_token_usage_logs_chat_id`），可手動執行下列交易：**新增複合索引**並**移除已冗餘的單欄索引**。  
 （與程式庫中 migration **`app/backend/database/migrations/V003__token_usage_logs_composite_indexes.sql`** 等價；新環境若以 **`init_db.sql`** 建庫則通常已含這些索引，無須重複執行。）
 
 **說明：** 未在此 DROP **`idx_token_usage_logs_created_at`**；若僅依時間掃描（無 `user_id`／`chat_id`）仍需該單欄索引，請見 **`init_db.sql`** 中的 `created_at DESC` 定義。
@@ -250,7 +250,7 @@ COMMIT;
 
 ### 1-4 變更資料庫結構／新增 `caller` 欄位（`token_usage_logs`）
 
-若資料庫為較早版本建立的 **`token_usage_logs`**（尚未含 **`caller`**），在 **`Stock_Insight_Chat=#`** 下可手動執行下列交易，與 **`init_db.sql`** 建表時第 45 行之 **`caller VARCHAR(50)`**（可 NULL，語意：router／analyst 等 LLM 輪次來源）對齊：  
+若資料庫為較早版本建立的 **`token_usage_logs`**（尚未含 **`caller`**），在 **`Insight=#`** 下可手動執行下列交易，與 **`init_db.sql`** 建表時第 45 行之 **`caller VARCHAR(50)`**（可 NULL，語意：router／analyst 等 LLM 輪次來源）對齊：  
 （與程式庫中 migration **`app/backend/database/migrations/V004__token_usage_logs_add_caller.sql`** 等價；**以 `init_db.sql` 全新建庫者無須執行**。）
 
 ```sql
@@ -267,7 +267,7 @@ COMMIT;
 ---
 
 
-以下查詢皆需要在進入 PostgreSQL (`Stock_Insight_Chat=#`) 介面後執行。
+以下查詢皆需要在進入 PostgreSQL (`Insight=#`) 介面後執行。
 
 ### 2-1 登入驗證 (JWT Refresh Tokens)
 
@@ -348,11 +348,11 @@ SELECT * FROM chats ORDER BY created_at DESC LIMIT 5;
 
 ## 3. 檢查資料表結構與索引
 
-以下指令皆在已登入 `Stock_Insight_Chat=#` 的 **psql** 中執行。用途為確認**欄位／型別／索引／約束**是否與 `app/backend/database/init_db.sql`（及 migration）一致，並順便觀察**是否有資料寫入**。
+以下指令皆在已登入 `Insight=#` 的 **psql** 中執行。用途為確認**欄位／型別／索引／約束**是否與 `app/backend/database/init_db.sql`（及 migration）一致，並順便觀察**是否有資料寫入**。
 
 ### 3-1 單表結構（欄位、型別、預設值）
 
-以下為 **psql 元指令**（不是純 SQL），提示字元須為 `Stock_Insight_Chat=#`：
+以下為 **psql 元指令**（不是純 SQL），提示字元須為 `Insight=#`：
 
 ```text
 \d token_usage_logs

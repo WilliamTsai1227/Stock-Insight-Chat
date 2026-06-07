@@ -231,6 +231,7 @@ function initUserMenu() {
     if (nameEl) {
         nameEl.textContent = user.username || user.email;
     }
+    applyUserTierBadge(user);
 
     const trigger = document.getElementById('user-menu-trigger');
     const dropdown = document.getElementById('user-dropdown');
@@ -271,6 +272,19 @@ function initUserMenu() {
 }
 
 
+/** 訂閱方案 slug → 顯示名稱（free / pro / ultra） */
+function formatTierLabel(tierName) {
+    const labels = { free: 'Free', pro: 'Pro', ultra: 'Ultra' };
+    const key = (tierName || 'free').toLowerCase();
+    return labels[key] || key.charAt(0).toUpperCase() + key.slice(1);
+}
+
+function applyUserTierBadge(user) {
+    const badge = document.getElementById('user-tier-badge');
+    if (!badge || !user) return;
+    badge.textContent = formatTierLabel(user.tier_name);
+}
+
 // ─── 個人資料 Modal ──────────────────────────────────────────────
 
 async function openProfileModal() {
@@ -286,9 +300,10 @@ async function openProfileModal() {
         document.getElementById('profile-email').value = user.email;
         document.getElementById('profile-username').value = user.username;
         document.getElementById('profile-status').textContent = user.status || 'active';
-        document.getElementById('profile-tier').textContent = user.tier_id || 'Free';
+        document.getElementById('profile-tier').textContent = formatTierLabel(user.tier_name);
 
         localStorage.setItem('user', JSON.stringify(user));
+        applyUserTierBadge(user);
     } catch (err) {
         console.error('Failed to fetch profile:', err);
     }
@@ -319,6 +334,7 @@ async function saveProfile() {
 
         const updated = await res.json();
         localStorage.setItem('user', JSON.stringify(updated));
+        applyUserTierBadge(updated);
 
         const avatarEl = document.getElementById('user-avatar');
         const nameEl = document.getElementById('user-display-name');
@@ -332,6 +348,7 @@ async function saveProfile() {
 
         msgEl.textContent = '資料更新成功！';
         msgEl.className = 'modal-msg success';
+        setTimeout(() => closeAllModals(), 1000);
     } catch {
         msgEl.textContent = '無法連線至伺服器';
         msgEl.className = 'modal-msg error';
@@ -416,17 +433,15 @@ window.addEventListener('DOMContentLoaded', async () => {
         return;
     }
 
-    // Google SSO 首次登入：localStorage 無 user 資料，主動 fetch profile 並存入
-    if (!getUser()) {
-        try {
-            const res = await authFetch(`${AUTH_API}/user`);
-            if (res && res.ok) {
-                const profile = await res.json();
-                localStorage.setItem('user', JSON.stringify(profile));
-            }
-        } catch {
-            // 非致命錯誤，繼續執行（顯示名稱只是 UX，不影響功能）
+    // 每次進入主頁同步 profile（含訂閱方案名稱），並更新 localStorage
+    try {
+        const res = await authFetch(`${AUTH_API}/user`);
+        if (res && res.ok) {
+            const profile = await res.json();
+            localStorage.setItem('user', JSON.stringify(profile));
         }
+    } catch {
+        // 非致命錯誤，繼續執行
     }
 
     initUserMenu();
@@ -437,5 +452,6 @@ window.addEventListener('DOMContentLoaded', async () => {
         const sidebarAvatar = document.querySelector('.sidebar-footer .avatar');
         if (sidebarName) sidebarName.textContent = user.username || user.email;
         if (sidebarAvatar) sidebarAvatar.textContent = (user.username || 'U').charAt(0).toUpperCase();
+        applyUserTierBadge(user);
     }
 });

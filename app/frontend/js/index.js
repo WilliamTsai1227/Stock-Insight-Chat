@@ -15,6 +15,48 @@ let newChatComposeLock = false;
 const CHAT_MODE_STORAGE_KEY = 'sicChatMode';
 /** localStorage：`thinking`（LangGraph）／`flash`（單輪新聞向量檢索） */
 const RESPONSE_MODE_STORAGE_KEY = 'sicChatResponseMode';
+/** localStorage：界面主題 `dark`（預設）／`light` */
+const THEME_STORAGE_KEY = 'insightUiTheme';
+const HLJS_THEME_DARK = 'https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/atom-one-dark.min.css';
+const HLJS_THEME_LIGHT = 'https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github.min.css';
+
+function applyUiTheme(theme) {
+    const isLight = theme === 'light';
+    document.body.classList.add('theme-switching');
+    document.body.classList.toggle('dark-theme', !isLight);
+    document.body.classList.toggle('light-theme', isLight);
+
+    const hljsLink = document.getElementById('hljs-theme');
+    if (hljsLink) {
+        hljsLink.href = isLight ? HLJS_THEME_LIGHT : HLJS_THEME_DARK;
+    }
+
+    try {
+        localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch (_) {}
+
+    requestAnimationFrame(() => {
+        document.body.classList.remove('theme-switching');
+    });
+}
+
+function initUiTheme() {
+    let theme = 'dark';
+    try {
+        const saved = localStorage.getItem(THEME_STORAGE_KEY);
+        if (saved === 'light' || saved === 'dark') theme = saved;
+    } catch (_) {}
+    applyUiTheme(theme);
+}
+
+function initThemeToggle() {
+    const btn = document.getElementById('theme-toggle-btn');
+    if (!btn) return;
+    btn.addEventListener('click', () => {
+        const next = document.body.classList.contains('light-theme') ? 'dark' : 'light';
+        applyUiTheme(next);
+    });
+}
 /** 回覆模式：收合為短名，下拉為主標題 + 副行說明 */
 const RESPONSE_MODE_META = {
     thinking: {
@@ -27,7 +69,7 @@ const RESPONSE_MODE_META = {
     },
 };
 /** @type {'general' | 'stock_agent'} */
-let chatMode = 'stock_agent';
+let chatMode = 'general';
 /** @type {'thinking' | 'flash'} */
 let chatResponseMode = 'thinking';
 
@@ -189,18 +231,44 @@ async function navigateToChat(chatId) {
 
     if (parkedPaneByChatId.has(chatId)) {
         unparkViewportFor(chatId);
+        setChatStatusLoading(false);
         scrollToBottom();
         lucide.createIcons();
         updateSendButtonForStreamingState();
         return;
     }
 
+    setChatStatusLoading(true);
+    showChatMessagesLoading();
     await loadChatHistoryIntoView(chatId);
     updateSendButtonForStreamingState();
 }
 
-/** 一般聊天視圖（非專案頁）輸入框 placeholder，需與 index.html 預設文案一致 */
-const CHAT_INPUT_PLACEHOLDER_MAIN = '問問台積電的供應商風險...';
+/** 一般聊天視圖（非專案頁）輸入框 placeholder */
+const CHAT_INPUT_PLACEHOLDER = {
+    general: '問我任何事…',
+    stock_agent: '問問台積電的供應商風險…',
+};
+
+/** 歡迎畫面依模式顯示的建議問題（點擊即送出） */
+const SUGGESTED_PROMPTS = {
+    general: [
+        '幫我找找台北聚餐好去處',
+        '幫我找找大安區咖啡廳',
+        '幫我整理這週科技產業的重要新聞',
+        '最近有哪些演唱會？',
+    ],
+    stock_agent: [
+        '台積電近期財報有哪些重點？',
+        '半導體產業目前的供應鏈風險有哪些？',
+        '幫我搜尋聯發科最近一週的重要新聞',
+        '分析台股加權指數近期的走勢與市場情緒',
+    ],
+};
+
+function getMainChatInputPlaceholder() {
+    return CHAT_INPUT_PLACEHOLDER[chatMode] || CHAT_INPUT_PLACEHOLDER.general;
+}
 
 function isProjectViewVisible() {
     const pv = document.getElementById('project-view');
@@ -220,7 +288,7 @@ function applyIdleInputPlaceholder() {
     if (!inputEl) return;
     inputEl.placeholder = isProjectViewVisible()
         ? getPvComposePlaceholder()
-        : CHAT_INPUT_PLACEHOLDER_MAIN;
+        : getMainChatInputPlaceholder();
 }
 
 function setMainChatTitle(text) {
@@ -237,6 +305,117 @@ function resolveChatTitleForId(chatId) {
         if (found && found.title) return found.title;
     }
     return '對話';
+}
+
+/** 建立三點跳動載入指示（側欄 / 主區共用） */
+function createLoadingDots(className) {
+    const dots = document.createElement('span');
+    dots.className = className;
+    dots.setAttribute('aria-hidden', 'true');
+    for (let i = 0; i < 3; i += 1) {
+        dots.appendChild(document.createElement('span'));
+    }
+    return dots;
+}
+
+function setChatStatusLoading(isLoading) {
+    const badge = document.getElementById('chat-status');
+    if (!badge) return;
+    if (isLoading) {
+        badge.textContent = '載入中';
+        badge.classList.add('is-loading');
+    } else {
+        badge.textContent = 'Ready';
+        badge.classList.remove('is-loading');
+    }
+}
+
+/** 側欄列表載入占位（專案區保留「新增專案」） */
+function renderProjectsLoading() {
+    const list = document.getElementById('project-list');
+    if (!list) return;
+    while (list.firstChild) list.removeChild(list.firstChild);
+
+    const newLi = document.createElement('li');
+    newLi.className = 'new-project-item';
+    const newIcon = document.createElement('i');
+    newIcon.setAttribute('data-lucide', 'folder-plus');
+    const newText = document.createElement('span');
+    newText.textContent = '新增專案';
+    newLi.appendChild(newIcon);
+    newLi.appendChild(newText);
+    newLi.addEventListener('click', openCreateProjectModal);
+    list.appendChild(newLi);
+
+    const loadingLi = document.createElement('li');
+    loadingLi.className = 'sidebar-loading-item';
+    loadingLi.setAttribute('aria-busy', 'true');
+    const label = document.createElement('span');
+    label.className = 'sidebar-loading-label';
+    label.textContent = '載入專案';
+    loadingLi.appendChild(label);
+    loadingLi.appendChild(createLoadingDots('sidebar-loading-dots'));
+    list.appendChild(loadingLi);
+    lucide.createIcons();
+}
+
+function renderRecentChatsLoading() {
+    const list = document.getElementById('recent-chat-list');
+    if (!list) return;
+    while (list.firstChild) list.removeChild(list.firstChild);
+
+    const li = document.createElement('li');
+    li.className = 'sidebar-loading-item';
+    li.setAttribute('aria-busy', 'true');
+    const label = document.createElement('span');
+    label.className = 'sidebar-loading-label';
+    label.textContent = '載入紀錄';
+    li.appendChild(label);
+    li.appendChild(createLoadingDots('sidebar-loading-dots'));
+    list.appendChild(li);
+}
+
+/** 主聊天區：清空舊訊息並顯示「載入對話紀錄」+ 跳動點 */
+function showChatMessagesLoading() {
+    const container = document.getElementById('chat-messages');
+    if (!container) return;
+    while (container.firstChild) container.removeChild(container.firstChild);
+
+    const wrap = document.createElement('div');
+    wrap.className = 'chat-loading-state';
+    wrap.setAttribute('role', 'status');
+    wrap.setAttribute('aria-live', 'polite');
+    wrap.setAttribute('aria-label', '載入對話紀錄');
+
+    const text = document.createElement('span');
+    text.className = 'chat-loading-text';
+    text.textContent = '載入對話紀錄';
+
+    wrap.appendChild(text);
+    wrap.appendChild(createLoadingDots('chat-loading-dots'));
+    container.appendChild(wrap);
+}
+
+function showPvListsLoading() {
+    const chatList = document.getElementById('pv-chat-list');
+    const fileList = document.getElementById('pv-file-list');
+    const chatEmpty = document.getElementById('pv-chats-empty');
+    const filesEmpty = document.getElementById('pv-files-empty');
+    if (chatEmpty) chatEmpty.style.display = 'none';
+    if (filesEmpty) filesEmpty.style.display = 'none';
+    if (chatList) while (chatList.firstChild) chatList.removeChild(chatList.firstChild);
+    if (fileList) while (fileList.firstChild) fileList.removeChild(fileList.firstChild);
+
+    if (!chatList) return;
+    const li = document.createElement('li');
+    li.className = 'pv-loading-item';
+    li.setAttribute('aria-busy', 'true');
+    const label = document.createElement('span');
+    label.className = 'pv-loading-label';
+    label.textContent = '載入中';
+    li.appendChild(label);
+    li.appendChild(createLoadingDots('sidebar-loading-dots'));
+    chatList.appendChild(li);
 }
 
 /** 發送／輸入欄鎖：只鎖「當前對話若在串流中」*/
@@ -487,16 +666,78 @@ function applyChatModeUI() {
 
     // placeholder
     const textarea = document.getElementById('user-input');
-    if (textarea) {
-        textarea.placeholder = isGeneral
-            ? '問我任何事…'
-            : '問問台積電的供應商風險…';
+    if (textarea && !textarea.disabled) {
+        if (isProjectViewVisible()) {
+            textarea.placeholder = getPvComposePlaceholder();
+        } else {
+            textarea.placeholder = getMainChatInputPlaceholder();
+        }
     }
 
     applyChatModeLabel();
     syncChatModeMenuSelection();
+    refreshWelcomeHeroIfVisible();
 
     try { localStorage.setItem(CHAT_MODE_STORAGE_KEY, chatMode); } catch (_) {}
+}
+
+/** 建立或更新歡迎畫面（含模式對應的建議問題） */
+function renderWelcomeHero(title) {
+    const container = document.getElementById('chat-messages');
+    if (!container) return;
+
+    const existing = container.querySelector('.welcome-hero');
+    if (existing) existing.remove();
+
+    const hero = document.createElement('div');
+    hero.className = 'welcome-hero';
+    hero.dataset.mode = chatMode;
+
+    const h1 = document.createElement('h1');
+    h1.textContent = title || '您今天想問些什麼？';
+    hero.appendChild(h1);
+
+    const subtitle = document.createElement('p');
+    subtitle.className = 'welcome-subtitle';
+    subtitle.textContent = chatMode === 'general'
+        ? '試試這些問題，或直接輸入你想問的'
+        : '試試這些分析方向，或直接輸入你的問題';
+    hero.appendChild(subtitle);
+
+    const suggestionsWrap = document.createElement('div');
+    suggestionsWrap.className = 'welcome-suggestions';
+    suggestionsWrap.setAttribute('role', 'list');
+
+    const prompts = SUGGESTED_PROMPTS[chatMode] || SUGGESTED_PROMPTS.general;
+    prompts.forEach((text) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'suggestion-chip';
+        btn.textContent = text;
+        btn.setAttribute('role', 'listitem');
+        btn.addEventListener('click', () => {
+            const input = document.getElementById('user-input');
+            if (!input || input.disabled) return;
+            input.value = text;
+            input.dispatchEvent(new Event('input'));
+            sendMessage();
+        });
+        suggestionsWrap.appendChild(btn);
+    });
+    hero.appendChild(suggestionsWrap);
+
+    container.appendChild(hero);
+}
+
+/** 若目前仍顯示歡迎畫面，依 chatMode 更新建議問題 */
+function refreshWelcomeHeroIfVisible() {
+    const container = document.getElementById('chat-messages');
+    if (!container) return;
+    const hero = container.querySelector('.welcome-hero');
+    if (!hero) return;
+    const h1 = hero.querySelector('h1');
+    const title = h1 ? h1.textContent : '您今天想問些什麼？';
+    renderWelcomeHero(title);
 }
 
 function initChatModeSelector() {
@@ -607,9 +848,10 @@ function initResponseModeSelector() {
 
 // --- 初始化 ---
 document.addEventListener('DOMContentLoaded', async () => {
-    // 先渲染空白骨架（確保「新增專案」按鈕立刻可見）
-    renderProjects();
-    renderRecentChats();
+    initUiTheme();
+    // 側欄先顯示載入指示，等 API 回來再渲染真實列表
+    renderProjectsLoading();
+    renderRecentChatsLoading();
     initEventListeners();
     initProjectViewTabs();
 
@@ -709,6 +951,7 @@ function initEventListeners() {
 
     initMobileSidebar();
 
+    initThemeToggle();
     initResponseModeSelector();
 }
 
@@ -752,12 +995,11 @@ async function loadProjectsFromServer() {
         for (const id of Object.keys(state.files)) {
             if (!validIds.has(id)) delete state.files[id];
         }
-
-        renderProjects();
-        renderRecentChats();
-        lucide.createIcons();
     } catch (err) {
         console.error('載入專案列表時發生錯誤：', err);
+    } finally {
+        renderProjects();
+        lucide.createIcons();
     }
 }
 
@@ -922,11 +1164,11 @@ async function loadRecentChatsFromServer() {
             created_at: c.created_at,
             updated_at: c.updated_at,
         }));
-
-        renderRecentChats();
-        lucide.createIcons();
     } catch (err) {
         console.error('載入最近聊天時發生錯誤：', err);
+    } finally {
+        renderRecentChats();
+        lucide.createIcons();
     }
 }
 
@@ -1384,8 +1626,8 @@ function showProjectView(project, options = {}) {
     setActivePvTab('chats');
 
     if (options.loading) {
-        // 載入中：先清掉舊列表，避免閃爍上一個專案的資料
-        clearPvLists();
+        // 載入中：清掉舊列表並顯示跳動點，避免閃爍上一個專案的資料
+        showPvListsLoading();
         lucide.createIcons();
         updateSendButtonForStreamingState();
         return;
@@ -1562,13 +1804,9 @@ function showChatView() {
 
 function clearChatMessages() {
     const container = document.getElementById('chat-messages');
+    if (!container) return;
     while (container.firstChild) container.removeChild(container.firstChild);
-    const hero = document.createElement('div');
-    hero.className = 'welcome-hero';
-    const h1 = document.createElement('h1');
-    h1.textContent = '準備好開始新對話了嗎？';
-    hero.appendChild(h1);
-    container.appendChild(hero);
+    renderWelcomeHero('準備好開始新對話了嗎？');
 }
 
 /**
@@ -1576,10 +1814,7 @@ function clearChatMessages() {
  * API 回傳已按時間舊→新排序，這裡依序繪成一問一答。
  */
 async function loadChatHistoryIntoView(chatId) {
-    const statusBadge = document.getElementById('chat-status');
     const container = document.getElementById('chat-messages');
-
-    if (statusBadge) statusBadge.textContent = '載入對話…';
 
     try {
         const url =
@@ -1593,6 +1828,9 @@ async function loadChatHistoryIntoView(chatId) {
                 detail = err.detail || detail;
             } catch { /* ignore */ }
             showToast(`載入對話紀錄失敗：${detail}`, 'error');
+            if (String(state.currentChatId) === String(chatId)) {
+                clearChatMessages();
+            }
             return;
         }
         const json = await res.json();
@@ -1624,8 +1862,13 @@ async function loadChatHistoryIntoView(chatId) {
     } catch (err) {
         console.error(err);
         showToast(`載入對話紀錄失敗：${err.message}`, 'error');
+        if (String(state.currentChatId) === String(chatId)) {
+            clearChatMessages();
+        }
     } finally {
-        if (statusBadge) statusBadge.textContent = 'Ready';
+        if (String(state.currentChatId) === String(chatId)) {
+            setChatStatusLoading(false);
+        }
         updateSendButtonForStreamingState();
     }
 }
@@ -2191,11 +2434,23 @@ function createStreamingMessageUI(placeholderText) {
 const TOOL_DISPLAY_NAMES = {
     search_stock_news:          '搜尋股市新聞',
     search_market_ai_analysis:  '搜尋 AI 市場分析',
-    get_market_recommendations: '提取推薦標的',
+    get_market_recommendations: '提取潛力標的',
+    tavily_global_search:         '網路搜尋',
 };
 
 function formatToolName(tool) {
-    return TOOL_DISPLAY_NAMES[tool] || tool;
+    return TOOL_DISPLAY_NAMES[tool] || '資料檢索';
+}
+
+/** 將 Router thought 等文字中的原始 tool id 替換為使用者可讀名稱 */
+function maskToolNamesInText(text) {
+    if (!text) return '';
+    let result = text;
+    const entries = Object.entries(TOOL_DISPLAY_NAMES).sort((a, b) => b[0].length - a[0].length);
+    for (const [key, label] of entries) {
+        result = result.split(key).join(label);
+    }
+    return result;
 }
 
 // ============================================================
@@ -2250,12 +2505,16 @@ function appendStepsAndSources(msgDiv, steps, sources) {
             meta.appendChild(nodeSpan);
             meta.appendChild(timeSpan);
 
-            const thought = document.createElement('div');
-            thought.className = 'step-thought';
-            thought.textContent = s.thought || s.content || '';
-
             stepDiv.appendChild(meta);
-            stepDiv.appendChild(thought);
+
+            // Analyst 正文已在上方氣泡串流顯示；軌跡只保留標題與耗時
+            const thoughtText = s.thought || (s.node !== 'analyst' ? s.content : '') || '';
+            if (thoughtText) {
+                const thought = document.createElement('div');
+                thought.className = 'step-thought';
+                thought.textContent = maskToolNamesInText(thoughtText);
+                stepDiv.appendChild(thought);
+            }
 
             if (s.tool_calls && s.tool_calls.length > 0) {
                 const callsWrap = document.createElement('div');
@@ -2266,7 +2525,7 @@ function appendStepsAndSources(msgDiv, steps, sources) {
 
                     const nameEl = document.createElement('div');
                     nameEl.className = 'tool-name';
-                    nameEl.textContent = `調用工具: ${tc.name}`;
+                    nameEl.textContent = `調用工具: ${formatToolName(tc.name)}`;
 
                     const queryEl = document.createElement('div');
                     queryEl.className = 'tool-query';
