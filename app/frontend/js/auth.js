@@ -306,6 +306,17 @@ function formatUsagePeriodLabel(isoString) {
     })}`;
 }
 
+function formatQuotaResetLabel(isoString) {
+    if (!isoString) return '';
+    const d = new Date(isoString);
+    if (Number.isNaN(d.getTime())) return '';
+    return `下次重置：${d.toLocaleDateString('zh-TW', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+    })}`;
+}
+
 function renderUsageStats(data) {
     const used = Number(data.used_tokens) || 0;
     const limit = Number(data.monthly_token_limit) || 0;
@@ -315,6 +326,7 @@ function renderUsageStats(data) {
     const textEl = document.getElementById('usage-stats-text');
     const barEl = document.getElementById('usage-bar');
     const periodEl = document.getElementById('usage-period');
+    const resetEl = document.getElementById('usage-reset');
 
     if (tierEl) tierEl.textContent = formatTierLabel(data.tier_name);
     if (textEl) {
@@ -328,6 +340,9 @@ function renderUsageStats(data) {
     if (periodEl) {
         periodEl.textContent = formatUsagePeriodLabel(data.current_period_start);
     }
+    if (resetEl) {
+        resetEl.textContent = formatQuotaResetLabel(data.quota_resets_at);
+    }
 
     const user = getUser();
     if (user) {
@@ -335,6 +350,7 @@ function renderUsageStats(data) {
         user.monthly_token_limit = limit;
         user.remaining_tokens = data.remaining_tokens;
         user.quota_exhausted = data.quota_exhausted;
+        user.quota_resets_at = data.quota_resets_at || null;
         localStorage.setItem('user', JSON.stringify(user));
     }
 }

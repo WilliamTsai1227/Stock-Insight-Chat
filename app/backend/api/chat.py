@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import json
 import asyncio
@@ -99,6 +100,57 @@ class CreateChatRequest(BaseModel):
 _TITLE_MAX_LEN = 50
 # Placeholder：截斷至此字數 + 省略號
 _PLACEHOLDER_LEN = 30
+
+# 使用者自訂 title 白名單（與 project name 同規則，長度上限用 _TITLE_MAX_LEN）
+_VALID_TITLE_PATTERN = re.compile(
+    r'^[\w'
+    r'\u4e00-\u9fff'
+    r'\u3400-\u4dbf'
+    r'\u3040-\u309f'
+    r'\u30a0-\u30ff'
+    r'\uff00-\uffef'
+    r'\u00c0-\u024f'
+    r'\s\-_.()（）【】「」『』·'
+    r']+$',
+    re.UNICODE,
+)
+
+
+def _validate_chat_title(title: str) -> str:
+    """驗證 chat title 合法性，回傳去頭尾空白後的乾淨字串。"""
+    stripped = title.strip()
+
+    if not stripped:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Chat title cannot be empty or contain only whitespace.",
+        )
+
+    if len(stripped) > _TITLE_MAX_LEN:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Chat title must not exceed {_TITLE_MAX_LEN} characters "
+                f"(current: {len(stripped)})."
+            ),
+        )
+
+    if not _VALID_TITLE_PATTERN.match(stripped):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Chat title contains illegal characters. "
+                "Only letters, digits, CJK characters, spaces, "
+                "hyphens (-), underscores (_), dots (.), and common brackets are allowed. "
+                "Characters such as < > ' \" ; / \\ & $ ` are forbidden."
+            ),
+        )
+
+    return stripped
+
+
+class UpdateChatTitleRequest(BaseModel):
+    title: str
 
 
 agent_app = create_chat_agent()
@@ -522,6 +574,134 @@ async def list_all_chats(
             }
             for row in rows
         ],
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PATCH /api/chat —— 更新 chat title
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.patch("/api/chat")
+async def update_chat_title(
+    request: UpdateChatTitleRequest,
+    chat_id: UUID = Query(..., description="要更新的 chat UUID"),
+    db: asyncpg.Connection = Depends(get_db),
+    current_user: asyncpg.Record = Depends(get_current_user),
+):
+    """
+    更新指定 chat 的標題（使用者手動命名）。
+
+    安全：
+    - user_id 由 JWT 取得，以 (id, user_id) 過濾，找不到一律 404
+    - title 經白名單正則過濾，防止 XSS / Injection
+
+    行為：
+    - 成功後 title_generated 設為 TRUE，避免後續 LLM 自動覆寫
+
+    HTTP 回應：
+    - 200 OK : 更新成功
+    - 401    : JWT 驗證失敗
+    - 403    : 帳號已停用
+    - 404    : 找不到 chat 或無權修改
+    - 422    : title 非法或過長
+    - 500    : 資料庫錯誤
+    """
+    user_id = current_user["id"]
+    clean_title = _validate_chat_title(request.title)
+    now_utc = datetime.now(timezone.utc)
+
+    try:
+        row = await db.fetchrow(
+            """
+            UPDATE chats
+            SET title = $1, title_generated = TRUE, updated_at = $2
+            WHERE id = $3 AND user_id = $4
+            RETURNING id, title, title_generated, updated_at
+            """,
+            clean_title,
+            now_utc,
+            chat_id,
+            user_id,
+        )
+    except asyncpg.PostgresError as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database error: {str(e)}",
+        )
+
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Chat not found or you don't have permission to update it.",
+        )
+
+    return {
+        "status": "success",
+        "data": {
+            "id": str(row["id"]),
+            "title": row["title"],
+            "title_generated": row["title_generated"],
+            "updated_at": row["updated_at"].isoformat(),
+        },
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DELETE /api/chat —— 刪除整個 chat（含 messages CASCADE）
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.delete("/api/chat")
+async def delete_chat(
+    chat_id: UUID = Query(..., description="要刪除的 chat UUID"),
+    db: asyncpg.Connection = Depends(get_db),
+    current_user: asyncpg.Record = Depends(get_current_user),
+):
+    """
+    刪除指定 chat 及其所有訊息。
+
+    Cascade 行為（由 PostgreSQL schema 保證）：
+    - messages.chat_id ON DELETE CASCADE → 刪 chat 會連帶刪所有 messages
+    - token_usage_logs.chat_id ON DELETE SET NULL → 保留用量紀錄但解除 chat 關聯
+
+    安全：
+    - 以 (id, user_id) 同時過濾，確保使用者無法刪除他人的 chat
+
+    HTTP 回應：
+    - 200 OK : 刪除成功
+    - 401    : JWT 驗證失敗
+    - 403    : 帳號已停用
+    - 404    : 找不到 chat 或無權刪除
+    - 500    : 資料庫錯誤
+    """
+    user_id = current_user["id"]
+
+    try:
+        result = await db.execute(
+            """
+            DELETE FROM chats
+            WHERE id = $1 AND user_id = $2
+            """,
+            chat_id,
+            user_id,
+        )
+    except asyncpg.PostgresError as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database error: {str(e)}",
+        )
+
+    if result == "DELETE 0":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Chat not found or you don't have permission to delete it.",
+        )
+
+    return {
+        "status": "success",
+        "message": "Chat and all related messages have been deleted.",
+        "data": {
+            "id": str(chat_id),
+        },
     }
 
 

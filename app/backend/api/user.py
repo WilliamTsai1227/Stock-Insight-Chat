@@ -17,6 +17,7 @@ from app.backend.database.postgresql import get_db
 from app.backend.module.jwt import get_current_user
 from app.backend.module.usage_quota import (
     DEFAULT_FALLBACK_MONTHLY_LIMIT,
+    compute_quota_resets_at,
     ensure_quota_row_exists,
     fetch_quota_status,
 )
@@ -40,6 +41,23 @@ class UserProfile(BaseModel):
     monthly_token_limit: int = 200_000
     remaining_tokens: int = 200_000
     quota_exhausted: bool = False
+    current_period_start: Optional[str] = None
+    quota_resets_at: Optional[str] = None
+
+
+def _quota_payload_from_status(q) -> dict:
+    remaining = max(0, q.monthly_limit - q.used_tokens)
+    resets_at = compute_quota_resets_at(q.current_period_start)
+    return {
+        "used_tokens": q.used_tokens,
+        "monthly_token_limit": q.monthly_limit,
+        "remaining_tokens": remaining,
+        "quota_exhausted": q.used_tokens >= q.monthly_limit,
+        "current_period_start": (
+            q.current_period_start.isoformat() if q.current_period_start else None
+        ),
+        "quota_resets_at": resets_at.isoformat() if resets_at else None,
+    }
 
 
 class UserUsageStats(BaseModel):
@@ -50,6 +68,7 @@ class UserUsageStats(BaseModel):
     usage_percent: int
     quota_exhausted: bool
     current_period_start: Optional[str] = None
+    quota_resets_at: Optional[str] = None
 
 
 def _serialize_user_profile(row: asyncpg.Record, quota: Optional[dict] = None) -> dict:
@@ -92,14 +111,7 @@ async def get_my_profile(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
     await ensure_quota_row_exists(current_user["id"])
     q = await fetch_quota_status(current_user["id"])
-    remaining = max(0, q.monthly_limit - q.used_tokens)
-    quota = {
-        "used_tokens": q.used_tokens,
-        "monthly_token_limit": q.monthly_limit,
-        "remaining_tokens": remaining,
-        "quota_exhausted": q.used_tokens >= q.monthly_limit,
-    }
-    return _serialize_user_profile(row, quota)
+    return _serialize_user_profile(row, _quota_payload_from_status(q))
 
 
 @router.patch("/api/user", response_model=UserProfile)
@@ -123,14 +135,7 @@ async def update_my_profile(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
     await ensure_quota_row_exists(current_user["id"])
     q = await fetch_quota_status(current_user["id"])
-    remaining = max(0, q.monthly_limit - q.used_tokens)
-    quota = {
-        "used_tokens": q.used_tokens,
-        "monthly_token_limit": q.monthly_limit,
-        "remaining_tokens": remaining,
-        "quota_exhausted": q.used_tokens >= q.monthly_limit,
-    }
-    return _serialize_user_profile(updated, quota)
+    return _serialize_user_profile(updated, _quota_payload_from_status(q))
 
 
 @router.get("/api/user/usage", response_model=UserUsageStats)
@@ -164,6 +169,7 @@ async def get_my_usage_stats(
     usage_percent = round((used / limit) * 100) if limit > 0 else 0
     period_start = row["current_period_start"]
     tier_name = row["tier_name"] if row["tier_name"] else "free"
+    resets_at = compute_quota_resets_at(period_start)
 
     return {
         "tier_name": tier_name,
@@ -173,6 +179,7 @@ async def get_my_usage_stats(
         "usage_percent": usage_percent,
         "quota_exhausted": used >= limit,
         "current_period_start": period_start.isoformat() if period_start else None,
+        "quota_resets_at": resets_at.isoformat() if resets_at else None,
     }
 
 

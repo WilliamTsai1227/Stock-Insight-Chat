@@ -315,6 +315,7 @@
                     </div>
                     <p class="usage-stat-text" id="usage-stats-text"></p>
                     <p class="usage-period" id="usage-period"></p>
+                    <p class="usage-period" id="usage-reset"></p>
                 </div>
                 <div id="usage-error" class="modal-msg error" hidden></div>
             </div>
@@ -337,6 +338,56 @@
             <div class="modal-footer">
                 <button class="modal-btn secondary" onclick="closeAllModals()">取消</button>
                 <button class="modal-btn danger" id="delete-project-confirm-btn" onclick="confirmDeleteProject()">刪除</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 編輯聊天標題 Modal（風格同建立專案）-->
+    <div class="modal-overlay" id="edit-chat-title-modal">
+        <div class="modal-card create-project-card">
+            <div class="modal-header">
+                <h3><i data-lucide="pencil"></i> 重新命名聊天</h3>
+                <div class="modal-header-actions">
+                    <button class="modal-close" onclick="closeEditChatTitleModal()">
+                        <i data-lucide="x"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="modal-body">
+                <div class="modal-field">
+                    <label>聊天標題</label>
+                    <div class="project-name-input-wrap">
+                        <i data-lucide="message-square" class="input-prefix-icon"></i>
+                        <input type="text" id="edit-chat-title-input"
+                               placeholder="輸入聊天標題…"
+                               autocomplete="off"
+                               maxlength="50"
+                               oninput="onChatTitleInput()">
+                    </div>
+                </div>
+                <div id="edit-chat-title-msg" class="modal-msg"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="modal-btn secondary" onclick="closeEditChatTitleModal()">取消</button>
+                <button class="modal-btn primary" id="edit-chat-title-submit-btn"
+                        onclick="submitEditChatTitle()" disabled>儲存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 刪除聊天 Modal（風格同刪除專案）-->
+    <div class="modal-overlay" id="delete-chat-modal">
+        <div class="modal-card delete-project-card">
+            <div class="modal-body">
+                <h3 class="dp-title">刪除聊天？</h3>
+                <p class="dp-text">
+                    這將永久刪除此對話的所有訊息，且無法復原。
+                </p>
+                <div id="delete-chat-msg" class="modal-msg"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="modal-btn secondary" onclick="closeAllModals()">取消</button>
+                <button class="modal-btn danger" id="delete-chat-confirm-btn" onclick="confirmDeleteChat()">刪除</button>
             </div>
         </div>
     </div>

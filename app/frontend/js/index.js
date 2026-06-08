@@ -22,6 +22,8 @@ const HLJS_THEME_LIGHT = 'https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/style
 
 /** 與後端 project.py _NAME_MAX_LEN 一致 */
 const PROJECT_NAME_MAX_CHARS = 40;
+/** 與後端 chat.py _TITLE_MAX_LEN 一致 */
+const CHAT_TITLE_MAX_CHARS = 50;
 /** 與後端 chat.py QUERY_MAX_CHARS（預設 2000）一致 */
 const CHAT_QUERY_MAX_CHARS = 2000;
 
@@ -260,6 +262,7 @@ const SUGGESTED_PROMPTS = {
     general: [
         '幫我找找台北聚餐好去處',
         '幫我找找大安區咖啡廳',
+        '松山火車站附近有什麼上班族中午可以吃的',
         '幫我整理這週科技產業的重要新聞',
         '最近有哪些演唱會？',
     ],
@@ -447,6 +450,8 @@ function updateSendButtonForStreamingState() {
 //   files        : { [projectId]: File[] }                        ← 同上
 //   recentChats  : { id, title, created_at, updated_at }[]（已按 updated_at DESC）← /api/chat/all 載入
 //   pendingDeleteProject : 暫存「刪除確認 modal」要刪除的專案物件
+//   pendingDeleteChat    : 暫存「刪除聊天 modal」要刪除的 chat 物件
+//   pendingEditChat      : 暫存「重新命名 modal」要編輯的 chat 物件
 let state = {
     projects: [],
     chats: {},
@@ -455,6 +460,8 @@ let state = {
     currentProjectId: null,
     currentChatId: null,
     pendingDeleteProject: null,
+    pendingDeleteChat: null,
+    pendingEditChat: null,
     apiBase: resolveStockInsightApiBase(),
 };
 
@@ -1198,26 +1205,47 @@ function renderRecentChats() {
 
     (state.recentChats || []).forEach(c => {
         const li = document.createElement('li');
-        li.className = 'recent-chat-item'
-            + (c.id === state.currentChatId ? ' active' : '');
+        li.className = 'recent-chat-item';
         li.id = `recent-chat-${c.id}`;
         li.dataset.chatId = c.id;
 
+        const isActive = c.id === state.currentChatId;
+
+        const row = document.createElement('div');
+        row.className = 'project-row' + (isActive ? ' active' : '');
+        row.dataset.chatId = c.id;
+
         const msgIcon = document.createElement('i');
         msgIcon.setAttribute('data-lucide', 'message-square');
+        msgIcon.className = 'project-row-icon';
 
         const titleSpan = document.createElement('span');
+        titleSpan.className = 'project-row-name';
         titleSpan.textContent = c.title || '(未命名聊天)';
 
-        li.appendChild(msgIcon);
-        li.appendChild(titleSpan);
+        const menuBtn = document.createElement('button');
+        menuBtn.type = 'button';
+        menuBtn.className = 'project-row-menu-btn';
+        menuBtn.setAttribute('aria-label', '聊天操作選單');
+        menuBtn.dataset.chatId = c.id;
+        const dotsIcon = document.createElement('i');
+        dotsIcon.setAttribute('data-lucide', 'more-horizontal');
+        menuBtn.appendChild(dotsIcon);
 
-        li.addEventListener('click', async () => {
-            // recent chat 不一定屬於某個 project，這裡不主動切換 currentProjectId；
-            // 後續若需要可再從後端查 project_id 補上
+        menuBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openChatMenu(c, menuBtn);
+        });
+
+        row.appendChild(msgIcon);
+        row.appendChild(titleSpan);
+        row.appendChild(menuBtn);
+
+        row.addEventListener('click', async () => {
             await navigateToChat(c.id);
         });
 
+        li.appendChild(row);
         list.appendChild(li);
     });
 
@@ -1242,6 +1270,7 @@ function openProjectMenu(project, anchor) {
         return;
     }
     closeProjectMenu();
+    closeChatMenu();
 
     const pop = document.createElement('div');
     pop.className = 'project-popover';
@@ -1314,6 +1343,323 @@ document.addEventListener('keydown', (e) => {
 });
 window.addEventListener('resize',  () => closeProjectMenu());
 window.addEventListener('scroll',  () => closeProjectMenu(), true);
+
+
+// ============================================================
+// 聊天操作 Popover 選單（三點按鈕）
+// ============================================================
+
+let _activeChatPopover = null;
+let _activeChatPopoverAnchor = null;
+
+/**
+ * 在 state 中更新 chat title（recentChats + 專案內 chats）。
+ */
+function updateChatTitleInState(chatId, newTitle) {
+    const sid = String(chatId);
+    const rc = (state.recentChats || []).find(c => String(c.id) === sid);
+    if (rc) rc.title = newTitle;
+
+    for (const pid of Object.keys(state.chats || {})) {
+        const found = (state.chats[pid] || []).find(c => String(c.id) === sid);
+        if (found) found.title = newTitle;
+    }
+}
+
+/**
+ * 從 state 移除 chat（recentChats + 專案內 chats）。
+ */
+function removeChatFromState(chatId) {
+    const sid = String(chatId);
+    state.recentChats = (state.recentChats || []).filter(c => String(c.id) !== sid);
+
+    for (const pid of Object.keys(state.chats || {})) {
+        if (!state.chats[pid]) continue;
+        state.chats[pid] = state.chats[pid].filter(c => String(c.id) !== sid);
+    }
+}
+
+function openChatMenu(chat, anchor) {
+    if (_activeChatPopover && _activeChatPopoverAnchor === anchor) {
+        closeChatMenu();
+        return;
+    }
+    closeChatMenu();
+    closeProjectMenu();
+
+    const pop = document.createElement('div');
+    pop.className = 'project-popover';
+    pop.id = `chat-popover-${chat.id}`;
+
+    const renameBtn = document.createElement('button');
+    renameBtn.type = 'button';
+    renameBtn.className = 'project-popover-item';
+    const pencilIcon = document.createElement('i');
+    pencilIcon.setAttribute('data-lucide', 'pencil');
+    const renameLabel = document.createElement('span');
+    renameLabel.textContent = '重新命名';
+    renameBtn.appendChild(pencilIcon);
+    renameBtn.appendChild(renameLabel);
+    renameBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeChatMenu();
+        openEditChatTitleModal(chat);
+    });
+    pop.appendChild(renameBtn);
+
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'project-popover-item danger';
+    const trashIcon = document.createElement('i');
+    trashIcon.setAttribute('data-lucide', 'trash-2');
+    const delLabel = document.createElement('span');
+    delLabel.textContent = '刪除聊天';
+    delBtn.appendChild(trashIcon);
+    delBtn.appendChild(delLabel);
+    delBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeChatMenu();
+        openDeleteChatModal(chat);
+    });
+    pop.appendChild(delBtn);
+
+    document.body.appendChild(pop);
+    const rect = anchor.getBoundingClientRect();
+    const popRect = pop.getBoundingClientRect();
+    const margin = 6;
+
+    let left = rect.right + margin;
+    let top  = rect.bottom + margin;
+    if (left + popRect.width > window.innerWidth - 8) {
+        left = rect.left - popRect.width - margin;
+        if (left < 8) left = 8;
+    }
+    if (top + popRect.height > window.innerHeight - 8) {
+        top = rect.top - popRect.height - margin;
+        if (top < 8) top = 8;
+    }
+    pop.style.left = `${left}px`;
+    pop.style.top  = `${top}px`;
+
+    anchor.classList.add('open');
+    _activeChatPopover = pop;
+    _activeChatPopoverAnchor = anchor;
+
+    lucide.createIcons();
+}
+
+function closeChatMenu() {
+    if (_activeChatPopover && _activeChatPopover.parentNode) {
+        _activeChatPopover.parentNode.removeChild(_activeChatPopover);
+    }
+    if (_activeChatPopoverAnchor) {
+        _activeChatPopoverAnchor.classList.remove('open');
+    }
+    _activeChatPopover = null;
+    _activeChatPopoverAnchor = null;
+}
+
+document.addEventListener('click', (e) => {
+    if (!_activeChatPopover) return;
+    if (_activeChatPopover.contains(e.target)) return;
+    if (_activeChatPopoverAnchor && _activeChatPopoverAnchor.contains(e.target)) return;
+    closeChatMenu();
+});
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeChatMenu();
+});
+window.addEventListener('resize',  () => closeChatMenu());
+window.addEventListener('scroll',  () => closeChatMenu(), true);
+
+
+// ============================================================
+// 編輯聊天標題 Modal + API
+// ============================================================
+
+function openEditChatTitleModal(chat) {
+    state.pendingEditChat = chat;
+
+    const modal = document.getElementById('edit-chat-title-modal');
+    const input = document.getElementById('edit-chat-title-input');
+    const submitBtn = document.getElementById('edit-chat-title-submit-btn');
+    const msg = document.getElementById('edit-chat-title-msg');
+
+    input.value = chat.title || '';
+    submitBtn.disabled = input.value.trim().length === 0;
+    submitBtn.textContent = '儲存';
+    msg.className = 'modal-msg';
+    msg.textContent = '';
+
+    closeAllModals();
+    closeChatMenu();
+    modal.classList.add('show');
+    lucide.createIcons();
+    setTimeout(() => input.focus(), 100);
+}
+
+function closeEditChatTitleModal() {
+    document.getElementById('edit-chat-title-modal').classList.remove('show');
+    state.pendingEditChat = null;
+}
+
+function onChatTitleInput() {
+    const input = document.getElementById('edit-chat-title-input');
+    const submitBtn = document.getElementById('edit-chat-title-submit-btn');
+    if (!input || !submitBtn) return;
+    const val = input.value.trim();
+    const tooLong = input.value.length > CHAT_TITLE_MAX_CHARS;
+    submitBtn.disabled = val.length === 0 || tooLong;
+}
+
+async function submitEditChatTitle() {
+    const chat = state.pendingEditChat;
+    if (!chat) return;
+
+    const nameInput = document.getElementById('edit-chat-title-input');
+    const submitBtn = document.getElementById('edit-chat-title-submit-btn');
+    const msg = document.getElementById('edit-chat-title-msg');
+
+    const title = nameInput.value.trim();
+    if (!title) return;
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = '儲存中…';
+    msg.className = 'modal-msg';
+    msg.textContent = '';
+
+    try {
+        const url = `${state.apiBase}/chat?chat_id=${encodeURIComponent(chat.id)}`;
+        const res = await authFetch(url, {
+            method: 'PATCH',
+            body: JSON.stringify({ title }),
+        });
+
+        if (!res) return;
+
+        const data = await res.json();
+
+        if (!res.ok) {
+            const detail = data.detail || '更新失敗，請稍後再試。';
+            msg.textContent = detail;
+            msg.className = 'modal-msg error';
+            submitBtn.disabled = false;
+            submitBtn.textContent = '儲存';
+            return;
+        }
+
+        const newTitle = (data.data && data.data.title) ? data.data.title : title;
+        updateChatTitleInState(chat.id, newTitle);
+
+        if (String(state.currentChatId) === String(chat.id)) {
+            setMainChatTitle(newTitle);
+        }
+
+        renderRecentChats();
+        if (state.currentProjectId && state.chats[state.currentProjectId]) {
+            renderPvChats(state.chats[state.currentProjectId], state.currentProjectId);
+        }
+
+        closeEditChatTitleModal();
+        showToast('聊天標題已更新', 'success');
+
+    } catch (err) {
+        const detail = err && err.message ? err.message : '網路錯誤，請稍後再試';
+        msg.textContent = detail;
+        msg.className = 'modal-msg error';
+        submitBtn.disabled = false;
+        submitBtn.textContent = '儲存';
+    }
+}
+
+
+// ============================================================
+// 刪除聊天 Modal + API
+// ============================================================
+
+function openDeleteChatModal(chat) {
+    state.pendingDeleteChat = chat;
+
+    const modal = document.getElementById('delete-chat-modal');
+    const btn = document.getElementById('delete-chat-confirm-btn');
+    const msg = document.getElementById('delete-chat-msg');
+
+    btn.disabled = false;
+    btn.textContent = '刪除';
+    msg.className = 'modal-msg';
+    msg.textContent = '';
+
+    closeAllModals();
+    closeChatMenu();
+    modal.classList.add('show');
+    lucide.createIcons();
+}
+
+async function confirmDeleteChat() {
+    const chat = state.pendingDeleteChat;
+    if (!chat) return;
+
+    const btn = document.getElementById('delete-chat-confirm-btn');
+    const msg = document.getElementById('delete-chat-msg');
+
+    btn.disabled = true;
+    btn.textContent = '刪除中…';
+    msg.className = 'modal-msg';
+    msg.textContent = '';
+
+    const chatIdStr = String(chat.id);
+
+    try {
+        const url = `${state.apiBase}/chat?chat_id=${encodeURIComponent(chat.id)}`;
+        const res = await authFetch(url, { method: 'DELETE' });
+
+        if (!res) return;
+
+        if (!res.ok) {
+            let detail = `刪除失敗（HTTP ${res.status}）`;
+            try {
+                const data = await res.json();
+                if (data && data.detail) detail = data.detail;
+            } catch { /* ignore */ }
+
+            msg.textContent = detail;
+            msg.className = 'modal-msg error';
+            showToast(`刪除失敗：${detail}`, 'error');
+            btn.disabled = false;
+            btn.textContent = '刪除';
+            return;
+        }
+
+        evictParkedPane(chatIdStr);
+        removeChatFromState(chat.id);
+
+        if (String(state.currentChatId) === chatIdStr) {
+            state.currentChatId = null;
+            showChatView();
+            clearChatMessages();
+            setMainChatTitle('歡迎回來');
+        }
+
+        updateSendButtonForStreamingState();
+        closeAllModals();
+        state.pendingDeleteChat = null;
+
+        renderRecentChats();
+        if (state.currentProjectId && state.chats[state.currentProjectId]) {
+            renderPvChats(state.chats[state.currentProjectId], state.currentProjectId);
+        }
+
+        const label = chat.title || '(未命名聊天)';
+        showToast(`已刪除聊天「${label}」`, 'success');
+
+    } catch (err) {
+        const detail = err && err.message ? err.message : '網路錯誤，請稍後再試';
+        msg.textContent = detail;
+        msg.className = 'modal-msg error';
+        showToast(`刪除失敗：${detail}`, 'error');
+        btn.disabled = false;
+        btn.textContent = '刪除';
+    }
+}
 
 
 // ============================================================
@@ -1703,6 +2049,22 @@ function renderPvChats(chats, projectId) {
         main.appendChild(titleEl);
         li.appendChild(main);
 
+        const menuBtn = document.createElement('button');
+        menuBtn.type = 'button';
+        menuBtn.className = 'project-row-menu-btn';
+        menuBtn.setAttribute('aria-label', '聊天操作選單');
+        menuBtn.dataset.chatId = c.id;
+        const dotsIcon = document.createElement('i');
+        dotsIcon.setAttribute('data-lucide', 'more-horizontal');
+        menuBtn.appendChild(dotsIcon);
+
+        menuBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openChatMenu(c, menuBtn);
+        });
+
+        li.appendChild(menuBtn);
+
         li.addEventListener('click', async () => {
             state.currentProjectId = projectId;
             await navigateToChat(c.id);
@@ -1710,6 +2072,8 @@ function renderPvChats(chats, projectId) {
 
         list.appendChild(li);
     });
+
+    lucide.createIcons();
 }
 
 /**
@@ -1927,7 +2291,11 @@ function extractQuotaInfoFromDetail(detail) {
             const used = Number(detail.used_tokens);
             const limit = Number(detail.monthly_token_limit);
             if (Number.isFinite(used) && Number.isFinite(limit)) {
-                return { used, limit };
+                return {
+                    used,
+                    limit,
+                    quota_resets_at: detail.quota_resets_at || null,
+                };
             }
         }
         // FastAPI 有時會包一層
@@ -1952,14 +2320,14 @@ function getQuotaFromUserProfile() {
     const used = Number(user.used_tokens);
     const limit = Number(user.monthly_token_limit);
     if (!Number.isFinite(used) || !Number.isFinite(limit) || limit <= 0) return null;
-    return { used, limit };
+    return { used, limit, quota_resets_at: user.quota_resets_at || null };
 }
 
 /** 429 時依序：response detail → localStorage profile → 預設值 */
 function resolveQuotaForHttp429(detail) {
     return extractQuotaInfoFromDetail(detail)
         || getQuotaFromUserProfile()
-        || { used: 0, limit: 200_000 };
+        || { used: 0, limit: 200_000, quota_resets_at: null };
 }
 
 /**
@@ -2023,8 +2391,9 @@ function removeChatFromSidebarState(chatId) {
  * @param {HTMLElement} bubble
  * @param {number} used
  * @param {number} limit
+ * @param {string|null|undefined} quotaResetsAt
  */
-function renderQuotaExceededInBubble(bubble, used, limit) {
+function renderQuotaExceededInBubble(bubble, used, limit, quotaResetsAt) {
     while (bubble.firstChild) bubble.removeChild(bubble.firstChild);
 
     const wrap = document.createElement('div');
@@ -2057,6 +2426,16 @@ function renderQuotaExceededInBubble(bubble, used, limit) {
     wrap.appendChild(barWrap);
     wrap.appendChild(stats);
     wrap.appendChild(hint);
+    const resetLabel =
+        typeof formatQuotaResetLabel === 'function'
+            ? formatQuotaResetLabel(quotaResetsAt)
+            : '';
+    if (resetLabel) {
+        const resetEl = document.createElement('p');
+        resetEl.className = 'quota-error-hint';
+        resetEl.textContent = resetLabel;
+        wrap.appendChild(resetEl);
+    }
     bubble.appendChild(wrap);
 }
 
@@ -2073,7 +2452,9 @@ function appendQuotaExceededAssistantMessage(quota) {
     bubble.className = 'bubble';
     msgDiv.appendChild(bubble);
     container.appendChild(msgDiv);
-    renderQuotaExceededInBubble(bubble, quota.used, quota.limit);
+    renderQuotaExceededInBubble(
+        bubble, quota.used, quota.limit, quota.quota_resets_at
+    );
     scrollToBottom();
     return msgDiv;
 }
@@ -2540,7 +2921,9 @@ async function sendMessage() {
                             payload.quota || payload.message || payload
                         );
                         if (quota) {
-                            renderQuotaExceededInBubble(bubble, quota.used, quota.limit);
+                            renderQuotaExceededInBubble(
+                                bubble, quota.used, quota.limit, quota.quota_resets_at
+                            );
                             showToast(formatQuotaToastMessage(quota.used, quota.limit), 'error');
                             refreshUserQuotaFromServer();
                         } else {
@@ -2559,7 +2942,9 @@ async function sendMessage() {
             showToast(formatQuotaToastMessage(quota.used, quota.limit), 'error');
             await refreshUserQuotaFromServer();
             addBubbleIfNeeded();
-            renderQuotaExceededInBubble(bubble, quota.used, quota.limit);
+            renderQuotaExceededInBubble(
+                bubble, quota.used, quota.limit, quota.quota_resets_at
+            );
             // 新 chat / 空 chat：只清側欄孤兒，對話框保留使用者訊息 + 配額回覆
             if (wasNewChatThisSend || !chatHadPriorMessages) {
                 removeChatFromSidebarState(streamTargetChatId);
@@ -2887,8 +3272,13 @@ function addMessageToUI(role, content, options) {
     bubble.textContent = content;
     msgDiv.appendChild(bubble);
 
+    if (role === 'user') {
+        appendCopyBar(msgDiv, content, null, { variant: 'user' });
+    }
+
     container.appendChild(msgDiv);
     if (!skipScroll) scrollToBottom();
+    if (role === 'user' && typeof lucide !== 'undefined') lucide.createIcons();
     return msgDiv;
 }
 
@@ -2924,18 +3314,22 @@ function scrollToBottom(targetChatId = null, force = false) {
 // ============================================================
 
 /**
- * 在 AI 訊息底部附加複製按鈕列。
+ * 在訊息底部附加複製按鈕列。
  * @param {HTMLElement} msgDiv   訊息容器
- * @param {string}      rawText  原始 Markdown 回答
- * @param {Array}       sources  參考來源陣列（可選），格式：{ tool, title, publishAt, url }[]
+ * @param {string}      rawText  原始文字（AI 為 Markdown；user 為純文字）
+ * @param {Array|null}  sources  參考來源（僅 AI）
+ * @param {{ variant?: 'user'|'ai' }} [options]
  */
-function appendCopyBar(msgDiv, rawText, sources) {
+function appendCopyBar(msgDiv, rawText, sources, options) {
+    const opt = options || {};
+    const isUser = opt.variant === 'user';
+
     const bar = document.createElement('div');
     bar.className = 'copy-bar';
 
     const btn = document.createElement('button');
     btn.className = 'copy-btn';
-    btn.title = '複製回答';
+    btn.title = isUser ? '複製訊息' : '複製回答';
 
     const iconCopy = document.createElement('i');
     iconCopy.setAttribute('data-lucide', 'copy');
@@ -2950,18 +3344,19 @@ function appendCopyBar(msgDiv, rawText, sources) {
     msgDiv.appendChild(bar);
 
     btn.addEventListener('click', () => {
-        // 回答本文：去除 Markdown 符號，轉為純文字
-        const plainText = rawText
-            .replace(/#{1,6}\s+/g, '')
-            .replace(/\*\*(.+?)\*\*/g, '$1')
-            .replace(/\*(.+?)\*/g, '$1')
-            .replace(/`{1,3}[^`]*`{1,3}/g, '')
-            .replace(/\[(.+?)\]\(.+?\)/g, '$1')
-            .trim();
+        const plainText = isUser
+            ? (rawText || '').trim()
+            : rawText
+                .replace(/#{1,6}\s+/g, '')
+                .replace(/\*\*(.+?)\*\*/g, '$1')
+                .replace(/\*(.+?)\*/g, '$1')
+                .replace(/`{1,3}[^`]*`{1,3}/g, '')
+                .replace(/\[(.+?)\]\(.+?\)/g, '$1')
+                .trim();
 
-        // 參考來源：格式化為純文字附加到回答後方
+        // 參考來源：僅 AI 回答附加
         let sourcesText = '';
-        if (sources && sources.length > 0) {
+        if (!isUser && sources && sources.length > 0) {
             const lines = sources.map((src, idx) => {
                 const num    = idx + 1;
                 const title  = src.title  || '(無標題)';

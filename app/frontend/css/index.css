@@ -439,44 +439,14 @@ body.theme-switching * {
     text-overflow: ellipsis;
 }
 
-/* 最近對話項目 */
+/* 最近對話項目（內層使用 .project-row 排版） */
 .recent-chat-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 0.5rem 0.7rem;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 0.85rem;
-    color: var(--text-main);
-    transition: 0.2s;
-    overflow: hidden;
+    list-style: none;
 }
 
-.recent-chat-item:hover {
-    background: var(--card-bg);
-}
-
-.recent-chat-item.active {
-    background: var(--card-bg);
-    color: var(--accent);
-}
-
-.recent-chat-item i {
-    width: 14px;
-    height: 14px;
-    color: var(--text-dim);
-    flex-shrink: 0;
-}
-
-.recent-chat-item.active i {
-    color: var(--accent);
-}
-
-.recent-chat-item span {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+.pv-list-item:hover .project-row-menu-btn,
+.pv-list-item .project-row-menu-btn.open {
+    opacity: 1;
 }
 
 /* Sidebar 底部使用者列 */
@@ -2347,6 +2317,12 @@ textarea:disabled {
     justify-content: flex-start;
     margin-top: 6px;
     padding-left: 2px;
+}
+
+.user .copy-bar {
+    justify-content: flex-end;
+    padding-left: 0;
+    padding-right: 2px;
 }
 
 .copy-btn {

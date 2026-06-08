@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any, NamedTuple, Optional
 from uuid import UUID
 
@@ -20,20 +21,45 @@ from app.backend.database.postgresql import get_pool
 # 與 init_db 種子 `free` 列一致；無 tier 時 fallback
 DEFAULT_FALLBACK_MONTHLY_LIMIT = 200_000
 
+# 配額週期長度（自 current_period_start 起算）
+QUOTA_RESET_PERIOD_DAYS = 30
+
 
 class QuotaStatus(NamedTuple):
     used_tokens: int
     monthly_limit: int
     tier_name: Optional[str]
+    current_period_start: Optional[datetime]
 
 
-def quota_exceeded_detail(used: int, limit: int) -> dict[str, Any]:
+def compute_quota_resets_at(
+    period_start: Optional[datetime],
+) -> Optional[datetime]:
+    """自週期起始日加上 QUOTA_RESET_PERIOD_DAYS，回傳下次重置時間。"""
+    if period_start is None:
+        return None
+    if period_start.tzinfo is None:
+        period_start = period_start.replace(tzinfo=timezone.utc)
+    return period_start + timedelta(days=QUOTA_RESET_PERIOD_DAYS)
+
+
+def quota_exceeded_detail(
+    used: int,
+    limit: int,
+    period_start: Optional[datetime] = None,
+) -> dict[str, Any]:
     """HTTP 429 / SSE 用的結構化配額錯誤（前端依此渲染中文）。"""
-    return {
+    resets_at = compute_quota_resets_at(period_start)
+    payload: dict[str, Any] = {
         "code": "quota_exceeded",
         "used_tokens": used,
         "monthly_token_limit": limit,
     }
+    if period_start is not None:
+        payload["current_period_start"] = period_start.isoformat()
+    if resets_at is not None:
+        payload["quota_resets_at"] = resets_at.isoformat()
+    return payload
 
 
 async def ensure_quota_row_exists(user_id: UUID) -> None:
@@ -57,7 +83,8 @@ async def fetch_quota_status(user_id: UUID) -> QuotaStatus:
             SELECT
                 COALESCE(q.used_tokens, 0)::bigint AS used_tokens,
                 COALESCE(st.monthly_token_limit, $2::bigint)::bigint AS monthly_limit,
-                st.name AS tier_name
+                st.name AS tier_name,
+                q.current_period_start
             FROM users u
             LEFT JOIN subscription_tiers st ON st.id = u.tier_id
             LEFT JOIN user_usage_quotas q ON q.user_id = u.id
@@ -75,6 +102,7 @@ async def fetch_quota_status(user_id: UUID) -> QuotaStatus:
         int(row["used_tokens"]),
         int(row["monthly_limit"]),
         row["tier_name"],
+        row["current_period_start"],
     )
 
 
@@ -84,11 +112,11 @@ async def assert_preflight_llm_quota(user_id: UUID) -> None:
     未達上限時允許請求完成（即使本輪 token 會略超上限）。
     """
     await ensure_quota_row_exists(user_id)
-    used, limit, _ = await fetch_quota_status(user_id)
+    used, limit, _, period_start = await fetch_quota_status(user_id)
     if used >= limit:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=quota_exceeded_detail(used, limit),
+            detail=quota_exceeded_detail(used, limit, period_start),
         )
 
 
