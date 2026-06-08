@@ -20,6 +20,11 @@ const THEME_STORAGE_KEY = 'insightUiTheme';
 const HLJS_THEME_DARK = 'https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/atom-one-dark.min.css';
 const HLJS_THEME_LIGHT = 'https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github.min.css';
 
+/** 與後端 project.py _NAME_MAX_LEN 一致 */
+const PROJECT_NAME_MAX_CHARS = 40;
+/** 與後端 chat.py QUERY_MAX_CHARS（預設 2000）一致 */
+const CHAT_QUERY_MAX_CHARS = 2000;
+
 function applyUiTheme(theme) {
     const isLight = theme === 'light';
     document.body.classList.add('theme-switching');
@@ -418,7 +423,7 @@ function showPvListsLoading() {
     chatList.appendChild(li);
 }
 
-/** 發送／輸入欄鎖：只鎖「當前對話若在串流中」*/
+/** 發送／輸入欄鎖：串流中、空白、或超過字數上限時不可送出 */
 function updateSendButtonForStreamingState() {
     const sendBtn = document.getElementById('send-btn');
     const inputEl = document.getElementById('user-input');
@@ -426,8 +431,10 @@ function updateSendButtonForStreamingState() {
 
     const cur = state.currentChatId;
     const busy = !!(cur && streamingChatIds.has(cur));
+    const tooLong = inputEl.value.length > CHAT_QUERY_MAX_CHARS;
+    const empty = inputEl.value.trim().length === 0;
 
-    sendBtn.disabled = busy;
+    sendBtn.disabled = busy || tooLong || empty;
     inputEl.disabled = busy;
     inputEl.placeholder = busy ? '等待回覆中...' : '';
     if (!busy) applyIdleInputPlaceholder();
@@ -866,6 +873,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     await Promise.all([
         loadProjectsFromServer(),
         loadRecentChatsFromServer(),
+        refreshUserQuotaFromServer(),
     ]);
     updateSendButtonForStreamingState();
 });
@@ -877,12 +885,15 @@ function initEventListeners() {
     userInput.addEventListener('input', function () {
         this.style.height = 'auto';
         this.style.height = this.scrollHeight + 'px';
+        updateSendButtonForStreamingState();
     });
 
     userInput.addEventListener('keydown', (e) => {
         if (e.isComposing || e.keyCode === 229) return;
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
+            const sendBtn = document.getElementById('send-btn');
+            if (sendBtn && sendBtn.disabled) return;
             const cur = state.currentChatId;
             if (cur && streamingChatIds.has(cur)) return;
             if (!cur && newChatComposeLock) return;
@@ -1507,10 +1518,14 @@ function closeCreateProjectModal() {
     document.getElementById('create-project-modal').classList.remove('show');
 }
 
-/** input 即時驗證：有字才啟用「建立專案」按鈕 */
+/** input 即時驗證：有字且未超過上限才啟用「建立專案」按鈕 */
 function onProjectNameInput() {
-    const val = document.getElementById('create-project-name').value.trim();
-    document.getElementById('create-project-submit-btn').disabled = val.length === 0;
+    const input = document.getElementById('create-project-name');
+    const submitBtn = document.getElementById('create-project-submit-btn');
+    if (!input || !submitBtn) return;
+    const val = input.value.trim();
+    const tooLong = input.value.length > PROJECT_NAME_MAX_CHARS;
+    submitBtn.disabled = val.length === 0 || tooLong;
 }
 
 /**
@@ -1899,28 +1914,205 @@ function appendAssistantHistoryMessage(record) {
 }
 
 // ============================================================
-// 後端 API 錯誤文案對照（維持英文 detail，畫面顯示中文）
+// 配額錯誤：結構化解析 + 中文顯示
 // ============================================================
 
-const BACKEND_QUOTA_EXCEEDED_PREFIX = 'Monthly token quota exceeded';
-const QUOTA_EXCEEDED_UI_ZH =
-    '已達本月使用量上限，可升級為 Pro（中階版）或 Ultra（高級版）用戶，' +
-    '獲得更多 token 使用上限。';
+/**
+ * @param {unknown} detail
+ * @returns {{ used: number, limit: number } | null}
+ */
+function extractQuotaInfoFromDetail(detail) {
+    if (detail && typeof detail === 'object') {
+        if (detail.code === 'quota_exceeded') {
+            const used = Number(detail.used_tokens);
+            const limit = Number(detail.monthly_token_limit);
+            if (Number.isFinite(used) && Number.isFinite(limit)) {
+                return { used, limit };
+            }
+        }
+        // FastAPI 有時會包一層
+        if (detail.detail) {
+            return extractQuotaInfoFromDetail(detail.detail);
+        }
+    }
+    if (typeof detail === 'string') {
+        if (detail === 'HTTP 429') return null;
+        const m = detail.match(/\((\d+)\s*\/\s*(\d+)/);
+        if (m) {
+            return { used: parseInt(m[1], 10), limit: parseInt(m[2], 10) };
+        }
+    }
+    return null;
+}
+
+/** @returns {{ used: number, limit: number } | null} */
+function getQuotaFromUserProfile() {
+    const user = typeof getUser === 'function' ? getUser() : null;
+    if (!user) return null;
+    const used = Number(user.used_tokens);
+    const limit = Number(user.monthly_token_limit);
+    if (!Number.isFinite(used) || !Number.isFinite(limit) || limit <= 0) return null;
+    return { used, limit };
+}
+
+/** 429 時依序：response detail → localStorage profile → 預設值 */
+function resolveQuotaForHttp429(detail) {
+    return extractQuotaInfoFromDetail(detail)
+        || getQuotaFromUserProfile()
+        || { used: 0, limit: 200_000 };
+}
+
+/**
+ * @param {Response} response
+ * @returns {Promise<unknown>}
+ */
+async function parseApiErrorBody(response) {
+    let raw = '';
+    try {
+        raw = await response.text();
+    } catch (_) {
+        return null;
+    }
+    if (!raw.trim()) return null;
+    try {
+        const body = JSON.parse(raw);
+        if (body && typeof body === 'object' && 'detail' in body) {
+            return body.detail;
+        }
+        return body;
+    } catch (_) {
+        return raw;
+    }
+}
+
+/**
+ * @param {number} used
+ * @param {number} limit
+ * @returns {string}
+ */
+function formatQuotaToastMessage(used, limit) {
+    const usedFmt = used.toLocaleString('zh-TW');
+    const limitFmt = limit.toLocaleString('zh-TW');
+    return `本月 Token 配額已用盡（${usedFmt} / ${limitFmt}）`;
+}
+
+/** 配額 429 且為新 chat 時，從側欄 state 移除（後端亦會刪除空 chat） */
+function removeChatFromSidebarState(chatId) {
+    if (!chatId) return;
+    state.recentChats = state.recentChats.filter(
+        (c) => String(c.id) !== String(chatId)
+    );
+    for (const pid of Object.keys(state.chats || {})) {
+        state.chats[pid] = (state.chats[pid] || []).filter(
+            (c) => String(c.id) !== String(chatId)
+        );
+        if (isProjectViewVisible() && state.currentProjectId === pid) {
+            renderPvChats(state.chats[pid] || [], pid);
+        }
+    }
+    if (String(state.currentChatId) === String(chatId)) {
+        state.currentChatId = null;
+        setMainChatTitle('新對話');
+    }
+    renderProjects();
+    renderRecentChats();
+    lucide.createIcons();
+}
+
+/**
+ * @param {HTMLElement} bubble
+ * @param {number} used
+ * @param {number} limit
+ */
+function renderQuotaExceededInBubble(bubble, used, limit) {
+    while (bubble.firstChild) bubble.removeChild(bubble.firstChild);
+
+    const wrap = document.createElement('div');
+    wrap.className = 'quota-error-card';
+
+    const title = document.createElement('p');
+    title.className = 'quota-error-title';
+    title.textContent = '本月 Token 配額已用盡';
+
+    const barWrap = document.createElement('div');
+    barWrap.className = 'quota-error-bar-wrap';
+    const bar = document.createElement('div');
+    bar.className = 'quota-error-bar';
+    const pct = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 100;
+    bar.style.width = `${pct}%`;
+    barWrap.appendChild(bar);
+
+    const stats = document.createElement('p');
+    stats.className = 'quota-error-stats';
+    stats.textContent =
+        `已使用 ${used.toLocaleString('zh-TW')} / ${limit.toLocaleString('zh-TW')} tokens` +
+        `（${pct}%）`;
+
+    const hint = document.createElement('p');
+    hint.className = 'quota-error-hint';
+    hint.textContent =
+        '升級 Pro 或 Ultra 方案可獲得更高上限，或等待下個計費週期重置。';
+
+    wrap.appendChild(title);
+    wrap.appendChild(barWrap);
+    wrap.appendChild(stats);
+    wrap.appendChild(hint);
+    bubble.appendChild(wrap);
+}
+
+/** 在對話區追加配額用盡 AI 回覆（僅畫面，不寫 DB） */
+function appendQuotaExceededAssistantMessage(quota) {
+    const container = document.getElementById('chat-messages');
+    if (!container || !quota) return null;
+    const welcome = container.querySelector('.welcome-hero');
+    if (welcome) welcome.remove();
+
+    const msgDiv = document.createElement('div');
+    msgDiv.className = 'message ai';
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    msgDiv.appendChild(bubble);
+    container.appendChild(msgDiv);
+    renderQuotaExceededInBubble(bubble, quota.used, quota.limit);
+    scrollToBottom();
+    return msgDiv;
+}
+
+/** 從後端同步用量（供 429 後更新 localStorage，不阻擋送出） */
+async function refreshUserQuotaFromServer() {
+    if (typeof authFetch !== 'function' || typeof AUTH_API === 'undefined') return;
+    try {
+        const res = await authFetch(`${AUTH_API}/user`);
+        if (!res || !res.ok) return;
+        const profile = await res.json();
+        localStorage.setItem('user', JSON.stringify(profile));
+        if (typeof applyUserTierBadge === 'function') applyUserTierBadge(profile);
+        updateSendButtonForStreamingState();
+    } catch (err) {
+        console.error('Failed to refresh user quota:', err);
+    }
+}
 
 /**
  * @param {number} httpStatus
- * @param {string} detail
- * @returns {string}
+ * @param {unknown} detail
+ * @returns {{ isQuota: boolean, text: string, quota: { used: number, limit: number } | null }}
  */
 function mapChatMessagesErrorForDisplay(httpStatus, detail) {
-    if (
-        httpStatus === 429 &&
-        typeof detail === 'string' &&
-        detail.startsWith(BACKEND_QUOTA_EXCEEDED_PREFIX)
-    ) {
-        return QUOTA_EXCEEDED_UI_ZH;
+    // 429 一律視為配額用盡，絕不顯示裸 "HTTP 429"
+    if (httpStatus === 429) {
+        const quota = resolveQuotaForHttp429(detail);
+        return {
+            isQuota: true,
+            text: formatQuotaToastMessage(quota.used, quota.limit),
+            quota,
+        };
     }
-    return detail;
+    const text =
+        typeof detail === 'string' && detail !== `HTTP ${httpStatus}`
+            ? detail
+            : '請求失敗，請稍後再試';
+    return { isQuota: false, text, quota: null };
 }
 
 // ============================================================
@@ -1949,6 +2141,11 @@ async function sendMessage() {
         updateSendButtonForStreamingState();
         return;
     }
+    if (inputEl.value.length > CHAT_QUERY_MAX_CHARS) {
+        showToast(`訊息不可超過 ${CHAT_QUERY_MAX_CHARS} 字`, 'error');
+        updateSendButtonForStreamingState();
+        return;
+    }
 
     if (isProjectViewVisible()) {
         showChatView();
@@ -1966,13 +2163,16 @@ async function sendMessage() {
         });
     }
 
-    // 顯示使用者訊息
-    addMessageToUI('user', query);
+    // 顯示使用者訊息（先記錄送出前是否已有歷史，供 429 判斷是否清除側欄孤兒 chat）
+    const chatHadPriorMessages = !!document.querySelector('#chat-messages .message');
+    const userMsgEl = addMessageToUI('user', query);
     inputEl.value = '';
     inputEl.style.height = 'auto';
 
     const statusBadge = document.getElementById('chat-status');
     statusBadge.textContent = 'Analyzing...';
+
+    let wasNewChatThisSend = false;
 
     // ── 若還沒有 chat_id，先打 POST /api/chat 建立 chat ──
     // 後端會回傳 placeholder title（截斷 query），LLM 正式 title 在
@@ -1995,9 +2195,19 @@ async function sendMessage() {
                 return;
             }
             if (!createRes.ok) {
-                const errData = await createRes.json().catch(() => ({}));
-                const detail = errData.detail || `HTTP ${createRes.status}`;
-                showToast(`建立聊天失敗：${detail}`, 'error');
+                if (createRes.status === 429) {
+                    await refreshUserQuotaFromServer();
+                }
+                const detail = await parseApiErrorBody(createRes);
+                const mapped = mapChatMessagesErrorForDisplay(createRes.status, detail);
+                showToast(
+                    mapped.isQuota ? mapped.text : `建立聊天失敗：${mapped.text}`,
+                    'error'
+                );
+                if (createRes.status === 429 && mapped.quota) {
+                    appendQuotaExceededAssistantMessage(mapped.quota);
+                    state.currentChatId = null;
+                }
                 statusBadge.textContent = 'Ready';
                 newChatComposeLock = false;
                 sendBtn.disabled = false;
@@ -2008,6 +2218,7 @@ async function sendMessage() {
             const createJson = await createRes.json();
             const newChat = createJson.data;
             state.currentChatId = newChat.id;
+            wasNewChatThisSend = true;
 
             // 寫入 state.chats 對應 project（若有）
             const pid = state.currentProjectId;
@@ -2130,19 +2341,21 @@ async function sendMessage() {
 
         if (!response) return;  // authFetch 已處理 401 → 跳轉 login.html
         if (!response.ok) {
-            let detail = `HTTP ${response.status}`;
-            try {
-                const errBody = await response.json();
-                if (typeof errBody.detail === 'string') {
-                    detail = errBody.detail;
-                } else if (Array.isArray(errBody.detail)) {
-                    const parts = errBody.detail
-                        .map((x) => (typeof x === 'object' && x.msg ? x.msg : String(x)));
-                    detail = parts.join('；');
-                }
-            } catch (_) { /* 非 JSON 或無 body */ }
-            const displayDetail = mapChatMessagesErrorForDisplay(response.status, detail);
-            throw new Error(displayDetail);
+            if (response.status === 429) {
+                await refreshUserQuotaFromServer();
+            }
+            const detail = await parseApiErrorBody(response);
+            const mapped = mapChatMessagesErrorForDisplay(response.status, detail);
+            if (response.status === 429) {
+                refreshUserQuotaFromServer();
+            }
+            const err = new Error(mapped.text);
+            err.httpStatus = response.status;
+            if (mapped.isQuota && mapped.quota) {
+                err.isQuota = true;
+                err.quota = mapped.quota;
+            }
+            throw err;
         }
         if (!response.body) throw new Error('瀏覽器不支援 Streaming');
 
@@ -2275,6 +2488,7 @@ async function sendMessage() {
                         appendCopyBar(msgDiv, finalText, payload.retrieval_sources);
                         lucide.createIcons();
                         scrollToBottom(streamTargetChatId);
+                        refreshUserQuotaFromServer();
                         break;
                     }
 
@@ -2322,7 +2536,16 @@ async function sendMessage() {
                         hideThinkingRow();
                         addBubbleIfNeeded();
                         cleanup();
-                        bubble.textContent = `錯誤：${payload.message}`;
+                        const quota = extractQuotaInfoFromDetail(
+                            payload.quota || payload.message || payload
+                        );
+                        if (quota) {
+                            renderQuotaExceededInBubble(bubble, quota.used, quota.limit);
+                            showToast(formatQuotaToastMessage(quota.used, quota.limit), 'error');
+                            refreshUserQuotaFromServer();
+                        } else {
+                            bubble.textContent = `錯誤：${payload.message || '未知錯誤'}`;
+                        }
                         break;
                     }
                 }
@@ -2331,13 +2554,25 @@ async function sendMessage() {
 
     } catch (err) {
         console.error('Streaming error:', err);
-        addBubbleIfNeeded();
-        const msg =
-            err && typeof err.message === 'string' && err.message.length > 0
-                ? err.message
-                : '伺服器連線失敗，請檢查 Docker 是否啟動。';
-        bubble.textContent = msg;
-        showToast(msg, 'error');
+        if ((err && err.isQuota && err.quota) || err?.httpStatus === 429) {
+            const quota = err.quota || resolveQuotaForHttp429(null);
+            showToast(formatQuotaToastMessage(quota.used, quota.limit), 'error');
+            await refreshUserQuotaFromServer();
+            addBubbleIfNeeded();
+            renderQuotaExceededInBubble(bubble, quota.used, quota.limit);
+            // 新 chat / 空 chat：只清側欄孤兒，對話框保留使用者訊息 + 配額回覆
+            if (wasNewChatThisSend || !chatHadPriorMessages) {
+                removeChatFromSidebarState(streamTargetChatId);
+            }
+        } else {
+            addBubbleIfNeeded();
+            const msg =
+                err && typeof err.message === 'string' && err.message.length > 0
+                    ? err.message
+                    : '伺服器連線失敗，請檢查 Docker 是否啟動。';
+            bubble.textContent = msg;
+            showToast(msg, 'error');
+        }
     } finally {
         try {
             cleanup();
@@ -2654,6 +2889,7 @@ function addMessageToUI(role, content, options) {
 
     container.appendChild(msgDiv);
     if (!skipScroll) scrollToBottom();
+    return msgDiv;
 }
 
 let isUserScrolledUp = false;

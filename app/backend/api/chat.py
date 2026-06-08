@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
-from typing import List, Optional, Any, Dict, Literal
+from typing import List, Optional, Any, Dict, Literal, Tuple
 from uuid import UUID
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
@@ -91,7 +91,7 @@ class MessageRequest(BaseModel):
 
 
 class CreateChatRequest(BaseModel):
-    query: str                          # 第一條訊息（用於產生 placeholder title）
+    query: str = Field(..., max_length=_QUERY_MAX_CHARS)  # 第一條訊息（用於產生 placeholder title）
     project_id: Optional[UUID] = None   # 可選：指定隸屬的 project
 
 
@@ -139,6 +139,26 @@ def _make_placeholder_title(query: str) -> str:
     if len(stripped) <= _PLACEHOLDER_LEN:
         return stripped
     return stripped[:_PLACEHOLDER_LEN] + "…"
+
+
+async def _delete_chat_if_no_messages(
+    db: asyncpg.Connection,
+    chat_id: UUID,
+    user_id: UUID,
+) -> bool:
+    """刪除尚無 messages 的 chat（配額 429 等，避免側欄孤兒 title）。"""
+    result = await db.execute(
+        """
+        DELETE FROM chats c
+        WHERE c.id = $1 AND c.user_id = $2
+          AND NOT EXISTS (
+              SELECT 1 FROM messages m WHERE m.chat_id = c.id
+          )
+        """,
+        chat_id,
+        user_id,
+    )
+    return result == "DELETE 1"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -244,10 +264,45 @@ async def _insert_assistant_message(
         return None
 
 
-async def _generate_title_via_llm(query: str) -> Optional[str]:
+async def _append_llm_usage_record(
+    output: Any,
+    *,
+    user_id: UUID,
+    chat_id: UUID,
+    model_fallback: str,
+    caller: str,
+    pending_log_ids: Optional[List[UUID]] = None,
+) -> Optional[UUID]:
+    """解析 ainvoke / 串流 chunk 的 usage 並寫入 DB；可選加入 pending 列表供 message 綁定。"""
+    bp, bc = parse_usage_from_llm_message(output)
+    if bp <= 0 and bc <= 0:
+        return None
+    model_name = model_fallback
+    inner = extract_model_label_from_lc_output(output)
+    if inner:
+        model_name = inner
+    log_id = await record_token_usage(
+        user_id=user_id,
+        chat_id=chat_id,
+        message_id=None,
+        model_name=model_name,
+        prompt_tokens=bp,
+        completion_tokens=bc,
+        caller=caller,
+    )
+    if log_id is not None and pending_log_ids is not None:
+        pending_log_ids.append(log_id)
+    return log_id
+
+
+async def _generate_title_via_llm(
+    query: str,
+    user_id: UUID,
+    chat_id: UUID,
+) -> Tuple[Optional[str], Optional[UUID]]:
     """
     用 fast LLM 產 15 字內中文標題（model 由 TITLE_MODEL 環境變數指定，預設 gpt-4o-mini）。
-    任何錯誤一律回傳 None，由呼叫方決定是否保留 placeholder。
+    任何錯誤一律回傳 (None, None)，由呼叫方決定是否保留 placeholder。
     """
     model_name = os.getenv("TITLE_MODEL", "gpt-4o-mini")
     try:
@@ -265,12 +320,66 @@ async def _generate_title_via_llm(query: str) -> Optional[str]:
         ])
         text = (result.content or "").strip()
         title = text[:_TITLE_MAX_LEN] if text else None
+        title_log_id = await _append_llm_usage_record(
+            result,
+            user_id=user_id,
+            chat_id=chat_id,
+            model_fallback=model_name,
+            caller="title",
+        )
         print(f"[TITLE] model={model_name} query={query[:30]!r} → {title!r}")
-        return title
+        return title, title_log_id
     except Exception as e:
         print(f"[TITLE] LLM title generation failed (model={model_name}): {e}")
-        return None
+        return None, None
 
+
+async def _finalize_title_task(
+    title_task: Optional[asyncio.Task],
+    *,
+    chat_id: UUID,
+    chat_id_str: str,
+    user_id: UUID,
+    assistant_message_id: Optional[UUID],
+    event_queue: asyncio.Queue,
+) -> None:
+    """等待 title 背景任務、綁定 token log、更新 chats 並推送 SSE。"""
+    if title_task is None:
+        return
+    new_title: Optional[str] = None
+    title_log_id: Optional[UUID] = None
+    try:
+        new_title, title_log_id = await asyncio.wait_for(title_task, timeout=3.0)
+    except asyncio.TimeoutError:
+        print(f"[TITLE] task timeout (>3s), chat_id={chat_id_str}")
+    except Exception as e:
+        print(f"[TITLE] task raised: {type(e).__name__}: {e}, chat_id={chat_id_str}")
+
+    if title_log_id and assistant_message_id:
+        await attach_token_usage_logs_to_message(
+            user_id, assistant_message_id, [title_log_id]
+        )
+
+    if not new_title:
+        return
+    try:
+        async with get_pool().acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE chats
+                SET title = $1, title_generated = TRUE
+                WHERE id = $2
+                """,
+                new_title,
+                chat_id,
+            )
+        print(f"[TITLE] UPDATE ok, chat_id={chat_id_str}, title={new_title!r}")
+        await event_queue.put(_sse("title_update", {
+            "chat_id": chat_id_str,
+            "title": new_title,
+        }))
+    except Exception as e:
+        print(f"[TITLE] UPDATE failed, chat_id={chat_id_str}: {type(e).__name__}: {e}")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /api/chat —— 建立新 chat（採 placeholder title，立即回傳 chat_id）
@@ -299,6 +408,7 @@ async def create_chat(
     - 403         : 帳號已停用
     - 404         : project_id 不存在或無權限
     - 422         : query 為空
+    - 429         : 當月 token 配額已用盡（不建立 chat）
     - 500         : DB 錯誤
     """
     user_id = current_user["id"]
@@ -323,10 +433,13 @@ async def create_chat(
                 detail="Project not found or you don't have permission.",
             )
 
-    # 3. Placeholder title
+    # 3. Token 配額 Pre-flight（與 /api/chat/messages 一致；超額不 INSERT chat）
+    await assert_preflight_llm_quota(user_id)
+
+    # 4. Placeholder title
     placeholder = _make_placeholder_title(clean_query)
 
-    # 4. INSERT
+    # 5. INSERT
     now_utc = datetime.now(timezone.utc)
     try:
         row = await db.fetchrow(
@@ -609,7 +722,19 @@ async def get_ai_response(
     should_generate_title = not chat_row["title_generated"]
 
     # 2b. Token 配額 Pre-flight（未進 LangGraph／OpenAI）；已達上限回 429
-    await assert_preflight_llm_quota(current_user_id)
+    try:
+        await assert_preflight_llm_quota(current_user_id)
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_429_TOO_MANY_REQUESTS:
+            deleted = await _delete_chat_if_no_messages(
+                db, request.chat_id, current_user_id
+            )
+            if deleted:
+                print(
+                    f"[QUOTA] removed empty chat after 429 "
+                    f"chat={request.chat_id} user={current_user_id}"
+                )
+        raise
 
     # 3. 同步 INSERT user 訊息（在 agent 跑之前），失敗就直接 500
     # 這樣即使後續 agent / SSE 中斷，user 仍能看到自己問了什麼，方便重試
@@ -682,7 +807,9 @@ async def get_ai_response(
 
         # 條件式 spawn：第一次訊息才呼 LLM 產 title，與主流程並行
         title_task: Optional[asyncio.Task] = (
-            asyncio.create_task(_generate_title_via_llm(request.query))
+            asyncio.create_task(
+                _generate_title_via_llm(request.query, current_user_id, request.chat_id)
+            )
             if should_generate_title else None
         )
 
@@ -860,36 +987,14 @@ async def get_ai_response(
                     pending_token_log_ids,
                 )
 
-            # Title 生成與儲存
-            if title_task is not None:
-                try:
-                    new_title = await asyncio.wait_for(title_task, timeout=3.0)
-                except asyncio.TimeoutError:
-                    print(f"[TITLE] task timeout (>3s), chat_id={chat_id_str}")
-                    new_title = None
-                except Exception as e:
-                    print(f"[TITLE] task raised: {type(e).__name__}: {e}, chat_id={chat_id_str}")
-                    new_title = None
-
-                if new_title:
-                    try:
-                        async with get_pool().acquire() as conn:
-                            await conn.execute(
-                                """
-                                UPDATE chats
-                                SET title = $1, title_generated = TRUE
-                                WHERE id = $2
-                                """,
-                                new_title,
-                                request.chat_id,
-                            )
-                        print(f"[TITLE] UPDATE ok, chat_id={chat_id_str}, title={new_title!r}")
-                        await event_queue.put(_sse("title_update", {
-                            "chat_id": chat_id_str,
-                            "title": new_title,
-                        }))
-                    except Exception as e:
-                        print(f"[TITLE] UPDATE failed, chat_id={chat_id_str}: {type(e).__name__}: {e}")
+            await _finalize_title_task(
+                title_task,
+                chat_id=request.chat_id,
+                chat_id_str=chat_id_str,
+                user_id=current_user_id,
+                assistant_message_id=assistant_message_id,
+                event_queue=event_queue,
+            )
 
         except Exception as e:
             import traceback
@@ -926,6 +1031,7 @@ async def get_ai_response(
     async def _rewrite_search_query(
         user_query: str,
         history: list,
+        pending_log_ids: Optional[List[UUID]] = None,
     ) -> str:
         """
         根據對話歷史，判斷本輪是否需要網路搜尋，並生成最佳搜尋詞。
@@ -1015,6 +1121,14 @@ async def get_ai_response(
             )
             prompt = f"對話歷史：\n{history_text}\n\n使用者最新輸入：{user_query}"
             result = await rewrite_model.ainvoke([SystemMessage(content=system), HM(content=prompt)])
+            await _append_llm_usage_record(
+                result,
+                user_id=current_user_id,
+                chat_id=request.chat_id,
+                model_fallback=model_name,
+                caller="general_query_rewrite",
+                pending_log_ids=pending_log_ids,
+            )
             query = (result.content or "").strip()
             print(f"[General/QueryRewrite] 原始={user_query!r} → 改寫={query!r}")
             if query == "__NO_SEARCH__":
@@ -1033,7 +1147,9 @@ async def get_ai_response(
         web_results: list = []
 
         title_task: Optional[asyncio.Task] = (
-            asyncio.create_task(_generate_title_via_llm(request.query))
+            asyncio.create_task(
+                _generate_title_via_llm(request.query, current_user_id, request.chat_id)
+            )
             if should_generate_title else None
         )
 
@@ -1051,7 +1167,9 @@ async def get_ai_response(
             # ── Tavily 網路搜尋（若開啟）──────────────────────────────────────
             if GENERAL_CHAT_ENABLE_WEB_SEARCH:
                 # 傳 history_lc（純上下文，不含本輪 user 訊息），避免 LLM 誤判
-                search_query = await _rewrite_search_query(clean_query, history_lc)
+                search_query = await _rewrite_search_query(
+                    clean_query, history_lc, pending_token_log_ids
+                )
                 if search_query:
                     await event_queue.put(_sse("tool_start", {"tool": "tavily_global_search"}))
                     try:
@@ -1066,19 +1184,24 @@ async def get_ai_response(
 
             final_content = ""
             last_chunk = None
+            usage_chunk = None
             async for chunk in general_chat_astream(messages_lc, web_context=web_results or None):
                 last_chunk = chunk
+                chunk_bp, chunk_bc = parse_usage_from_llm_message(chunk)
+                if chunk_bp > 0 or chunk_bc > 0:
+                    usage_chunk = chunk
                 tok = chunk.content or ""
                 if tok:
                     final_content += tok
                     await event_queue.put(_sse("token", {"text": tok}))
 
-            # Token 計費
-            bp, bc = parse_usage_from_llm_message(last_chunk)
-            resp_meta = getattr(last_chunk, "response_metadata", None) if last_chunk else None
+            # Token 計費（優先含 usage 的 chunk，否則 fallback 最後一包）
+            usage_source = usage_chunk if usage_chunk is not None else last_chunk
+            bp, bc = parse_usage_from_llm_message(usage_source)
+            resp_meta = getattr(usage_source, "response_metadata", None) if usage_source else None
             if isinstance(resp_meta, dict) and resp_meta.get("model_name"):
                 acc_model_name = str(resp_meta["model_name"])
-            inner = extract_model_label_from_lc_output(last_chunk)
+            inner = extract_model_label_from_lc_output(usage_source)
             if inner:
                 acc_model_name = inner
             log_token_usage_parse_shape(
@@ -1086,7 +1209,7 @@ async def get_ai_response(
                 batch_p=bp,
                 batch_c=bc,
                 model_label=acc_model_name,
-                output=last_chunk,
+                output=usage_source,
                 tags=None,
                 meta_keys=None,
             )
@@ -1135,25 +1258,14 @@ async def get_ai_response(
                     pending_token_log_ids,
                 )
 
-            # Title
-            if title_task is not None:
-                try:
-                    new_title = await asyncio.wait_for(title_task, timeout=3.0)
-                except (asyncio.TimeoutError, Exception):
-                    new_title = None
-                if new_title:
-                    try:
-                        async with get_pool().acquire() as conn:
-                            await conn.execute(
-                                "UPDATE chats SET title=$1, title_generated=TRUE WHERE id=$2",
-                                new_title, request.chat_id,
-                            )
-                        await event_queue.put(_sse("title_update", {
-                            "chat_id": chat_id_str,
-                            "title": new_title,
-                        }))
-                    except Exception:
-                        pass
+            await _finalize_title_task(
+                title_task,
+                chat_id=request.chat_id,
+                chat_id_str=chat_id_str,
+                user_id=current_user_id,
+                assistant_message_id=assistant_message_id,
+                event_queue=event_queue,
+            )
 
         except Exception as e:
             import traceback
@@ -1190,7 +1302,9 @@ async def get_ai_response(
         acc_model_name: str = os.getenv("ANALYST_MODEL", "gpt-4o")
 
         title_task: Optional[asyncio.Task] = (
-            asyncio.create_task(_generate_title_via_llm(request.query))
+            asyncio.create_task(
+                _generate_title_via_llm(request.query, current_user_id, request.chat_id)
+            )
             if should_generate_title else None
         )
 
@@ -1387,35 +1501,14 @@ async def get_ai_response(
                     pending_token_log_ids,
                 )
 
-            if title_task is not None:
-                try:
-                    new_title = await asyncio.wait_for(title_task, timeout=3.0)
-                except asyncio.TimeoutError:
-                    print(f"[TITLE] task timeout (>3s), chat_id={chat_id_str}")
-                    new_title = None
-                except Exception as e:
-                    print(f"[TITLE] task raised: {type(e).__name__}: {e}, chat_id={chat_id_str}")
-                    new_title = None
-
-                if new_title:
-                    try:
-                        async with get_pool().acquire() as conn:
-                            await conn.execute(
-                                """
-                                UPDATE chats
-                                SET title = $1, title_generated = TRUE
-                                WHERE id = $2
-                                """,
-                                new_title,
-                                request.chat_id,
-                            )
-                        print(f"[TITLE] UPDATE ok, chat_id={chat_id_str}, title={new_title!r}")
-                        await event_queue.put(_sse("title_update", {
-                            "chat_id": chat_id_str,
-                            "title": new_title,
-                        }))
-                    except Exception as e:
-                        print(f"[TITLE] UPDATE failed, chat_id={chat_id_str}: {type(e).__name__}: {e}")
+            await _finalize_title_task(
+                title_task,
+                chat_id=request.chat_id,
+                chat_id_str=chat_id_str,
+                user_id=current_user_id,
+                assistant_message_id=assistant_message_id,
+                event_queue=event_queue,
+            )
 
         except Exception as e:
             import traceback

@@ -778,6 +778,50 @@ body.theme-switching * {
     min-width: 0;               /* 防止 flex 子元素忽略 overflow 限制 */
 }
 
+/* 配額用盡提示卡（聊天氣泡內） */
+.quota-error-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+    padding: 0.15rem 0;
+}
+
+.quota-error-title {
+    margin: 0;
+    font-family: 'Outfit', sans-serif;
+    font-size: 1rem;
+    font-weight: 600;
+    color: #f87171;
+}
+
+.quota-error-bar-wrap {
+    height: 6px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    overflow: hidden;
+}
+
+.quota-error-bar {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #f59e0b, #ef4444);
+    transition: width 0.3s ease;
+}
+
+.quota-error-stats {
+    margin: 0;
+    font-size: 0.9rem;
+    color: #d4d4d8;
+    font-variant-numeric: tabular-nums;
+}
+
+.quota-error-hint {
+    margin: 0;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: #a1a1aa;
+}
+
 /* ============================================
    AI Bubble 內部 Markdown 排版系統
    ============================================ */
@@ -1984,6 +2028,52 @@ textarea:disabled {
 }
 
 .info-label {
+    font-size: 0.82rem;
+    color: var(--text-dim);
+}
+
+/* 用量統計 Modal */
+.usage-loading {
+    margin: 0;
+    font-size: 0.9rem;
+    color: var(--text-dim);
+}
+
+.usage-content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+}
+
+.usage-stat-bar-wrap {
+    height: 8px;
+    border-radius: 999px;
+    background: var(--surface-border-subtle);
+    overflow: hidden;
+}
+
+.usage-stat-bar {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--accent), #6366f1);
+    transition: width 0.35s ease;
+    max-width: 100%;
+}
+
+.usage-stat-bar.over-limit {
+    background: linear-gradient(90deg, #f59e0b, #ef4444);
+}
+
+.usage-stat-text {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 500;
+    color: var(--text-main);
+    font-variant-numeric: tabular-nums;
+}
+
+.usage-period {
+    margin: 0;
     font-size: 0.82rem;
     color: var(--text-dim);
 }

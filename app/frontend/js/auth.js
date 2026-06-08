@@ -269,6 +269,14 @@ function initUserMenu() {
             openDeleteModal();
         });
     }
+
+    const usageBtn = document.getElementById('menu-usage');
+    if (usageBtn) {
+        usageBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            openUsageModal();
+        });
+    }
 }
 
 
@@ -283,6 +291,97 @@ function applyUserTierBadge(user) {
     const badge = document.getElementById('user-tier-badge');
     if (!badge || !user) return;
     badge.textContent = formatTierLabel(user.tier_name);
+}
+
+// ─── 用量統計 Modal ──────────────────────────────────────────────
+
+function formatUsagePeriodLabel(isoString) {
+    if (!isoString) return '';
+    const d = new Date(isoString);
+    if (Number.isNaN(d.getTime())) return '';
+    return `本週期起始：${d.toLocaleDateString('zh-TW', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+    })}`;
+}
+
+function renderUsageStats(data) {
+    const used = Number(data.used_tokens) || 0;
+    const limit = Number(data.monthly_token_limit) || 0;
+    const pct = Number(data.usage_percent) || 0;
+
+    const tierEl = document.getElementById('usage-tier');
+    const textEl = document.getElementById('usage-stats-text');
+    const barEl = document.getElementById('usage-bar');
+    const periodEl = document.getElementById('usage-period');
+
+    if (tierEl) tierEl.textContent = formatTierLabel(data.tier_name);
+    if (textEl) {
+        textEl.textContent =
+            `已使用 ${used.toLocaleString('zh-TW')} / ${limit.toLocaleString('zh-TW')} tokens（${pct}%）`;
+    }
+    if (barEl) {
+        barEl.style.width = `${Math.min(100, pct)}%`;
+        barEl.classList.toggle('over-limit', pct > 100 || data.quota_exhausted === true);
+    }
+    if (periodEl) {
+        periodEl.textContent = formatUsagePeriodLabel(data.current_period_start);
+    }
+
+    const user = getUser();
+    if (user) {
+        user.used_tokens = used;
+        user.monthly_token_limit = limit;
+        user.remaining_tokens = data.remaining_tokens;
+        user.quota_exhausted = data.quota_exhausted;
+        localStorage.setItem('user', JSON.stringify(user));
+    }
+}
+
+async function openUsageModal() {
+    closeAllModals();
+    const dropdown = document.getElementById('user-dropdown');
+    if (dropdown) dropdown.classList.remove('show');
+    const modal = document.getElementById('usage-modal');
+    if (!modal) return;
+    modal.classList.add('show');
+
+    const loadingEl = document.getElementById('usage-loading');
+    const contentEl = document.getElementById('usage-content');
+    const errorEl = document.getElementById('usage-error');
+
+    if (loadingEl) loadingEl.hidden = false;
+    if (contentEl) contentEl.hidden = true;
+    if (errorEl) {
+        errorEl.hidden = true;
+        errorEl.textContent = '';
+    }
+
+    try {
+        const res = await authFetch(`${AUTH_API}/user/usage`);
+        if (!res) return;
+        if (!res.ok) {
+            let detail = '無法載入用量資料';
+            try {
+                const body = await res.json();
+                if (typeof body.detail === 'string') detail = body.detail;
+            } catch (_) { /* ignore */ }
+            throw new Error(detail);
+        }
+        const data = await res.json();
+        renderUsageStats(data);
+        if (loadingEl) loadingEl.hidden = true;
+        if (contentEl) contentEl.hidden = false;
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+    } catch (err) {
+        if (loadingEl) loadingEl.hidden = true;
+        if (errorEl) {
+            errorEl.textContent = err && err.message ? err.message : '載入失敗，請稍後再試';
+            errorEl.hidden = false;
+        }
+        console.error('Failed to fetch usage stats:', err);
+    }
 }
 
 // ─── 個人資料 Modal ──────────────────────────────────────────────

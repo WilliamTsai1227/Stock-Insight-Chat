@@ -60,7 +60,7 @@ _VALID_NAME_PATTERN = re.compile(
 )
 
 _NAME_MIN_LEN = 1
-_NAME_MAX_LEN = 100
+_NAME_MAX_LEN = 40
 
 
 def _validate_name(name: str) -> str:

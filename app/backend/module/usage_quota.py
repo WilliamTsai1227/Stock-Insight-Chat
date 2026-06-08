@@ -3,13 +3,13 @@
 
 - 上限來自 `subscription_tiers.monthly_token_limit`（JOIN `users`）。
 - `tier_id` 為 NULL 時視同 free，使用 `DEFAULT_FALLBACK_MONTHLY_LIMIT`（與種子 free 列一致）。
-- Pre-flight：進 LangGraph / 送 OpenAI 前阻擋已達上限。
-- 原子遞增：`record_token_usage` 內與流水帳同一 transaction，避免「只寫 log 未扣額」或超額累加。
+- Pre-flight：僅在 `used_tokens >= monthly_limit` 時阻擋；允許最後一輪請求略超上限。
+- 原子遞增：一律累加實際用量（可超過上限），下次 preflight 再擋。
 """
 
 from __future__ import annotations
 
-from typing import NamedTuple, Optional
+from typing import Any, NamedTuple, Optional
 from uuid import UUID
 
 import asyncpg
@@ -25,6 +25,15 @@ class QuotaStatus(NamedTuple):
     used_tokens: int
     monthly_limit: int
     tier_name: Optional[str]
+
+
+def quota_exceeded_detail(used: int, limit: int) -> dict[str, Any]:
+    """HTTP 429 / SSE 用的結構化配額錯誤（前端依此渲染中文）。"""
+    return {
+        "code": "quota_exceeded",
+        "used_tokens": used,
+        "monthly_token_limit": limit,
+    }
 
 
 async def ensure_quota_row_exists(user_id: UUID) -> None:
@@ -72,45 +81,38 @@ async def fetch_quota_status(user_id: UUID) -> QuotaStatus:
 async def assert_preflight_llm_quota(user_id: UUID) -> None:
     """
     發 LLM / 進 LangGraph 前呼叫：已達或超過當月上限則 HTTP 429。
+    未達上限時允許請求完成（即使本輪 token 會略超上限）。
     """
     await ensure_quota_row_exists(user_id)
     used, limit, _ = await fetch_quota_status(user_id)
     if used >= limit:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=(
-                f"Monthly token quota exceeded ({used}/{limit}). "
-                "Upgrade your plan or wait until the next billing period."
-            ),
+            detail=quota_exceeded_detail(used, limit),
         )
 
 
-async def try_increment_used_tokens(
+async def increment_used_tokens(
     conn: asyncpg.Connection,
     user_id: UUID,
     delta: int,
-) -> bool:
+) -> Optional[int]:
     """
-    僅當 `used_tokens + delta <= monthly_limit` 時遞增配額。
-    須在已開啟的 transaction 內呼叫；成功回傳 True。
+    無條件遞增 used_tokens（允許單次請求略超 monthly_limit）。
+    須在已開啟的 transaction 內呼叫；成功回傳更新後的 used_tokens。
     """
     if delta <= 0:
-        return True
+        return None
     row = await conn.fetchrow(
         """
         UPDATE user_usage_quotas q
         SET
             used_tokens = q.used_tokens + $2,
             updated_at = NOW()
-        FROM users u
-        LEFT JOIN subscription_tiers st ON st.id = u.tier_id
-        WHERE q.user_id = u.id
-          AND u.id = $1
-          AND q.used_tokens + $2 <= COALESCE(st.monthly_token_limit, $3::bigint)
+        WHERE q.user_id = $1
         RETURNING q.used_tokens
         """,
         user_id,
         delta,
-        DEFAULT_FALLBACK_MONTHLY_LIMIT,
     )
-    return row is not None
+    return int(row["used_tokens"]) if row else None

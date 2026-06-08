@@ -164,7 +164,7 @@
                 <div class="input-container">
                     <!-- 上方：使用者輸入 -->
                     <div class="input-top-row">
-                        <textarea id="user-input" placeholder="問我任何事…" rows="1"></textarea>
+                        <textarea id="user-input" placeholder="問我任何事…" rows="1" maxlength="2000"></textarea>
                     </div>
                     <!-- 下方：工具列 -->
                     <div class="input-bottom-row">
@@ -245,7 +245,7 @@
                         <input type="text" id="create-project-name"
                                placeholder="輸入專案名稱…"
                                autocomplete="off"
-                               maxlength="100"
+                               maxlength="40"
                                oninput="onProjectNameInput()">
                     </div>
                 </div>
@@ -292,6 +292,34 @@
             <div class="modal-footer">
                 <button class="modal-btn secondary" onclick="closeAllModals()">取消</button>
                 <button class="modal-btn primary" onclick="saveProfile()">儲存變更</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 用量統計 Modal -->
+    <div class="modal-overlay" id="usage-modal">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3><i data-lucide="activity"></i> 用量統計</h3>
+                <button class="modal-close" onclick="closeAllModals()"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <p id="usage-loading" class="usage-loading">載入用量中…</p>
+                <div id="usage-content" class="usage-content" hidden>
+                    <div class="modal-info-row">
+                        <span class="info-label">訂閱方案</span>
+                        <span class="info-value" id="usage-tier">Free</span>
+                    </div>
+                    <div class="usage-stat-bar-wrap">
+                        <div class="usage-stat-bar" id="usage-bar"></div>
+                    </div>
+                    <p class="usage-stat-text" id="usage-stats-text"></p>
+                    <p class="usage-period" id="usage-period"></p>
+                </div>
+                <div id="usage-error" class="modal-msg error" hidden></div>
+            </div>
+            <div class="modal-footer">
+                <button class="modal-btn primary" onclick="closeAllModals()">關閉</button>
             </div>
         </div>
     </div>

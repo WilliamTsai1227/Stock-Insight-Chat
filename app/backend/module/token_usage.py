@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
 from app.backend.database.postgresql import get_pool
-from app.backend.module.usage_quota import try_increment_used_tokens
+from app.backend.module.usage_quota import increment_used_tokens
 
 # 費用估算：OpenAI Platform「Text / Standard」每 1M tokens（input / output）
 # 對照 https://platform.openai.com/pricing ；實際帳單以帳戶為準。
@@ -407,11 +407,11 @@ async def record_token_usage(
     caller: Optional[str] = None,
 ) -> Optional[UUID]:
     """
-    將單次 LLM 結算（一輪）的 token 用量寫入兩張表（同一 transaction）：
-      1. user_usage_quotas  ── 條件式遞增（不超過 subscription_tiers.monthly_token_limit）
-      2. token_usage_logs   ── INSERT 一列流水帳（對帳／費用報表）
+    將單次 LLM 結算（一輪）的 token 用量寫入 DB（同一 transaction）：
+      1. user_usage_quotas  ── 累加 used_tokens（允許單次略超 monthly_limit）
+      2. token_usage_logs   ── INSERT 流水帳
 
-    若配額不足，不配額、不寫 log，回傳 None。
+    若 prompt/completion 皆為 0 則跳過。配額已滿時仍寫 log，回傳 log id。
 
     caller：建議填 router／analyst等（見 api/chat.py `on_chat_model_end` 推斷）。
     成功時回傳 `token_usage_logs.id`，跳過或失敗時回傳 None。
@@ -432,13 +432,12 @@ async def record_token_usage(
     try:
         async with get_pool().acquire() as conn:
             async with conn.transaction():
-                ok = await try_increment_used_tokens(conn, user_id, total)
-                if not ok:
+                new_used = await increment_used_tokens(conn, user_id, total)
+                if new_used is None:
                     print(
-                        f"[QUOTA] record_token_usage skipped (over limit or no quota row) "
+                        f"[QUOTA] increment failed (no quota row) "
                         f"user={user_id} chat={chat_id} delta={total}"
                     )
-                    return None
 
                 row = await conn.fetchrow(
                     """
@@ -464,6 +463,7 @@ async def record_token_usage(
             f"[TOKEN] user={user_id} chat={chat_id} caller={cc!r} model={model_name} "
             f"prompt={prompt_tokens} completion={completion_tokens} "
             f"total={total} cost=${cost:.6f}"
+            + (f" used_total={new_used}" if new_used is not None else "")
         )
         return log_id
     except Exception as e:
