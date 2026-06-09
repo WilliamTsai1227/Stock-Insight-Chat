@@ -3,6 +3,40 @@
 // ============================================
 
 const API_BASE = resolveStockInsightApiBase();
+/** 與 index.js 共用，登入頁與主頁主題同步 */
+const THEME_STORAGE_KEY = 'insightUiTheme';
+
+function applyUiTheme(theme) {
+    const isLight = theme === 'light';
+    document.body.classList.add('theme-switching');
+    document.body.classList.toggle('dark-theme', !isLight);
+    document.body.classList.toggle('light-theme', isLight);
+    document.documentElement.dataset.uiTheme = theme;
+    try {
+        localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch (_) {}
+    requestAnimationFrame(() => {
+        document.body.classList.remove('theme-switching');
+    });
+}
+
+function initUiTheme() {
+    let theme = 'dark';
+    try {
+        const saved = localStorage.getItem(THEME_STORAGE_KEY);
+        if (saved === 'light' || saved === 'dark') theme = saved;
+    } catch (_) {}
+    applyUiTheme(theme);
+}
+
+function initThemeToggle() {
+    const btn = document.getElementById('theme-toggle-btn');
+    if (!btn) return;
+    btn.addEventListener('click', () => {
+        const next = document.body.classList.contains('light-theme') ? 'dark' : 'light';
+        applyUiTheme(next);
+    });
+}
 
 // ── OAuth 錯誤代碼對應訊息 ────────────────────────────────────────
 const OAUTH_ERROR_MESSAGES = {
@@ -18,6 +52,10 @@ const OAUTH_ERROR_MESSAGES = {
 // ── 偵測 OAuth callback 錯誤 ─────────────────────────────────────
 // 若 Google SSO 失敗，後端會把錯誤代碼帶在 ?error= 重導回登入頁
 window.addEventListener('DOMContentLoaded', () => {
+    initUiTheme();
+    initThemeToggle();
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+
     // 已登入則直接跳主頁
     if (localStorage.getItem('user')) {
         window.location.href = 'index.html';

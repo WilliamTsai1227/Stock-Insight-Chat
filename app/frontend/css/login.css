@@ -15,6 +15,23 @@
     --glass: rgba(20, 20, 20, 0.7);
     --error: #ff6b6b;
     --success: #00d68f;
+    --login-container-bg: rgba(19, 19, 19, 0.85);
+    --login-container-shadow: 0 25px 80px rgba(0, 0, 0, 0.6);
+    --login-brand-gradient: linear-gradient(135deg, #1a1a1a 0%, #111 100%);
+    --login-brand-glow: rgba(176, 176, 176, 0.04);
+    --login-logo-gradient: linear-gradient(to right, #fff, #888);
+    --login-grid-line: rgba(255, 255, 255, 0.05);
+    --login-input-bg: rgba(255, 255, 255, 0.04);
+    --login-social-hover-bg: rgba(255, 255, 255, 0.03);
+    --login-google-btn-bg: rgba(255, 255, 255, 0.05);
+    --login-google-btn-border: rgba(255, 255, 255, 0.12);
+    --login-google-btn-hover-bg: rgba(255, 255, 255, 0.1);
+    --login-google-btn-hover-border: rgba(255, 255, 255, 0.25);
+    --login-primary-text: #000;
+    --login-primary-hover: #c0c0c0;
+    --login-placeholder: #555;
+    --login-link-hover: #ddd;
+    --login-toggle-hover-bg: rgba(255, 255, 255, 0.08);
 }
 
 * {
@@ -28,10 +45,53 @@ body {
     background-color: var(--bg-dark);
     color: var(--text-main);
     min-height: 100vh;
+    min-height: 100dvh;
     display: flex;
     align-items: center;
     justify-content: center;
-    overflow: hidden;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding:
+        max(1rem, env(safe-area-inset-top))
+        max(1rem, env(safe-area-inset-right))
+        max(1rem, env(safe-area-inset-bottom))
+        max(1rem, env(safe-area-inset-left));
+}
+
+body.theme-switching,
+body.theme-switching * {
+    transition: none !important;
+}
+
+/* --- Theme Toggle --- */
+.login-theme-toggle {
+    position: fixed;
+    top: max(1rem, env(safe-area-inset-top));
+    right: max(1rem, env(safe-area-inset-right));
+    z-index: 10;
+    width: 40px;
+    height: 40px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--card-bg);
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: color 0.2s, background 0.2s, border-color 0.2s;
+}
+
+.login-theme-toggle:hover {
+    color: var(--accent);
+    background: var(--login-toggle-hover-bg);
+    border-color: var(--accent);
+}
+
+.login-theme-toggle i {
+    width: 18px;
+    height: 18px;
+    pointer-events: none;
 }
 
 /* --- Background Grid Effect --- */
@@ -39,8 +99,8 @@ body {
     position: fixed;
     inset: 0;
     background-image:
-        linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px);
+        linear-gradient(var(--login-grid-line) 1px, transparent 1px),
+        linear-gradient(90deg, var(--login-grid-line) 1px, transparent 1px);
     background-size: 60px 60px;
     z-index: 0;
     animation: gridShift 30s linear infinite;
@@ -57,20 +117,22 @@ body {
     z-index: 1;
     display: flex;
     width: 900px;
-    max-width: 95vw;
+    max-width: 100%;
     min-height: 580px;
-    background: rgba(19, 19, 19, 0.85);
+    margin: 0 auto;
+    background: var(--login-container-bg);
     border: 1px solid var(--border);
     border-radius: 24px;
     overflow: hidden;
     backdrop-filter: blur(20px);
-    box-shadow: 0 25px 80px rgba(0, 0, 0, 0.6);
+    box-shadow: var(--login-container-shadow);
+    flex-shrink: 0;
 }
 
 /* --- Brand Panel (Left) --- */
 .brand-panel {
     flex: 1;
-    background: linear-gradient(135deg, #1a1a1a 0%, #111 100%);
+    background: var(--login-brand-gradient);
     padding: 3rem;
     display: flex;
     align-items: center;
@@ -87,7 +149,7 @@ body {
     left: -50%;
     width: 200%;
     height: 200%;
-    background: radial-gradient(ellipse at 30% 50%, rgba(176, 176, 176, 0.04) 0%, transparent 70%);
+    background: radial-gradient(ellipse at 30% 50%, var(--login-brand-glow) 0%, transparent 70%);
     animation: brandGlow 8s ease-in-out infinite;
 }
 
@@ -112,7 +174,9 @@ body {
     font-family: 'Outfit', sans-serif;
     font-size: 1.8rem;
     font-weight: 700;
-    background: linear-gradient(to right, #fff, #888);
+    color: #ffffff;
+    background: var(--login-logo-gradient);
+    background-clip: text;
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
 }
@@ -158,6 +222,7 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
+    min-width: 0;
 }
 
 .auth-form {
@@ -207,7 +272,7 @@ body {
     display: flex;
     align-items: center;
     gap: 10px;
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--login-input-bg);
     border: 1px solid var(--border);
     border-radius: 12px;
     padding: 0 14px;
@@ -238,7 +303,7 @@ body {
 }
 
 .input-wrapper input::placeholder {
-    color: #555;
+    color: var(--login-placeholder);
 }
 
 .toggle-pw {
@@ -288,7 +353,7 @@ body {
     width: 100%;
     padding: 13px;
     background: var(--accent);
-    color: #000;
+    color: var(--login-primary-text);
     border: none;
     border-radius: 12px;
     font-family: 'Outfit', sans-serif;
@@ -304,7 +369,7 @@ body {
 }
 
 .primary-btn:hover {
-    background: #c0c0c0;
+    background: var(--login-primary-hover);
     box-shadow: 0 0 20px var(--accent-glow);
 }
 
@@ -359,11 +424,16 @@ body {
     justify-content: center;
     gap: 10px;
     transition: 0.3s;
+    min-width: 0;
+}
+
+.social-btn svg {
+    flex-shrink: 0;
 }
 
 .social-btn:hover:not(:disabled) {
     border-color: var(--accent);
-    background: rgba(255, 255, 255, 0.03);
+    background: var(--login-social-hover-bg);
 }
 
 .social-btn:disabled {
@@ -377,16 +447,24 @@ body {
     padding: 14px 20px;
     font-size: 1rem;
     font-weight: 500;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--login-google-btn-border);
+    background: var(--login-google-btn-bg);
     border-radius: 14px;
     margin-top: 0.5rem;
     transition: background 0.25s, border-color 0.25s, transform 0.15s;
+    min-height: 48px;
+}
+
+.social-btn.google-primary span {
+    flex: 0 1 auto;
+    text-align: center;
+    line-height: 1.35;
+    white-space: normal;
 }
 
 .social-btn.google-primary:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.1);
-    border-color: rgba(255, 255, 255, 0.25);
+    background: var(--login-google-btn-hover-bg);
+    border-color: var(--login-google-btn-hover-border);
     transform: translateY(-1px);
 }
 
@@ -401,6 +479,7 @@ body {
     color: var(--text-dim);
     margin-top: 1.4rem;
     line-height: 1.6;
+    word-break: break-word;
 }
 
 /* --- Divider --- */
@@ -440,7 +519,7 @@ body {
 }
 
 .switch-text a:hover {
-    color: #ddd;
+    color: var(--login-link-hover);
 }
 
 /* --- Error / Success Messages --- */
@@ -471,16 +550,64 @@ body {
 }
 
 /* --- Responsive --- */
-@media (max-width: 768px) {
+
+/* 平板：維持左右雙欄，略縮內距 */
+@media (max-width: 1024px) {
     .auth-container {
-        flex-direction: column;
+        width: min(900px, 100%);
         min-height: auto;
     }
 
+    .brand-panel,
+    .form-panel {
+        padding: 2.25rem;
+    }
+
+    .brand-tagline {
+        margin-bottom: 2rem;
+    }
+}
+
+/* 手機：改為上下堆疊、垂直置中 */
+@media (max-width: 768px) {
+    body {
+        align-items: center;
+        justify-content: center;
+    }
+
+    .auth-container {
+        flex-direction: column;
+        width: 100%;
+        max-width: 420px;
+        min-height: auto;
+        border-radius: 18px;
+    }
+
     .brand-panel {
-        padding: 2rem;
+        flex: 0 0 auto;
+        padding: 1.75rem 1.5rem 1.25rem;
         border-right: none;
         border-bottom: 1px solid var(--border);
+        overflow: visible;
+    }
+
+    .brand-content {
+        width: 100%;
+        text-align: center;
+    }
+
+    .brand-logo {
+        justify-content: center;
+    }
+
+    .brand-logo h1 {
+        font-size: 1.5rem;
+    }
+
+    .brand-tagline {
+        font-size: 0.88rem;
+        margin-bottom: 0;
+        line-height: 1.55;
     }
 
     .brand-features {
@@ -488,6 +615,125 @@ body {
     }
 
     .form-panel {
-        padding: 2rem;
+        flex: 0 0 auto;
+        width: 100%;
+        padding: 1.5rem 1.5rem 1.75rem;
     }
+
+    .auth-form {
+        max-width: none;
+        margin: 0 auto;
+    }
+
+    .auth-form h2 {
+        font-size: 1.4rem;
+        text-align: center;
+    }
+
+    .form-subtitle {
+        text-align: center;
+    }
+
+    .social-btn.google-primary {
+        font-size: 0.95rem;
+        padding: 13px 16px;
+    }
+}
+
+/* 極窄手機（如 iPhone SE） */
+@media (max-width: 380px) {
+    body {
+        padding-left: max(0.75rem, env(safe-area-inset-left));
+        padding-right: max(0.75rem, env(safe-area-inset-right));
+    }
+
+    .auth-container {
+        border-radius: 14px;
+    }
+
+    .brand-panel,
+    .form-panel {
+        padding-left: 1rem;
+        padding-right: 1rem;
+    }
+
+    .login-theme-toggle {
+        width: 36px;
+        height: 36px;
+    }
+}
+
+/* 橫向小高度（手機 landscape） */
+@media (max-height: 520px) and (orientation: landscape) {
+    body {
+        align-items: flex-start;
+        justify-content: center;
+        padding-top: max(1rem, env(safe-area-inset-top));
+    }
+
+    .auth-container {
+        min-height: auto;
+        max-width: min(520px, 100%);
+    }
+
+    .brand-panel {
+        padding: 1rem 1.25rem;
+    }
+
+    .brand-tagline {
+        margin-bottom: 0;
+    }
+
+    .form-panel {
+        padding: 1rem 1.25rem 1.25rem;
+    }
+}
+
+/* ============================================
+   Light Theme（與 index 共用 insightUiTheme）
+   ============================================ */
+body.light-theme {
+    --bg-dark: #f4f4f5;
+    --sidebar-bg: #ffffff;
+    --text-main: #1c1c1e;
+    --text-dim: #52525b;
+    --accent: #404045;
+    --accent-glow: rgba(0, 0, 0, 0.08);
+    --border: #e4e4e7;
+    --card-bg: rgba(0, 0, 0, 0.04);
+    --glass: rgba(255, 255, 255, 0.92);
+    --login-container-bg: rgba(255, 255, 255, 0.92);
+    --login-container-shadow: 0 20px 60px rgba(0, 0, 0, 0.1);
+    --login-brand-gradient: linear-gradient(135deg, #ececee 0%, #f8f8f9 100%);
+    --login-brand-glow: rgba(0, 0, 0, 0.04);
+    --login-logo-gradient: linear-gradient(to right, #1a1a1a, #666666);
+    --login-grid-line: rgba(0, 0, 0, 0.06);
+    --login-input-bg: #f4f4f5;
+    --login-social-hover-bg: rgba(0, 0, 0, 0.03);
+    --login-google-btn-bg: #ffffff;
+    --login-google-btn-border: #e4e4e7;
+    --login-google-btn-hover-bg: #f4f4f5;
+    --login-google-btn-hover-border: #d4d4d8;
+    --login-primary-text: #ffffff;
+    --login-primary-hover: #52525b;
+    --login-placeholder: #a1a1aa;
+    --login-link-hover: #27272a;
+    --login-toggle-hover-bg: rgba(0, 0, 0, 0.04);
+}
+
+body.light-theme .primary-btn {
+    background: var(--accent);
+    color: var(--login-primary-text);
+}
+
+body.light-theme .primary-btn:hover {
+    background: var(--login-primary-hover);
+}
+
+body.light-theme .btn-loader span {
+    background: #fff;
+}
+
+body.light-theme .brand-logo h1 {
+    color: #1a1a1a;
 }

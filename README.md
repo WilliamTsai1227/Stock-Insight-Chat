@@ -1026,6 +1026,125 @@ sequenceDiagram
 *   **預留模式（Reservation）**：先預扣再依實用量結算退回，適合超高併發。
 *   **自然月重置**：目前 `current_period_start` 欄位存在於 schema；自動歸零可另加 cron 或於讀取時依月份重置（尚未實作）。
 
+### 4-A. 手動配額重置與 `quota_reset_logs`（Insight-Monitor）
+
+營運上若需**提前歸零某使用者的配額計數**（讓其可繼續發問），但**保留全部花費流水**，請使用姊妹專案 **[Insight-Monitor](../Insight-Monitor)** 的「配額重置」頁，或依下列 SQL 手動執行。
+
+#### 三表分工
+
+| 表 | 用途 | 重置時 |
+|----|------|--------|
+| `user_usage_quotas` | 當期配額計數（`used_tokens`） | **歸零**，`current_period_start` → NOW() |
+| `token_usage_logs` | 永久 append-only 流水（Token、花費） | **不動** |
+| `quota_reset_logs` | 每次重置前的區間摘要 | **INSERT 一筆** |
+
+Stock-Insight-Chat **主程式不讀寫** `quota_reset_logs`；僅 Monitor 或維運 SQL 寫入。
+
+#### Table Schema（`quota_reset_logs`）
+
+見 `app/backend/database/init_db.sql` **§12-A**；既有庫請套用 migration **`V006__quota_reset_logs.sql`**：
+
+```sql
+CREATE TABLE IF NOT EXISTS quota_reset_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    reset_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    previous_period_start TIMESTAMPTZ,
+    previous_used_tokens BIGINT NOT NULL DEFAULT 0,
+    period_total_tokens BIGINT,
+    period_total_cost_usd NUMERIC(10, 6),
+    note TEXT,
+    reset_by VARCHAR(100) DEFAULT 'monitor'
+);
+CREATE INDEX IF NOT EXISTS idx_quota_reset_logs_user_reset_at
+    ON quota_reset_logs(user_id, reset_at DESC);
+```
+
+#### SQL 建置（既有 RDS）
+
+在 **Insight=#** 或任何連到本專案 DB 的客戶端（專案根目錄）：
+
+```bash
+# 本機 Docker db（若 compose 有啟 db 服務）
+docker-compose -f ./deploy/docker-compose.yml exec db \
+  psql -U postgres -d Insight \
+  -f - < app/backend/database/migrations/V006__quota_reset_logs.sql
+
+# 或 RDS／任意連線
+psql "$DATABASE_URL" -f app/backend/database/migrations/V006__quota_reset_logs.sql
+```
+
+亦可於 psql 內直接貼上上方 **Table Schema** 的 `CREATE TABLE`／`CREATE INDEX`（`IF NOT EXISTS`，可重複執行）。
+
+#### 重置語法（手動 psql）
+
+將 `YOUR_USER_UUID` 換成 `users.id`（Monitor「使用者」頁可複製 UUID）：
+
+```sql
+BEGIN;
+
+INSERT INTO user_usage_quotas (user_id, current_period_start, used_tokens)
+VALUES (
+    'YOUR_USER_UUID'::uuid,
+    date_trunc('month', NOW() AT TIME ZONE 'UTC'),
+    0
+)
+ON CONFLICT (user_id) DO NOTHING;
+
+SELECT used_tokens, current_period_start
+FROM user_usage_quotas
+WHERE user_id = 'YOUR_USER_UUID'::uuid
+FOR UPDATE;
+
+INSERT INTO quota_reset_logs (
+    user_id,
+    previous_period_start,
+    previous_used_tokens,
+    period_total_tokens,
+    period_total_cost_usd,
+    note,
+    reset_by
+)
+SELECT
+    q.user_id,
+    q.current_period_start,
+    q.used_tokens,
+    COALESCE(SUM(t.total_tokens), 0),
+    COALESCE(SUM(t.cost_usd), 0),
+    'manual reset via psql',
+    'psql'
+FROM user_usage_quotas q
+LEFT JOIN token_usage_logs t
+    ON t.user_id = q.user_id
+   AND t.created_at >= q.current_period_start
+   AND t.created_at < NOW()
+WHERE q.user_id = 'YOUR_USER_UUID'::uuid
+GROUP BY q.user_id, q.current_period_start, q.used_tokens;
+
+UPDATE user_usage_quotas
+SET
+    used_tokens = 0,
+    current_period_start = NOW(),
+    updated_at = NOW()
+WHERE user_id = 'YOUR_USER_UUID'::uuid;
+
+COMMIT;
+```
+
+**效果**：使用者可再次發問（配額計數從 0 起算）；`token_usage_logs` 歷史花費完整保留；`quota_reset_logs` 留存該區間 Token／花費摘要供對帳。
+
+#### 查詢各重置區間
+
+```sql
+SELECT reset_at, previous_period_start, previous_used_tokens,
+       period_total_tokens, period_total_cost_usd, note
+FROM quota_reset_logs
+WHERE user_id = 'YOUR_USER_UUID'::uuid
+ORDER BY reset_at DESC;
+```
+
+Monitor 實作細節見 [Insight-Monitor README](../Insight-Monitor/README.md#配額重置quota_reset_logs)。
+
 ### 5. Python Class 設計實踐（參考用）
 
 仍以 **「單一權責」** 封裝為目標；目前生產路徑以 **`usage_quota`** 模組為準，而非下方範例類別：

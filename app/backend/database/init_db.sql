@@ -128,6 +128,22 @@ CREATE TABLE IF NOT EXISTS token_usage_logs (
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 12-A. 建立 quota_reset_logs 表 (配額重置區間紀錄)
+-- 由 Insight-Monitor 寫入；Stock-Insight-Chat 主程式不讀寫此表。
+-- 用途：記錄每次手動重置 user_usage_quotas 前的區間摘要，方便對帳各期用量／花費。
+-- 重置時只歸零 user_usage_quotas.used_tokens；token_usage_logs 永久保留。
+CREATE TABLE IF NOT EXISTS quota_reset_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    reset_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    previous_period_start TIMESTAMPTZ,
+    previous_used_tokens BIGINT NOT NULL DEFAULT 0,
+    period_total_tokens BIGINT,
+    period_total_cost_usd NUMERIC(10, 6),
+    note TEXT,
+    reset_by VARCHAR(100) DEFAULT 'monitor'
+);
+
 -- 13. 建立 messages 表 (存放每一筆對話記錄)
 -- 透過 parent_id 實現訊息與回覆的精確對齊與溯源
 CREATE TABLE IF NOT EXISTS messages (
@@ -172,6 +188,10 @@ CREATE INDEX IF NOT EXISTS idx_token_usage_logs_user_created_at
 CREATE INDEX IF NOT EXISTS idx_token_usage_logs_chat_created_at
     ON token_usage_logs(chat_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_token_usage_logs_created_at ON token_usage_logs(created_at DESC);
+
+-- 配額重置紀錄（依使用者查詢最近重置）
+CREATE INDEX IF NOT EXISTS idx_quota_reset_logs_user_reset_at
+    ON quota_reset_logs(user_id, reset_at DESC);
 
 -- 專案與對話 (最核心的查詢路徑)
 CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id);
