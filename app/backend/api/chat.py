@@ -153,6 +153,10 @@ class UpdateChatTitleRequest(BaseModel):
     title: str
 
 
+class AssignChatToProjectRequest(BaseModel):
+    project_id: UUID
+
+
 agent_app = create_chat_agent()
 
 
@@ -532,12 +536,12 @@ async def list_all_chats(
     current_user: asyncpg.Record = Depends(get_current_user),
 ):
     """
-    讀取目前登入使用者的所有聊天，依 updated_at 由近到遠排序。
-    （重新使用舊對話後，該對話會因 updated_at 更新而移至最上方）
+    讀取目前登入使用者的「最近」聊天（未隸屬任何 project），依 updated_at 由近到遠排序。
+    已加入專案的 chat 請由 GET /api/project 取得，不在此列表回傳。
 
     安全設計：
     - user_id 由 JWT 解析，前端不需也不應傳遞（避免越權讀取他人 chats）
-    - SQL 以 user_id 過濾，確保只回傳本人擁有的資料
+    - SQL 以 user_id 過濾，且 project_id IS NULL
 
     HTTP 回應：
     - 200 OK : 回傳聊天陣列（可能為空）
@@ -550,9 +554,9 @@ async def list_all_chats(
     try:
         rows = await db.fetch(
             """
-            SELECT id, title, created_at, updated_at
+            SELECT id, title, project_id, created_at, updated_at
             FROM chats
-            WHERE user_id = $1
+            WHERE user_id = $1 AND project_id IS NULL
             ORDER BY updated_at DESC
             """,
             user_id,
@@ -569,6 +573,7 @@ async def list_all_chats(
             {
                 "id": str(row["id"]),
                 "title": row["title"],
+                "project_id": None,
                 "created_at": row["created_at"].isoformat(),
                 "updated_at": row["updated_at"].isoformat(),
             }
@@ -701,6 +706,164 @@ async def delete_chat(
         "message": "Chat and all related messages have been deleted.",
         "data": {
             "id": str(chat_id),
+        },
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /api/chat/project —— 將 chat 加入（或移至）指定 project
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post("/api/chat/project")
+async def assign_chat_to_project(
+    request: AssignChatToProjectRequest,
+    chat_id: UUID = Query(..., description="要加入專案的 chat UUID"),
+    db: asyncpg.Connection = Depends(get_db),
+    current_user: asyncpg.Record = Depends(get_current_user),
+):
+    """
+    將既有 chat 指定到某個 project（可從「最近」拖入專案，或從 A 專案移到 B 專案）。
+
+    安全：
+    - chat 與 project 皆以 JWT user_id 驗證 ownership，任一不符 → 404
+
+    HTTP 回應：
+    - 200 OK : 更新成功
+    - 404    : chat 或 project 不存在或無權限
+    - 500    : 資料庫錯誤
+    """
+    user_id = current_user["id"]
+    now_utc = datetime.now(timezone.utc)
+
+    project_owner = await db.fetchval(
+        "SELECT user_id FROM projects WHERE id = $1",
+        request.project_id,
+    )
+    if project_owner is None or project_owner != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found or you don't have permission.",
+        )
+
+    try:
+        row = await db.fetchrow(
+            """
+            UPDATE chats
+            SET project_id = $1, updated_at = $2
+            WHERE id = $3 AND user_id = $4
+            RETURNING id, project_id, title, updated_at
+            """,
+            request.project_id,
+            now_utc,
+            chat_id,
+            user_id,
+        )
+        if row is not None:
+            await db.execute(
+                "UPDATE projects SET updated_at = $1 WHERE id = $2",
+                now_utc,
+                request.project_id,
+            )
+    except asyncpg.PostgresError as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database error: {str(e)}",
+        )
+
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Chat not found or you don't have permission to update it.",
+        )
+
+    return {
+        "status": "success",
+        "data": {
+            "id": str(row["id"]),
+            "project_id": str(row["project_id"]),
+            "title": row["title"],
+            "updated_at": row["updated_at"].isoformat(),
+        },
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DELETE /api/chat/project —— 將 chat 從 project 移除（project_id → NULL）
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.delete("/api/chat/project")
+async def remove_chat_from_project(
+    chat_id: UUID = Query(..., description="要從專案移除的 chat UUID"),
+    db: asyncpg.Connection = Depends(get_db),
+    current_user: asyncpg.Record = Depends(get_current_user),
+):
+    """
+    解除 chat 與 project 的關聯；chat 本身與 messages 保留，仍可在「最近」存取。
+
+    安全：
+    - 以 (id, user_id) 過濾；chat 必須目前隸屬某 project，否則 404
+
+    HTTP 回應：
+    - 200 OK : 移除成功
+    - 404    : chat 不存在、無權限，或 chat 不在任何 project 內
+    - 500    : 資料庫錯誤
+    """
+    user_id = current_user["id"]
+    now_utc = datetime.now(timezone.utc)
+
+    try:
+        old_project_id = await db.fetchval(
+            """
+            SELECT project_id FROM chats
+            WHERE id = $1 AND user_id = $2 AND project_id IS NOT NULL
+            """,
+            chat_id,
+            user_id,
+        )
+        if old_project_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Chat not found, not in a project, or you don't have permission.",
+            )
+
+        row = await db.fetchrow(
+            """
+            UPDATE chats
+            SET project_id = NULL, updated_at = $1
+            WHERE id = $2 AND user_id = $3 AND project_id IS NOT NULL
+            RETURNING id, title, updated_at
+            """,
+            now_utc,
+            chat_id,
+            user_id,
+        )
+        if row is not None:
+            await db.execute(
+                "UPDATE projects SET updated_at = $1 WHERE id = $2",
+                now_utc,
+                old_project_id,
+            )
+    except HTTPException:
+        raise
+    except asyncpg.PostgresError as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database error: {str(e)}",
+        )
+
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Chat not found, not in a project, or you don't have permission.",
+        )
+
+    return {
+        "status": "success",
+        "data": {
+            "id": str(row["id"]),
+            "project_id": None,
+            "title": row["title"],
+            "updated_at": row["updated_at"].isoformat(),
         },
     }
 

@@ -23,6 +23,7 @@
     --popover-bg: #1a1a1a;
     --surface-hover: rgba(255, 255, 255, 0.05);
     --surface-border-subtle: rgba(255, 255, 255, 0.04);
+    --sidebar-width: 260px;
     --tip-bg: rgba(176, 176, 176, 0.05);
     --mode-btn-bg: rgba(0, 0, 0, 0.2);
     --menu-option-selected-bg: rgba(var(--accent-rgb), 0.15);
@@ -66,13 +67,49 @@ body.theme-switching * {
 
 /* --- Sidebar --- */
 .sidebar {
-    width: 260px;
+    position: relative;
+    flex: 0 0 var(--sidebar-width);
+    width: var(--sidebar-width);
     background-color: var(--sidebar-bg);
     border-right: 1px solid var(--border);
     display: flex;
     flex-direction: column;
     padding: 1rem 0.75rem;
     overflow: hidden;
+}
+
+.sidebar-resize-handle {
+    position: absolute;
+    top: 0;
+    right: -4px;
+    width: 8px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 20;
+    touch-action: none;
+}
+
+.sidebar-resize-handle::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 3px;
+    width: 2px;
+    border-radius: 2px;
+    background: transparent;
+    transition: background 0.2s;
+}
+
+.sidebar-resize-handle:hover::after,
+.sidebar-resize-handle:focus-visible::after,
+body.sidebar-resizing .sidebar-resize-handle::after {
+    background: rgba(var(--accent-rgb), 0.45);
+}
+
+body.sidebar-resizing {
+    cursor: col-resize;
+    user-select: none;
 }
 
 .sidebar-header {
@@ -444,12 +481,34 @@ body.theme-switching * {
     list-style: none;
 }
 
+.recent-chat-item.is-dragging .project-row {
+    opacity: 0.45;
+}
+
+.project-row.drop-target {
+    background: rgba(176, 176, 176, 0.14);
+    border: 1px dashed rgba(176, 176, 176, 0.45);
+    color: var(--accent);
+}
+
+.project-row.drop-target .project-row-icon {
+    color: var(--accent);
+}
+
+.recent-chat-item .project-row[draggable="true"] {
+    cursor: grab;
+}
+
+.recent-chat-item .project-row[draggable="true"]:active {
+    cursor: grabbing;
+}
+
 .pv-list-item:hover .project-row-menu-btn,
 .pv-list-item .project-row-menu-btn.open {
     opacity: 1;
 }
 
-/* Sidebar 底部使用者列 */
+/* Sidebar 底部回饋按鈕 */
 .sidebar-footer {
     padding: 0.6rem 0.25rem 0.1rem;
     border-top: 1px solid var(--border);
@@ -457,39 +516,36 @@ body.theme-switching * {
     flex-shrink: 0;
 }
 
-.user-profile {
+.sidebar-feedback-btn {
     display: flex;
     align-items: center;
     gap: 10px;
+    width: 100%;
     padding: 0.5rem 0.6rem;
+    border: none;
     border-radius: 8px;
+    background: transparent;
+    color: var(--text-main);
+    font-family: inherit;
+    font-size: 0.85rem;
     cursor: pointer;
     transition: 0.2s;
 }
 
-.user-profile:hover {
+.sidebar-feedback-btn:hover {
     background: var(--card-bg);
+    color: var(--accent);
 }
 
-.avatar {
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    background: linear-gradient(135deg, #333 0%, #222 100%);
-    border: 1px solid var(--border);
-    color: var(--accent);
-    font-family: 'Outfit', sans-serif;
-    font-weight: 600;
-    font-size: 0.8rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+.sidebar-feedback-btn i {
+    width: 18px;
+    height: 18px;
+    color: var(--text-dim);
     flex-shrink: 0;
 }
 
-.user-profile span {
-    font-size: 0.85rem;
-    color: var(--text-main);
+.sidebar-feedback-btn:hover i {
+    color: var(--accent);
 }
 
 /* --- Main Content --- */
@@ -1989,6 +2045,180 @@ textarea:disabled {
     cursor: not-allowed;
 }
 
+.modal-field select.modal-select,
+.modal-field textarea.modal-textarea {
+    width: 100%;
+    padding: 10px 14px;
+    background: var(--modal-input-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: var(--text-main);
+    font-family: inherit;
+    font-size: 0.88rem;
+    outline: none;
+    transition: 0.3s;
+}
+
+.modal-field select.modal-select:focus,
+.modal-field textarea.modal-textarea:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 10px var(--accent-glow);
+}
+
+.modal-field textarea.modal-textarea {
+    resize: vertical;
+    min-height: 120px;
+    line-height: 1.55;
+}
+
+.feedback-intro {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    line-height: 1.55;
+    margin-bottom: 1rem;
+}
+
+/* 建議回饋 Modal — 更口語、少表單感 */
+.feedback-modal-card {
+    width: 440px;
+}
+
+.feedback-modal-header {
+    align-items: flex-start;
+    padding-bottom: 4px;
+}
+
+.feedback-modal-heading h3 {
+    font-family: 'Outfit', sans-serif;
+    font-size: 1.25rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 0;
+}
+
+.feedback-subtitle {
+    margin: 0.35rem 0 0;
+    font-size: 0.875rem;
+    color: var(--text-dim);
+    line-height: 1.5;
+    font-weight: 400;
+}
+
+.feedback-category-group {
+    border: none;
+    margin: 0 0 1.1rem;
+    padding: 0;
+}
+
+.feedback-legend {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    margin-bottom: 0.55rem;
+    padding: 0;
+}
+
+.feedback-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.feedback-chip {
+    padding: 0.45rem 0.85rem;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-dim);
+    font-family: inherit;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s, color 0.2s;
+}
+
+.feedback-chip:hover {
+    background: var(--card-bg);
+    color: var(--text-main);
+}
+
+.feedback-chip.active {
+    background: rgba(176, 176, 176, 0.12);
+    border-color: rgba(176, 176, 176, 0.35);
+    color: var(--text-main);
+}
+
+.feedback-message-wrap {
+    margin-bottom: 0.25rem;
+}
+
+.feedback-textarea {
+    width: 100%;
+    padding: 0.85rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--modal-input-bg);
+    color: var(--text-main);
+    font-family: inherit;
+    font-size: 0.9rem;
+    line-height: 1.6;
+    resize: vertical;
+    min-height: 128px;
+    transition: border-color 0.2s;
+}
+
+.feedback-textarea::placeholder {
+    color: var(--text-dim);
+    opacity: 0.85;
+}
+
+.feedback-textarea:focus {
+    outline: none;
+    border-color: rgba(176, 176, 176, 0.45);
+}
+
+.feedback-char-hint {
+    min-height: 1.25rem;
+    margin: 0.4rem 0 0;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    text-align: right;
+}
+
+.feedback-char-hint.is-warning {
+    color: #e8a87c;
+}
+
+.feedback-modal-footer {
+    padding-top: 0.25rem;
+}
+
+.feedback-char-count {
+    margin-top: 0.35rem;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    text-align: right;
+}
+
+.feedback-honeypot {
+    position: absolute;
+    left: -9999px;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.feedback-turnstile {
+    display: flex;
+    justify-content: center;
+    margin-top: 0.75rem;
+    min-height: 0;
+}
+
+.feedback-turnstile:not(:empty) {
+    min-height: 65px;
+}
+
 .modal-info-row {
     display: flex;
     justify-content: space-between;
@@ -2641,6 +2871,7 @@ textarea:disabled {
         left: 0;
         top: 0;
         bottom: 0;
+        flex: none;
         width: min(300px, 88vw);
         max-width: 100%;
         z-index: 900;
@@ -2650,6 +2881,10 @@ textarea:disabled {
         transition: transform 0.28s ease, box-shadow 0.28s ease;
         box-shadow: none;
         border-right: 1px solid var(--border);
+    }
+
+    .sidebar-resize-handle {
+        display: none;
     }
 
     .app-container.sidebar-open .sidebar {
@@ -2870,6 +3105,20 @@ body.light-theme .suggestion-chip:hover {
     background: rgba(0, 0, 0, 0.04);
 }
 
+body.light-theme .feedback-chip.active {
+    background: rgba(0, 0, 0, 0.06);
+    border-color: rgba(0, 0, 0, 0.15);
+}
+
+body.light-theme .feedback-chip:hover {
+    background: rgba(0, 0, 0, 0.04);
+}
+
+body.light-theme .project-row.drop-target {
+    background: rgba(0, 0, 0, 0.06);
+    border-color: rgba(0, 0, 0, 0.2);
+}
+
 body.light-theme .chat-mode-menu,
 body.light-theme .response-mode-menu {
     background: #ffffff;
@@ -2877,8 +3126,7 @@ body.light-theme .response-mode-menu {
 }
 
 body.light-theme .user-avatar-btn,
-body.light-theme .dropdown-avatar,
-body.light-theme .avatar {
+body.light-theme .dropdown-avatar {
     background: linear-gradient(135deg, #ececee 0%, #dcdce0 100%);
     color: var(--accent);
 }

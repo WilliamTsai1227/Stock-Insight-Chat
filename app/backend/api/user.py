@@ -8,13 +8,19 @@ asyncpg.Record 的欄位存取語法：record['column_name']
 """
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, EmailStr
-from typing import Optional
+import json
+import logging
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel, EmailStr, Field, field_validator
+from typing import Any, Dict, Literal, Optional
 from datetime import datetime, timezone
 
 from app.backend.database.postgresql import get_db
 from app.backend.module.jwt import get_current_user
+from app.backend.module.feedback_security import (
+    public_feedback_config,
+    run_pre_insert_checks,
+)
 from app.backend.module.usage_quota import (
     DEFAULT_FALLBACK_MONTHLY_LIMIT,
     compute_quota_resets_at,
@@ -23,6 +29,7 @@ from app.backend.module.usage_quota import (
 )
 
 router = APIRouter(tags=["User Management"])
+logger = logging.getLogger(__name__)
 
 
 # --- Request/Response Schemas ---
@@ -69,6 +76,39 @@ class UserUsageStats(BaseModel):
     quota_exhausted: bool
     current_period_start: Optional[str] = None
     quota_resets_at: Optional[str] = None
+
+
+FeedbackCategory = Literal["feature", "bug", "other"]
+
+_MESSAGE_MIN_LEN = 10
+_MESSAGE_MAX_LEN = 2000
+_PAGE_URL_MAX_LEN = 500
+_USER_AGENT_MAX_LEN = 512
+
+
+class SubmitFeedbackRequest(BaseModel):
+    category: FeedbackCategory
+    message: str = Field(..., min_length=_MESSAGE_MIN_LEN, max_length=_MESSAGE_MAX_LEN)
+    page_url: Optional[str] = Field(default=None, max_length=_PAGE_URL_MAX_LEN)
+    user_agent: Optional[str] = Field(default=None, max_length=_USER_AGENT_MAX_LEN)
+    context: Optional[Dict[str, Any]] = None
+    captcha_token: Optional[str] = Field(default=None, max_length=2048)
+    website: Optional[str] = Field(default=None, max_length=200)
+    form_opened_at: Optional[datetime] = None
+
+    @field_validator("message")
+    @classmethod
+    def strip_message(cls, v: str) -> str:
+        stripped = v.strip()
+        if len(stripped) < _MESSAGE_MIN_LEN:
+            raise ValueError(f"Message must be at least {_MESSAGE_MIN_LEN} characters.")
+        return stripped
+
+
+class SubmitFeedbackResponse(BaseModel):
+    id: str
+    status: str
+    created_at: str
 
 
 def _serialize_user_profile(row: asyncpg.Record, quota: Optional[dict] = None) -> dict:
@@ -180,6 +220,79 @@ async def get_my_usage_stats(
         "quota_exhausted": used >= limit,
         "current_period_start": period_start.isoformat() if period_start else None,
         "quota_resets_at": resets_at.isoformat() if resets_at else None,
+    }
+
+
+@router.get("/api/public/feedback-config")
+async def get_feedback_public_config():
+    """前端建議回饋表單：Turnstile site key 與防刷設定（無需登入）。"""
+    return public_feedback_config()
+
+
+@router.post("/api/user/feedback", status_code=status.HTTP_201_CREATED, response_model=SubmitFeedbackResponse)
+async def submit_feedback(
+    body: SubmitFeedbackRequest,
+    request: Request,
+    db: asyncpg.Connection = Depends(get_db),
+    current_user: asyncpg.Record = Depends(get_current_user),
+):
+    """
+    提交使用者建議或問題回饋（需登入）。
+
+    安全：rate limit、重複內容檢查、context/page_url 驗證、honeypot、
+    可選 Cloudflare Turnstile CAPTCHA（見 TURNSTILE_* 環境變數）。
+
+    HTTP 回應：
+    - 201 Created : 已收到
+    - 401         : 未登入
+    - 409         : 短時間內重複相同內容
+    - 422         : 欄位驗證失敗
+    - 429         : 提交過於頻繁
+    - 500         : 伺服器錯誤（不含 DB 細節）
+    """
+    user_id = current_user["id"]
+    now_utc = datetime.now(timezone.utc)
+
+    safe_page_url, safe_user_agent, ctx = await run_pre_insert_checks(
+        db,
+        user_id,
+        message=body.message,
+        page_url=body.page_url,
+        user_agent=body.user_agent,
+        context=body.context,
+        website=body.website,
+        form_opened_at=body.form_opened_at,
+        captcha_token=body.captcha_token,
+        request=request,
+    )
+
+    try:
+        row = await db.fetchrow(
+            """
+            INSERT INTO user_feedback
+                (user_id, category, message, page_url, user_agent, context, status, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6::jsonb, 'new', $7, $7)
+            RETURNING id, status, created_at
+            """,
+            user_id,
+            body.category,
+            body.message,
+            safe_page_url,
+            safe_user_agent,
+            json.dumps(ctx, ensure_ascii=False),
+            now_utc,
+        )
+    except asyncpg.PostgresError as e:
+        logger.exception("submit_feedback database error user_id=%s", user_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to submit feedback. Please try again later.",
+        ) from e
+
+    return {
+        "id": str(row["id"]),
+        "status": row["status"],
+        "created_at": row["created_at"].isoformat(),
     }
 
 

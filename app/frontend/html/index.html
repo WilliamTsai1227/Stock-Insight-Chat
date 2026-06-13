@@ -56,11 +56,12 @@
             </div>
 
             <div class="sidebar-footer">
-                <div class="user-profile">
-                    <div class="avatar">U</div>
-                    <span>使用者</span>
-                </div>
+                <button type="button" id="sidebar-feedback-btn" class="sidebar-feedback-btn" aria-label="建議回饋">
+                    <i data-lucide="message-square-plus"></i>
+                    <span>建議回饋</span>
+                </button>
             </div>
+            <div class="sidebar-resize-handle" id="sidebar-resize-handle" role="separator" aria-orientation="vertical" aria-label="調整側邊欄寬度" tabindex="0"></div>
         </aside>
 
         <!-- 平板／手機：側欄開啟時遮住主內容，點擊關閉 -->
@@ -321,6 +322,47 @@
             </div>
             <div class="modal-footer">
                 <button class="modal-btn primary" onclick="closeAllModals()">關閉</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 建議回饋 Modal -->
+    <div class="modal-overlay" id="feedback-modal">
+        <div class="modal-card feedback-modal-card">
+            <div class="modal-header feedback-modal-header">
+                <div class="feedback-modal-heading">
+                    <h3>建議回饋</h3>
+                    <p class="feedback-subtitle">遇到問題、許願新功能，或任何想聊的，都歡迎告訴我們！</p>
+                </div>
+                <button type="button" class="modal-close" onclick="closeAllModals()" aria-label="關閉">
+                    <i data-lucide="x"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <fieldset class="feedback-category-group">
+                    <div class="feedback-chips" id="feedback-chips" role="radiogroup" aria-label="回饋類型">
+                        <button type="button" class="feedback-chip active" data-value="feature" aria-pressed="true">許願功能</button>
+                        <button type="button" class="feedback-chip" data-value="bug" aria-pressed="false">遇到問題</button>
+                        <button type="button" class="feedback-chip" data-value="other" aria-pressed="false">其他</button>
+                    </div>
+                    <input type="hidden" id="feedback-category" value="feature">
+                </fieldset>
+                <div class="feedback-message-wrap">
+                    <textarea id="feedback-message" class="feedback-textarea" rows="5"
+                              maxlength="2000" placeholder="請描述您的建議或遇到的問題…"></textarea>
+                    <p class="feedback-char-hint" id="feedback-char-hint" aria-live="polite"></p>
+                </div>
+                <!-- Honeypot：機器人常會填寫，使用者不可見 -->
+                <div class="feedback-honeypot" aria-hidden="true">
+                    <label for="feedback-website">Website</label>
+                    <input type="text" id="feedback-website" name="website" tabindex="-1" autocomplete="off">
+                </div>
+                <div id="feedback-turnstile" class="feedback-turnstile"></div>
+                <div id="feedback-msg" class="modal-msg"></div>
+            </div>
+            <div class="modal-footer feedback-modal-footer">
+                <button type="button" class="modal-btn secondary" onclick="closeAllModals()">先不用</button>
+                <button type="button" class="modal-btn primary" id="feedback-submit-btn" onclick="submitFeedback()" disabled>傳給我們</button>
             </div>
         </div>
     </div>

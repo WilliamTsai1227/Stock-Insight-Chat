@@ -277,6 +277,14 @@ function initUserMenu() {
             openUsageModal();
         });
     }
+
+    const feedbackBtn = document.getElementById('sidebar-feedback-btn');
+    if (feedbackBtn) {
+        feedbackBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            openFeedbackModal();
+        });
+    }
 }
 
 
@@ -400,6 +408,303 @@ async function openUsageModal() {
     }
 }
 
+// ─── 建議回饋 Modal ──────────────────────────────────────────────
+
+const FEEDBACK_MESSAGE_MIN = 10;
+const FEEDBACK_MESSAGE_MAX = 2000;
+
+let feedbackConfig = null;
+let feedbackFormOpenedAt = null;
+let feedbackTurnstileWidgetId = null;
+let feedbackTurnstileReady = false;
+let feedbackTurnstileScriptLoading = false;
+
+function parseFeedbackApiDetail(data, fallback) {
+    const detail = data && data.detail;
+    if (typeof detail === 'string') return detail;
+    if (detail && typeof detail === 'object' && detail.message) return detail.message;
+    if (Array.isArray(detail)) {
+        return detail.map((d) => d.msg || d.message || '').filter(Boolean).join('；') || fallback;
+    }
+    return fallback;
+}
+
+async function loadFeedbackConfig() {
+    try {
+        const res = await fetch(`${AUTH_API}/public/feedback-config`);
+        if (res.ok) feedbackConfig = await res.json();
+    } catch (_) { /* noop */ }
+}
+
+function clearFeedbackTurnstileContainer() {
+    const container = document.getElementById('feedback-turnstile');
+    if (!container) return;
+    while (container.firstChild) container.removeChild(container.firstChild);
+    feedbackTurnstileWidgetId = null;
+}
+
+function mountFeedbackTurnstile() {
+    const container = document.getElementById('feedback-turnstile');
+    if (!container) return;
+
+    clearFeedbackTurnstileContainer();
+    const siteKey = feedbackConfig && feedbackConfig.turnstile_site_key;
+
+    if (!siteKey) {
+        container.hidden = true;
+        feedbackTurnstileReady = true;
+        return;
+    }
+
+    container.hidden = false;
+    feedbackTurnstileReady = false;
+
+    const renderWidget = () => {
+        if (!window.turnstile || !container) return;
+        const theme = document.body.classList.contains('light-theme') ? 'light' : 'dark';
+        feedbackTurnstileWidgetId = window.turnstile.render(container, {
+            sitekey: siteKey,
+            theme,
+            callback: () => {
+                feedbackTurnstileReady = true;
+                updateFeedbackSubmitState();
+            },
+            'expired-callback': () => {
+                feedbackTurnstileReady = false;
+                updateFeedbackSubmitState();
+            },
+            'error-callback': () => {
+                feedbackTurnstileReady = false;
+                updateFeedbackSubmitState();
+            },
+        });
+    };
+
+    if (window.turnstile) {
+        renderWidget();
+        return;
+    }
+
+    if (feedbackTurnstileScriptLoading) return;
+    feedbackTurnstileScriptLoading = true;
+    const script = document.createElement('script');
+    script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+    script.async = true;
+    script.onload = () => {
+        feedbackTurnstileScriptLoading = false;
+        renderWidget();
+    };
+    script.onerror = () => {
+        feedbackTurnstileScriptLoading = false;
+        feedbackTurnstileReady = true;
+    };
+    document.head.appendChild(script);
+}
+
+function getFeedbackTurnstileToken() {
+    if (!feedbackConfig || !feedbackConfig.turnstile_site_key) return null;
+    if (feedbackTurnstileWidgetId == null || !window.turnstile) return null;
+    return window.turnstile.getResponse(feedbackTurnstileWidgetId) || null;
+}
+
+function resetFeedbackTurnstileAfterError() {
+    if (feedbackTurnstileWidgetId != null && window.turnstile) {
+        try {
+            window.turnstile.reset(feedbackTurnstileWidgetId);
+        } catch (_) { /* noop */ }
+    }
+    feedbackTurnstileReady = !feedbackConfig || !feedbackConfig.turnstile_site_key;
+    updateFeedbackSubmitState();
+}
+
+function collectFeedbackContext() {
+    const ctx = {};
+    if (typeof window.getFeedbackPageContext === 'function') {
+        try {
+            const extra = window.getFeedbackPageContext();
+            if (extra && typeof extra === 'object') {
+                Object.assign(ctx, extra);
+            }
+        } catch (_) { /* noop */ }
+    }
+    return ctx;
+}
+
+function setFeedbackCategory(value) {
+    const categoryEl = document.getElementById('feedback-category');
+    const chips = document.querySelectorAll('#feedback-chips .feedback-chip');
+    if (categoryEl) categoryEl.value = value;
+    chips.forEach((chip) => {
+        const active = chip.dataset.value === value;
+        chip.classList.toggle('active', active);
+        chip.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+}
+
+function updateFeedbackCharHint(len, trimmedLen) {
+    const hintEl = document.getElementById('feedback-char-hint');
+    if (!hintEl) return;
+
+    hintEl.className = 'feedback-char-hint';
+    if (len === 0) {
+        hintEl.textContent = '';
+        return;
+    }
+    if (trimmedLen < FEEDBACK_MESSAGE_MIN) {
+        hintEl.textContent = '再寫幾個字就好';
+        hintEl.classList.add('is-warning');
+        return;
+    }
+    if (len >= FEEDBACK_MESSAGE_MAX - 100) {
+        hintEl.textContent = `還可以寫 ${FEEDBACK_MESSAGE_MAX - len} 字`;
+        return;
+    }
+    hintEl.textContent = '';
+}
+
+function updateFeedbackSubmitState() {
+    const msgEl = document.getElementById('feedback-message');
+    const btn = document.getElementById('feedback-submit-btn');
+    if (!msgEl || !btn) return;
+
+    const len = msgEl.value.length;
+    const trimmedLen = msgEl.value.trim().length;
+    updateFeedbackCharHint(len, trimmedLen);
+
+    let canSubmit = trimmedLen >= FEEDBACK_MESSAGE_MIN && len <= FEEDBACK_MESSAGE_MAX;
+    if (feedbackConfig && feedbackConfig.turnstile_site_key) {
+        canSubmit = canSubmit && feedbackTurnstileReady && Boolean(getFeedbackTurnstileToken());
+    }
+    btn.disabled = !canSubmit;
+}
+
+function openFeedbackModal() {
+    closeAllModals();
+    const dropdown = document.getElementById('user-dropdown');
+    if (dropdown) dropdown.classList.remove('show');
+
+    const modal = document.getElementById('feedback-modal');
+    const msgEl = document.getElementById('feedback-message');
+    const submitBtn = document.getElementById('feedback-submit-btn');
+    const feedbackMsg = document.getElementById('feedback-msg');
+    const honeypotEl = document.getElementById('feedback-website');
+    const hintEl = document.getElementById('feedback-char-hint');
+
+    setFeedbackCategory('feature');
+    if (msgEl) msgEl.value = '';
+    if (honeypotEl) honeypotEl.value = '';
+    if (hintEl) hintEl.textContent = '';
+    feedbackFormOpenedAt = new Date().toISOString();
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = '傳給我們';
+    }
+    if (feedbackMsg) {
+        feedbackMsg.className = 'modal-msg';
+        feedbackMsg.textContent = '';
+    }
+
+    updateFeedbackSubmitState();
+    mountFeedbackTurnstile();
+    if (modal) modal.classList.add('show');
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+    setTimeout(() => { if (msgEl) msgEl.focus(); }, 100);
+}
+
+async function submitFeedback() {
+    const categoryEl = document.getElementById('feedback-category');
+    const msgEl = document.getElementById('feedback-message');
+    const submitBtn = document.getElementById('feedback-submit-btn');
+    const feedbackMsg = document.getElementById('feedback-msg');
+
+    if (!categoryEl || !msgEl || !submitBtn) return;
+
+    const message = msgEl.value.trim();
+    if (message.length < FEEDBACK_MESSAGE_MIN) return;
+
+    const minSec = (feedbackConfig && feedbackConfig.min_submit_seconds) || 2;
+    if (feedbackFormOpenedAt) {
+        const elapsed = (Date.now() - new Date(feedbackFormOpenedAt).getTime()) / 1000;
+        if (elapsed < minSec) {
+            if (feedbackMsg) {
+                feedbackMsg.textContent = '稍等一下再送吧';
+                feedbackMsg.className = 'modal-msg error';
+            }
+            return;
+        }
+    }
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = '傳送中…';
+    if (feedbackMsg) {
+        feedbackMsg.className = 'modal-msg';
+        feedbackMsg.textContent = '';
+    }
+
+    try {
+        const res = await authFetch(`${AUTH_API}/user/feedback`, {
+            method: 'POST',
+            body: JSON.stringify({
+                category: categoryEl.value,
+                message,
+                page_url: window.location.pathname,
+                user_agent: navigator.userAgent.slice(0, 512),
+                context: collectFeedbackContext(),
+                website: (document.getElementById('feedback-website') || {}).value || '',
+                form_opened_at: feedbackFormOpenedAt,
+                captcha_token: getFeedbackTurnstileToken(),
+            }),
+        });
+
+        if (!res) return;
+
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+            const detail = parseFeedbackApiDetail(data, '傳送失敗，稍後再試試');
+            if (feedbackMsg) {
+                feedbackMsg.textContent = detail;
+                feedbackMsg.className = 'modal-msg error';
+            }
+            resetFeedbackTurnstileAfterError();
+            submitBtn.disabled = false;
+            submitBtn.textContent = '傳給我們';
+            updateFeedbackSubmitState();
+            return;
+        }
+
+        closeAllModals();
+        if (typeof showToast === 'function') {
+            showToast('收到了，謝謝你！', 'success');
+        }
+    } catch (err) {
+        if (feedbackMsg) {
+            feedbackMsg.textContent = err.message || '好像連不上，稍後再試試';
+            feedbackMsg.className = 'modal-msg error';
+        }
+        resetFeedbackTurnstileAfterError();
+        submitBtn.disabled = false;
+        submitBtn.textContent = '傳給我們';
+        updateFeedbackSubmitState();
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    loadFeedbackConfig();
+    const feedbackMessage = document.getElementById('feedback-message');
+    if (feedbackMessage) {
+        feedbackMessage.addEventListener('input', updateFeedbackSubmitState);
+    }
+    const feedbackChips = document.getElementById('feedback-chips');
+    if (feedbackChips) {
+        feedbackChips.addEventListener('click', (e) => {
+            const chip = e.target.closest('.feedback-chip');
+            if (!chip || !chip.dataset.value) return;
+            setFeedbackCategory(chip.dataset.value);
+        });
+    }
+});
+
 // ─── 個人資料 Modal ──────────────────────────────────────────────
 
 async function openProfileModal() {
@@ -455,11 +760,6 @@ async function saveProfile() {
         const nameEl = document.getElementById('user-display-name');
         if (avatarEl) avatarEl.textContent = updated.username.charAt(0).toUpperCase();
         if (nameEl) nameEl.textContent = updated.username;
-
-        const sidebarName = document.querySelector('.sidebar-footer .user-profile span');
-        const sidebarAvatar = document.querySelector('.sidebar-footer .avatar');
-        if (sidebarName) sidebarName.textContent = updated.username;
-        if (sidebarAvatar) sidebarAvatar.textContent = updated.username.charAt(0).toUpperCase();
 
         msgEl.textContent = '資料更新成功！';
         msgEl.className = 'modal-msg success';
@@ -563,10 +863,6 @@ window.addEventListener('DOMContentLoaded', async () => {
 
     const user = getUser();
     if (user) {
-        const sidebarName = document.querySelector('.sidebar-footer .user-profile span');
-        const sidebarAvatar = document.querySelector('.sidebar-footer .avatar');
-        if (sidebarName) sidebarName.textContent = user.username || user.email;
-        if (sidebarAvatar) sidebarAvatar.textContent = (user.username || 'U').charAt(0).toUpperCase();
         applyUserTierBadge(user);
     }
 });

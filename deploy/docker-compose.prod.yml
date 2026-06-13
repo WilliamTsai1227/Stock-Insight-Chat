@@ -1,0 +1,60 @@
+# EC2 / 生產環境：從 Docker Hub pull 映像，不在伺服器上 build。
+#
+# EC2 上建議目錄結構：
+#   /opt/stock-insight/
+#   ├── docker-compose.prod.yml   ← 本檔（或 symlink）
+#   └── .env                      ← DATABASE_URL、API keys 等（勿 commit）
+#
+# 映像名稱由環境變數決定（可寫在 .env 或 export）：
+#   DOCKERHUB_USER=your-dockerhub-user
+#   IMAGE_TAG=1.0.0
+#
+# 常用指令（在含本檔的目錄執行）：
+#   docker compose -f docker-compose.prod.yml pull
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# 本機 build & push 範例（在專案根目錄）：
+#   docker build -f deploy/backend.Dockerfile -t ${DOCKERHUB_USER}/stock-insight-backend:${IMAGE_TAG} .
+#   docker push ${DOCKERHUB_USER}/stock-insight-backend:${IMAGE_TAG}
+#   docker build -f deploy/frontend.Dockerfile -t ${DOCKERHUB_USER}/stock-insight-frontend:${IMAGE_TAG} .
+#   docker push ${DOCKERHUB_USER}/stock-insight-frontend:${IMAGE_TAG}
+
+services:
+  backend:
+    image: ${DOCKERHUB_USER}/stock-insight-backend:${IMAGE_TAG}
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - QDRANT_HOST=qdrant
+      # DATABASE_URL、OPENAI_API_KEY 等由 .env 注入（生產環境指向 AWS RDS）
+    depends_on:
+      - qdrant
+    # 前方有 ALB 做 /api/* → backend 時，不必對外暴露 8000
+    # ports:
+    #   - "8000:8000"
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: always
+    mem_limit: 3g
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    # 僅 docker network 內存取；勿對外開 6333
+    # ports:
+    #   - "6333:6333"
+
+  frontend:
+    image: ${DOCKERHUB_USER}/stock-insight-frontend:${IMAGE_TAG}
+    restart: always
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+volumes:
+  qdrant_storage:

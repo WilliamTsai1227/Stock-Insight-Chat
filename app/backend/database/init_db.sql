@@ -170,6 +170,20 @@ CREATE TABLE IF NOT EXISTS files (
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 14. 使用者建議回饋（POST /api/user/feedback）
+CREATE TABLE IF NOT EXISTS user_feedback (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    category VARCHAR(32) NOT NULL,
+    message TEXT NOT NULL,
+    page_url VARCHAR(500),
+    user_agent TEXT,
+    context JSONB DEFAULT '{}',
+    status VARCHAR(20) NOT NULL DEFAULT 'new',
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
 -- =============================================
 -- 15. 建立索引優化 (Performance Indexing)
 -- =============================================
@@ -214,4 +228,10 @@ CREATE INDEX IF NOT EXISTS idx_messages_chat_id_created_at_desc
 -- 文件管理
 CREATE INDEX IF NOT EXISTS idx_files_project_id ON files(project_id);
 CREATE INDEX IF NOT EXISTS idx_files_chat_id ON files(chat_id);
+
+-- 使用者回饋
+CREATE INDEX IF NOT EXISTS idx_user_feedback_user_created_at
+    ON user_feedback(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_feedback_status_created_at
+    ON user_feedback(status, created_at DESC);
 

@@ -159,7 +159,22 @@ MONGODB_URL=mongodb+srv://user:password@cluster.mongodb.net/stock_insight
 
 ---
 
-## 五、安全性核查清單（上線前確認）
+## 五、建議回饋 API 安全（`POST /api/user/feedback`）
+
+| 變數 | 預設 | 說明 |
+|------|------|------|
+| `FEEDBACK_RATE_LIMIT_MAX` | `5` | 每使用者於時間窗內最多提交次數 |
+| `FEEDBACK_RATE_LIMIT_WINDOW_MINUTES` | `10` | rate limit 時間窗（分鐘） |
+| `FEEDBACK_DUPLICATE_WINDOW_MINUTES` | `30` | 相同內容重複提交阻擋時間窗 |
+| `FEEDBACK_MIN_SUBMIT_SECONDS` | `2` | 表單開啟後最少等待秒數（防 bot） |
+| `TURNSTILE_SITE_KEY` | — | Cloudflare Turnstile 站台 key（可選） |
+| `TURNSTILE_SECRET_KEY` | — | Turnstile secret；與 site key 同時設定才啟用 CAPTCHA |
+
+未設定 Turnstile 時仍會套用 rate limit、honeypot、context 大小限制、重複內容檢查。
+
+---
+
+## 六、安全性核查清單（上線前確認）
 
 - [ ] `SECRET_KEY` 已換成 `openssl rand -hex 32` 產生的隨機值
 - [ ] `COOKIE_SECURE=true`（HTTPS 環境）
@@ -167,3 +182,4 @@ MONGODB_URL=mongodb+srv://user:password@cluster.mongodb.net/stock_insight
 - [ ] `DATABASE_URL` 密碼已更換，不使用預設 `password123`
 - [ ] `.env` 已加入 `.gitignore`，未提交至版本控制
 - [ ] `OPENAI_API_KEY` 已設定 API 使用限額（OpenAI Platform）
+- [ ] （可選）`TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY` 已設定，啟用回饋 CAPTCHA

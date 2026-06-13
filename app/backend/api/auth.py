@@ -20,10 +20,11 @@ asyncpg 語法：$1 $2 位置參數；fetchrow / fetchval / execute。
 """
 
 import os
+import re
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 from uuid import UUID
 
 import asyncpg
@@ -49,7 +50,17 @@ GOOGLE_REDIRECT_URI = os.getenv(
     "GOOGLE_OAUTH_REDIRECT_URI",
     "http://localhost:8000/api/user/auth/google/callback",
 )
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost").rstrip("/")
+_CORS_ALLOWED_ORIGINS = [
+    origin.strip().rstrip("/")
+    for origin in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+]
+# 區網 dev：允許 192.168.0.x 任意 port（與 app.py CORS regex 對齊）
+_FRONTEND_RETURN_ORIGIN_RE = re.compile(
+    r"^https?://(localhost|127\.0\.0\.1|192\.168\.0\.\d+)(:\d+)?$",
+    re.IGNORECASE,
+)
 
 _GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 _GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -68,10 +79,47 @@ class TokenRefreshResponse(BaseModel):
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _fe_error(error_code: str) -> RedirectResponse:
-    """重導到前端並帶上錯誤代碼（Query String）。"""
+def _normalize_frontend_origin(url: Optional[str]) -> Optional[str]:
+    """將 URL 正規化為 origin（scheme + host[:port]），失敗回傳 None。"""
+    if not url or not str(url).strip():
+        return None
+    try:
+        parsed = urlparse(str(url).strip())
+    except Exception:
+        return None
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return None
+    if parsed.path not in ("", "/"):
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+
+
+def _is_allowed_frontend_origin(origin: str) -> bool:
+    """只允許 FRONTEND_URL、CORS 白名單、或本機/192.168.0.* dev origin。"""
+    normalized = origin.rstrip("/")
+    if normalized == FRONTEND_URL.rstrip("/"):
+        return True
+    if normalized in _CORS_ALLOWED_ORIGINS:
+        return True
+    return bool(_FRONTEND_RETURN_ORIGIN_RE.match(normalized))
+
+
+def resolve_frontend_return_url(candidate: Optional[str]) -> str:
+    """
+    決定 OAuth 完成後要回到哪個前端 origin。
+    優先使用 start 階段帶入且通過白名單的 return_url，否則 fallback FRONTEND_URL。
+    """
+    origin = _normalize_frontend_origin(candidate)
+    if origin and _is_allowed_frontend_origin(origin):
+        return origin
+    return FRONTEND_URL.rstrip("/")
+
+
+def _fe_error(error_code: str, return_base: Optional[str] = None) -> RedirectResponse:
+    """重導到前端登入頁並帶上錯誤代碼（Query String）。"""
+    base = resolve_frontend_return_url(return_base)
     return RedirectResponse(
-        url=f"{FRONTEND_URL}/?error={error_code}",
+        url=f"{base}/login.html?error={error_code}",
         status_code=302,
     )
 
@@ -101,12 +149,13 @@ async def _issue_refresh_token(
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.get("/api/user/auth/google/start")
-async def google_start():
+async def google_start(return_url: Optional[str] = None):
     """
     啟動 Google OAuth 登入流程。
 
     產生隨機 state → 存入 HttpOnly Cookie → 302 重導到 Google 授權頁面。
-    前端只需將使用者導向此端點（或直接超連結）。
+    前端請帶 `return_url`（例如 `window.location.origin`），callback 會回到同一 origin，
+    避免區網 IP 登入後被重導到 FRONTEND_URL 預設的 localhost。
     """
     if not GOOGLE_CLIENT_ID:
         raise HTTPException(
@@ -115,6 +164,7 @@ async def google_start():
         )
 
     state = secrets.token_urlsafe(32)
+    frontend_return = resolve_frontend_return_url(return_url)
 
     params = {
         "client_id": GOOGLE_CLIENT_ID,
@@ -140,6 +190,14 @@ async def google_start():
         samesite="lax",
         max_age=600,  # 10 分鐘內完成 OAuth flow
     )
+    redirect.set_cookie(
+        key="oauth_return_url",
+        value=frontend_return,
+        httponly=True,
+        secure=COOKIE_SECURE,
+        samesite="lax",
+        max_age=600,
+    )
     return redirect
 
 
@@ -150,6 +208,7 @@ async def google_callback(
     state: Optional[str] = None,
     error: Optional[str] = None,
     oauth_state: Optional[str] = Cookie(None),
+    oauth_return_url: Optional[str] = Cookie(None),
 ):
     """
     Google OAuth Callback。
@@ -157,13 +216,15 @@ async def google_callback(
     流程：驗 state → 換 token → 取 UserInfo → Upsert user → 簽發 RT Cookie → 302 回前端。
     前端偵測到 refresh_token Cookie 後，呼叫 POST /api/user/refresh 取得 Access Token。
     """
+    frontend_base = resolve_frontend_return_url(oauth_return_url)
+
     # 0. 使用者在 Google 頁面取消授權
     if error:
-        return _fe_error("oauth_cancelled")
+        return _fe_error("oauth_cancelled", frontend_base)
 
     # 1. 防 CSRF：驗 state
     if not state or not oauth_state or state != oauth_state:
-        return _fe_error("invalid_state")
+        return _fe_error("invalid_state", frontend_base)
     # oauth_state Cookie 有 max_age=600，驗過後自然過期，無需主動刪除
 
     # 2. 用 code 換 Google Access Token
@@ -183,11 +244,11 @@ async def google_callback(
             token_data = token_resp.json()
     except httpx.HTTPError as e:
         print(f"[Google OAuth] Token exchange failed: {e}")
-        return _fe_error("token_exchange_failed")
+        return _fe_error("token_exchange_failed", frontend_base)
 
     google_at = token_data.get("access_token")
     if not google_at:
-        return _fe_error("no_access_token")
+        return _fe_error("no_access_token", frontend_base)
 
     # 3. 取 Google UserInfo（sub、email、name）
     try:
@@ -200,14 +261,14 @@ async def google_callback(
             userinfo = userinfo_resp.json()
     except httpx.HTTPError as e:
         print(f"[Google OAuth] UserInfo fetch failed: {e}")
-        return _fe_error("userinfo_failed")
+        return _fe_error("userinfo_failed", frontend_base)
 
     google_sub: Optional[str] = userinfo.get("sub")
     email: Optional[str] = userinfo.get("email")
     display_name: str = userinfo.get("name") or (email.split("@")[0] if email else "user")
 
     if not google_sub or not email:
-        return _fe_error("missing_user_info")
+        return _fe_error("missing_user_info", frontend_base)
 
     # 4. Upsert user
     now = datetime.now(timezone.utc)
@@ -284,7 +345,7 @@ async def google_callback(
 
     except Exception as e:
         print(f"[Google OAuth] DB error: {e}")
-        return _fe_error("db_error")
+        return _fe_error("db_error", frontend_base)
 
     # 5. 簽發自有 AT + RT
     user_data = {"sub": str(user["id"]), "email": user["email"]}
@@ -292,7 +353,7 @@ async def google_callback(
         rt = await _issue_refresh_token(db, user["id"], user_data)
     except RuntimeError as e:
         print(f"[Google OAuth] RT issue error: {e}")
-        return _fe_error("session_error")
+        return _fe_error("session_error", frontend_base)
 
     # 清理該使用者過期的 RT（fire-and-forget）
     await db.execute(
@@ -303,7 +364,7 @@ async def google_callback(
     # 6. 設定 HttpOnly RT Cookie 並 302 回前端
     # 注意：必須在 RedirectResponse 上直接呼叫 set_cookie，
     # 不可用 injected Response 物件——FastAPI 不會合併其 headers 到 RedirectResponse。
-    redirect = RedirectResponse(url=FRONTEND_URL, status_code=302)
+    redirect = RedirectResponse(url=f"{frontend_base}/index.html", status_code=302)
     redirect.set_cookie(
         key="refresh_token",
         value=rt,

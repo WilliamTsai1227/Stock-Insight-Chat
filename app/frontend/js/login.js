@@ -81,7 +81,7 @@ document.getElementById('google-login-btn').addEventListener('click', () => {
     btn.disabled = true;
     btn.querySelector('span').textContent = '跳轉至 Google...';
 
-    // 直接導向後端的 OAuth start 端點
-    // 後端會產生 state、設 Cookie、302 到 Google 授權頁面
-    window.location.href = `${API_BASE}/user/auth/google/start`;
+    // 帶上目前前端 origin，OAuth 完成後回到同一網址（區網 IP 不會被導到 localhost）
+    const returnUrl = encodeURIComponent(window.location.origin);
+    window.location.href = `${API_BASE}/user/auth/google/start?return_url=${returnUrl}`;
 });

@@ -216,17 +216,87 @@ function initMobileSidebar() {
     }
 }
 
+const SIDEBAR_WIDTH_MIN = 220;
+const SIDEBAR_WIDTH_MAX = 420;
+const SIDEBAR_WIDTH_DEFAULT = 260;
+const SIDEBAR_WIDTH_STORAGE_KEY = 'insight-sidebar-width';
+
+function readSidebarWidthPx() {
+    const raw = getComputedStyle(document.documentElement).getPropertyValue('--sidebar-width').trim();
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) ? n : SIDEBAR_WIDTH_DEFAULT;
+}
+
+function applySidebarWidth(px) {
+    const clamped = Math.round(Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, px)));
+    document.documentElement.style.setProperty('--sidebar-width', `${clamped}px`);
+    return clamped;
+}
+
+function initSidebarResize() {
+    const handle = document.getElementById('sidebar-resize-handle');
+    if (!handle) return;
+
+    try {
+        const saved = parseInt(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY), 10);
+        if (Number.isFinite(saved)) applySidebarWidth(saved);
+    } catch (_) { /* noop */ }
+
+    let dragging = false;
+    let startX = 0;
+    let startWidth = SIDEBAR_WIDTH_DEFAULT;
+
+    const finishResize = () => {
+        if (!dragging) return;
+        dragging = false;
+        document.body.classList.remove('sidebar-resizing');
+        try {
+            localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(readSidebarWidthPx()));
+        } catch (_) { /* noop */ }
+    };
+
+    handle.addEventListener('pointerdown', (e) => {
+        if (sidebarDrawerActive()) return;
+        if (e.button !== 0) return;
+        dragging = true;
+        startX = e.clientX;
+        startWidth = readSidebarWidthPx();
+        document.body.classList.add('sidebar-resizing');
+        handle.setPointerCapture(e.pointerId);
+        e.preventDefault();
+    });
+
+    handle.addEventListener('pointermove', (e) => {
+        if (!dragging) return;
+        applySidebarWidth(startWidth + (e.clientX - startX));
+    });
+
+    handle.addEventListener('pointerup', finishResize);
+    handle.addEventListener('pointercancel', finishResize);
+}
+
 /**
  * 點側欄進入某一則對話（含封存還原 + GET /api/chat 載入）。
  * 若在別的對話離開後「完成」並封存在 staging，unpark 即顯示，不再打 API。
+ *
+ * @param {string} chatId
+ * @param {{ projectId?: string|null }} [options]
+ *   - projectId 有傳入：同步 sidebar 專案高亮（從專案內 chat 進入時保留）
+ *   - 未傳入：清除專案選取（從「最近」等非專案入口進入）
  */
-async function navigateToChat(chatId) {
+async function navigateToChat(chatId, options = {}) {
     closeSidebarDrawer();
     const prevId = state.currentChatId;
     if (prevId === chatId) return;
 
     if (prevId && prevId !== chatId) {
         maybeParkViewportForLeavingChat(prevId);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(options, 'projectId')) {
+        state.currentProjectId = options.projectId;
+    } else {
+        state.currentProjectId = null;
     }
 
     state.currentChatId = chatId;
@@ -448,7 +518,7 @@ function updateSendButtonForStreamingState() {
 //   projects     : { id, name, created_at, updated_at }[]              ← /api/project/all 載入
 //   chats        : { [projectId]: { id, title }[] }               ← /api/project?project_id=... 載入
 //   files        : { [projectId]: File[] }                        ← 同上
-//   recentChats  : { id, title, created_at, updated_at }[]（已按 updated_at DESC）← /api/chat/all 載入
+//   recentChats  : { id, title, created_at, updated_at }[]（未在 project 內；GET /api/chat/all）
 //   pendingDeleteProject : 暫存「刪除確認 modal」要刪除的專案物件
 //   pendingDeleteChat    : 暫存「刪除聊天 modal」要刪除的 chat 物件
 //   pendingEditChat      : 暫存「重新命名 modal」要編輯的 chat 物件
@@ -968,6 +1038,7 @@ function initEventListeners() {
     });
 
     initMobileSidebar();
+    initSidebarResize();
 
     initThemeToggle();
     initResponseModeSelector();
@@ -1131,6 +1202,8 @@ function renderProjects() {
         row.appendChild(nameSpan);
         row.appendChild(menuBtn);
 
+        attachProjectDropTarget(row, p.id);
+
         row.addEventListener('click', async () => {
             closeSidebarDrawer();
             maybeParkViewportForLeavingChat(state.currentChatId);
@@ -1162,7 +1235,7 @@ function renderProjects() {
 }
 
 /**
- * 從後端載入此 user 所有 chats（已按 created_at DESC 排序），
+ * 從後端載入「最近」chats（不含已加入專案者），
  * 對應端點：GET /api/chat/all
  */
 async function loadRecentChatsFromServer() {
@@ -1176,12 +1249,14 @@ async function loadRecentChatsFromServer() {
         const json = await res.json();
         const chats = (json && json.data) ? json.data : [];
 
-        state.recentChats = chats.map(c => ({
-            id: c.id,
-            title: c.title,
-            created_at: c.created_at,
-            updated_at: c.updated_at,
-        }));
+        state.recentChats = chats
+            .filter(c => !c.project_id)
+            .map(c => ({
+                id: c.id,
+                title: c.title,
+                created_at: c.created_at,
+                updated_at: c.updated_at,
+            }));
     } catch (err) {
         console.error('載入最近聊天時發生錯誤：', err);
     } finally {
@@ -1237,9 +1312,13 @@ function renderRecentChats() {
             openChatMenu(c, menuBtn);
         });
 
+        menuBtn.setAttribute('draggable', 'false');
+
         row.appendChild(msgIcon);
         row.appendChild(titleSpan);
         row.appendChild(menuBtn);
+
+        attachRecentChatDrag(row, li, c.id);
 
         row.addEventListener('click', async () => {
             await navigateToChat(c.id);
@@ -1379,7 +1458,7 @@ function removeChatFromState(chatId) {
     }
 }
 
-function openChatMenu(chat, anchor) {
+function openChatMenu(chat, anchor, options = {}) {
     if (_activeChatPopover && _activeChatPopoverAnchor === anchor) {
         closeChatMenu();
         return;
@@ -1406,6 +1485,24 @@ function openChatMenu(chat, anchor) {
         openEditChatTitleModal(chat);
     });
     pop.appendChild(renameBtn);
+
+    if (options.projectId) {
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'project-popover-item';
+        const unlinkIcon = document.createElement('i');
+        unlinkIcon.setAttribute('data-lucide', 'folder-minus');
+        const removeLabel = document.createElement('span');
+        removeLabel.textContent = '從專案移除';
+        removeBtn.appendChild(unlinkIcon);
+        removeBtn.appendChild(removeLabel);
+        removeBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            closeChatMenu();
+            await removeChatFromProject(chat.id, options.projectId);
+        });
+        pop.appendChild(removeBtn);
+    }
 
     const delBtn = document.createElement('button');
     delBtn.type = 'button';
@@ -1446,6 +1543,245 @@ function openChatMenu(chat, anchor) {
     _activeChatPopoverAnchor = anchor;
 
     lucide.createIcons();
+}
+
+// ============================================================
+// Chat ↔ Project 關聯（拖曳加入 / 選單移除）
+// ============================================================
+
+function isChatInProject(chatId, projectId) {
+    return (state.chats[projectId] || []).some(c => String(c.id) === String(chatId));
+}
+
+function syncChatInProjectState(chatId, projectId, title) {
+    const sid = String(chatId);
+    for (const pid of Object.keys(state.chats || {})) {
+        state.chats[pid] = (state.chats[pid] || []).filter(c => String(c.id) !== sid);
+    }
+    if (projectId) {
+        if (!state.chats[projectId]) state.chats[projectId] = [];
+        state.chats[projectId].unshift({
+            id: chatId,
+            title: title || resolveChatTitleForId(chatId),
+        });
+    }
+}
+
+/** 將 chat 移出所有專案，加入「最近」側欄 state */
+function moveChatToRecentState(chatId, meta = {}) {
+    const sid = String(chatId);
+    for (const pid of Object.keys(state.chats || {})) {
+        state.chats[pid] = (state.chats[pid] || []).filter(c => String(c.id) !== sid);
+    }
+
+    const prev = (state.recentChats || []).find(c => String(c.id) === sid);
+    const entry = {
+        id: chatId,
+        title: meta.title || (prev && prev.title) || resolveChatTitleForId(chatId),
+        created_at: meta.created_at || (prev && prev.created_at) || null,
+        updated_at: meta.updated_at || (prev && prev.updated_at) || new Date().toISOString(),
+    };
+
+    state.recentChats = (state.recentChats || []).filter(c => String(c.id) !== sid);
+    state.recentChats.unshift(entry);
+    renderRecentChats();
+    lucide.createIcons();
+}
+
+/** 將 chat 從「最近」移入指定專案 state（並自 recent 移除） */
+function moveChatToProjectState(chatId, projectId, meta = {}) {
+    const sid = String(chatId);
+    state.recentChats = (state.recentChats || []).filter(c => String(c.id) !== sid);
+    syncChatInProjectState(chatId, projectId, meta.title);
+    renderRecentChats();
+    lucide.createIcons();
+}
+
+async function addChatToProject(chatId, projectId) {
+    if (isChatInProject(chatId, projectId)) {
+        showToast('這則聊天已在該專案中', 'info');
+        return;
+    }
+
+    const project = state.projects.find(p => String(p.id) === String(projectId));
+    const projectName = project ? project.name : '專案';
+
+    try {
+        const url = `${state.apiBase}/chat/project?chat_id=${encodeURIComponent(chatId)}`;
+        const res = await authFetch(url, {
+            method: 'POST',
+            body: JSON.stringify({ project_id: projectId }),
+        });
+        if (!res) return;
+
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            const detail = (data && data.detail) ? data.detail : `加入失敗（HTTP ${res.status}）`;
+            showToast(detail, 'error');
+            return;
+        }
+
+        const row = data && data.data ? data.data : {};
+        moveChatToProjectState(chatId, projectId, { title: row.title });
+
+        if (isProjectViewVisible() && state.currentProjectId === projectId) {
+            renderPvChats(state.chats[projectId] || [], projectId);
+        }
+        showToast(`已加入「${projectName}」`, 'success');
+    } catch (err) {
+        showToast(err.message || '加入專案失敗，請稍後再試', 'error');
+    }
+}
+
+async function removeChatFromProject(chatId, projectId) {
+    try {
+        const url = `${state.apiBase}/chat/project?chat_id=${encodeURIComponent(chatId)}`;
+        const res = await authFetch(url, { method: 'DELETE' });
+        if (!res) return;
+
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            const detail = (data && data.detail) ? data.detail : `移除失敗（HTTP ${res.status}）`;
+            showToast(detail, 'error');
+            return;
+        }
+
+        const row = data && data.data ? data.data : {};
+        const sid = String(chatId);
+        if (state.chats[projectId]) {
+            state.chats[projectId] = state.chats[projectId].filter(c => String(c.id) !== sid);
+        }
+
+        moveChatToRecentState(chatId, {
+            title: row.title,
+            updated_at: row.updated_at,
+        });
+
+        if (isProjectViewVisible() && state.currentProjectId === projectId) {
+            renderPvChats(state.chats[projectId] || [], projectId);
+        }
+        showToast('已從專案移除', 'success');
+    } catch (err) {
+        showToast(err.message || '移除失敗，請稍後再試', 'error');
+    }
+}
+
+const SIDEBAR_DRAG_SCROLL_EDGE_PX = 52;
+const SIDEBAR_DRAG_SCROLL_MAX_STEP = 12;
+
+let _sidebarDragScrollActive = false;
+let _sidebarDragPointerX = 0;
+let _sidebarDragPointerY = 0;
+let _sidebarDragScrollRaf = null;
+
+function getSidebarScrollEl() {
+    return document.querySelector('.sidebar-scroll');
+}
+
+function getSidebarEl() {
+    return document.querySelector('.sidebar');
+}
+
+function onDocumentDragOverForSidebarScroll(e) {
+    if (!_sidebarDragScrollActive) return;
+    _sidebarDragPointerX = e.clientX;
+    _sidebarDragPointerY = e.clientY;
+}
+
+function tickSidebarDragScroll() {
+    if (!_sidebarDragScrollActive) {
+        _sidebarDragScrollRaf = null;
+        return;
+    }
+
+    const scroller = getSidebarScrollEl();
+    const sidebar = getSidebarEl();
+    if (scroller && sidebar) {
+        const scrollRect = scroller.getBoundingClientRect();
+        const sidebarRect = sidebar.getBoundingClientRect();
+        const y = _sidebarDragPointerY;
+        const x = _sidebarDragPointerX;
+        const inSidebarColumn = x >= sidebarRect.left - 12
+            && x <= sidebarRect.right + 12
+            && y >= sidebarRect.top
+            && y <= sidebarRect.bottom;
+
+        if (inSidebarColumn) {
+            if (y < scrollRect.top + SIDEBAR_DRAG_SCROLL_EDGE_PX) {
+                const dist = scrollRect.top + SIDEBAR_DRAG_SCROLL_EDGE_PX - y;
+                const intensity = Math.min(1, dist / SIDEBAR_DRAG_SCROLL_EDGE_PX);
+                scroller.scrollTop -= SIDEBAR_DRAG_SCROLL_MAX_STEP * Math.max(0.3, intensity);
+            } else if (y > scrollRect.bottom - SIDEBAR_DRAG_SCROLL_EDGE_PX) {
+                const dist = y - (scrollRect.bottom - SIDEBAR_DRAG_SCROLL_EDGE_PX);
+                const intensity = Math.min(1, dist / SIDEBAR_DRAG_SCROLL_EDGE_PX);
+                scroller.scrollTop += SIDEBAR_DRAG_SCROLL_MAX_STEP * Math.max(0.3, intensity);
+            }
+        }
+    }
+
+    _sidebarDragScrollRaf = requestAnimationFrame(tickSidebarDragScroll);
+}
+
+function startSidebarDragScroll(clientX, clientY) {
+    _sidebarDragPointerX = clientX;
+    _sidebarDragPointerY = clientY;
+    if (_sidebarDragScrollActive) return;
+    _sidebarDragScrollActive = true;
+    document.addEventListener('dragover', onDocumentDragOverForSidebarScroll);
+    if (!_sidebarDragScrollRaf) {
+        _sidebarDragScrollRaf = requestAnimationFrame(tickSidebarDragScroll);
+    }
+}
+
+function stopSidebarDragScroll() {
+    _sidebarDragScrollActive = false;
+    document.removeEventListener('dragover', onDocumentDragOverForSidebarScroll);
+    if (_sidebarDragScrollRaf) {
+        cancelAnimationFrame(_sidebarDragScrollRaf);
+        _sidebarDragScrollRaf = null;
+    }
+}
+
+function attachRecentChatDrag(row, li, chatId) {
+    row.setAttribute('draggable', 'true');
+    row.addEventListener('dragstart', (e) => {
+        if (e.target.closest('.project-row-menu-btn')) {
+            e.preventDefault();
+            return;
+        }
+        e.dataTransfer.setData('text/chat-id', String(chatId));
+        e.dataTransfer.effectAllowed = 'move';
+        li.classList.add('is-dragging');
+        startSidebarDragScroll(e.clientX, e.clientY);
+    });
+    row.addEventListener('dragend', () => {
+        li.classList.remove('is-dragging');
+        stopSidebarDragScroll();
+        document.querySelectorAll('.project-row.drop-target').forEach((el) => {
+            el.classList.remove('drop-target');
+        });
+    });
+}
+
+function attachProjectDropTarget(row, projectId) {
+    row.addEventListener('dragover', (e) => {
+        if (!e.dataTransfer.types.includes('text/chat-id')) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        row.classList.add('drop-target');
+    });
+    row.addEventListener('dragleave', (e) => {
+        if (row.contains(e.relatedTarget)) return;
+        row.classList.remove('drop-target');
+    });
+    row.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        row.classList.remove('drop-target');
+        const chatId = e.dataTransfer.getData('text/chat-id');
+        if (!chatId) return;
+        await addChatToProject(chatId, projectId);
+    });
 }
 
 function closeChatMenu() {
@@ -2060,14 +2396,13 @@ function renderPvChats(chats, projectId) {
 
         menuBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            openChatMenu(c, menuBtn);
+            openChatMenu(c, menuBtn, { projectId });
         });
 
         li.appendChild(menuBtn);
 
         li.addEventListener('click', async () => {
-            state.currentProjectId = projectId;
-            await navigateToChat(c.id);
+            await navigateToChat(c.id, { projectId });
         });
 
         list.appendChild(li);
@@ -2609,14 +2944,14 @@ async function sendMessage() {
                     id: newChat.id,
                     title: newChat.title,
                 });
+            } else {
+                // 僅非專案 chat 出現在「最近」
+                state.recentChats.unshift({
+                    id: newChat.id,
+                    title: newChat.title,
+                    created_at: newChat.created_at,
+                });
             }
-
-            // 同步加入「最近」清單最前面（無論是否屬於 project）
-            state.recentChats.unshift({
-                id: newChat.id,
-                title: newChat.title,
-                created_at: newChat.created_at,
-            });
 
             renderProjects();
             renderRecentChats();
@@ -3433,3 +3768,13 @@ function appendCopyBar(msgDiv, rawText, sources, options) {
         });
     });
 }
+
+/** 供建議回饋自動附帶當前頁面上下文（auth.js 會讀取） */
+window.getFeedbackPageContext = function () {
+    return {
+        chat_id: state.currentChatId || null,
+        project_id: state.currentProjectId || null,
+        chat_mode: typeof chatMode !== 'undefined' ? chatMode : null,
+        response_mode: typeof chatResponseMode !== 'undefined' ? chatResponseMode : null,
+    };
+};

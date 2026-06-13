@@ -547,14 +547,14 @@ RDS (PostgreSQL) — 獨立
 S3 — research docs
 ```
 
-**步驟：**
+**詳細操作步驟（Docker Hub pull、compose prod、.env、更新 rollback）請見 [`ec2_deploy.md`](./ec2_deploy.md)。**
+
+**摘要：**
 
 1. 開 `t3.large` EC2（Private subnet + ALB 轉發）
-2. 安裝 Docker，clone repo，改 compose：
-   - 移除 `db` service，改連 RDS endpoint
-   - `qdrant` 保留，volume 掛 EBS
-3. ALB 規則同 §6.2
-4. 其餘 WAF / Route 53 / ACM 相同
+2. 本機 build 映像 push Docker Hub；EC2 **不 clone repo**，只放 `docker-compose.prod.yml` + `.env`
+3. RDS 獨立；compose 內含 backend / frontend / qdrant
+4. ALB 規則同 §6.2
 
 **缺點：** EC2 掛了就全掛；後續務必遷移到 ECS Fargate。
 
