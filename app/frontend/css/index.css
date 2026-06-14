@@ -406,6 +406,8 @@ body.sidebar-resizing {
 
 .toast.error   { border-left-color: #ff6363; }
 .toast.success { border-left-color: #00d68f; }
+.toast.warning { border-left-color: #f59e0b; }
+.toast.info    { border-left-color: var(--text-dim); }
 
 .toast i {
     width: 16px;
@@ -415,6 +417,8 @@ body.sidebar-resizing {
 
 .toast.error   i { color: #ff6363; }
 .toast.success i { color: #00d68f; }
+.toast.warning i { color: #f59e0b; }
+.toast.info    i { color: var(--text-dim); }
 
 .toast-msg { flex: 1; line-height: 1.4; }
 
@@ -846,6 +850,39 @@ body.sidebar-resizing {
     font-size: 0.85rem;
     line-height: 1.5;
     color: #a1a1aa;
+}
+
+.quota-error-feedback-btn {
+    align-self: flex-start;
+    margin-top: 0.15rem;
+    padding: 0.45rem 0.85rem;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.06);
+    color: #e4e4e7;
+    font-family: inherit;
+    font-size: 0.82rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s, color 0.2s;
+}
+
+.quota-error-feedback-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.28);
+    color: #fafafa;
+}
+
+body.light-theme .quota-error-feedback-btn {
+    border-color: #d4d4d8;
+    background: #f4f4f5;
+    color: #3f3f46;
+}
+
+body.light-theme .quota-error-feedback-btn:hover {
+    background: #e4e4e7;
+    border-color: #a1a1aa;
+    color: #18181b;
 }
 
 /* ============================================
@@ -2101,6 +2138,19 @@ textarea:disabled {
     font-size: 0.875rem;
     color: var(--text-dim);
     line-height: 1.5;
+    font-weight: 400;
+}
+
+.feedback-reward-hint {
+    margin: 0.5rem 0 0;
+    font-size: 0.8rem;
+    color: var(--accent);
+    line-height: 1.5;
+    font-weight: 500;
+}
+
+.feedback-reward-hint.is-muted {
+    color: var(--text-dim);
     font-weight: 400;
 }
 

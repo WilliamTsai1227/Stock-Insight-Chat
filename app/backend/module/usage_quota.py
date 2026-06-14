@@ -65,34 +65,40 @@ def quota_exceeded_detail(
 async def ensure_quota_row_exists(user_id: UUID) -> None:
     """舊帳號可能尚無 `user_usage_quotas` 列時補上一筆（與註冊流程一致）。"""
     async with get_pool().acquire() as conn:
-        await conn.execute(
-            """
-            INSERT INTO user_usage_quotas (user_id, current_period_start, used_tokens)
-            VALUES ($1, date_trunc('month', NOW() AT TIME ZONE 'UTC'), 0)
-            ON CONFLICT (user_id) DO NOTHING
-            """,
-            user_id,
-        )
+        await ensure_quota_row_on_conn(conn, user_id)
 
 
-async def fetch_quota_status(user_id: UUID) -> QuotaStatus:
-    """讀取目前用量與當月上限（含 tier 名稱供除錯／日誌）。"""
-    async with get_pool().acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            SELECT
-                COALESCE(q.used_tokens, 0)::bigint AS used_tokens,
-                COALESCE(st.monthly_token_limit, $2::bigint)::bigint AS monthly_limit,
-                st.name AS tier_name,
-                q.current_period_start
-            FROM users u
-            LEFT JOIN subscription_tiers st ON st.id = u.tier_id
-            LEFT JOIN user_usage_quotas q ON q.user_id = u.id
-            WHERE u.id = $1
-            """,
-            user_id,
-            DEFAULT_FALLBACK_MONTHLY_LIMIT,
-        )
+async def ensure_quota_row_on_conn(conn: asyncpg.Connection, user_id: UUID) -> None:
+    await conn.execute(
+        """
+        INSERT INTO user_usage_quotas (user_id, current_period_start, used_tokens)
+        VALUES ($1, date_trunc('month', NOW() AT TIME ZONE 'UTC'), 0)
+        ON CONFLICT (user_id) DO NOTHING
+        """,
+        user_id,
+    )
+
+
+async def fetch_quota_status_on_conn(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+) -> QuotaStatus:
+    """在既有 transaction / connection 上讀取配額（與 fetch_quota_status 邏輯相同）。"""
+    row = await conn.fetchrow(
+        """
+        SELECT
+            COALESCE(q.used_tokens, 0)::bigint AS used_tokens,
+            COALESCE(st.monthly_token_limit, $2::bigint)::bigint AS monthly_limit,
+            st.name AS tier_name,
+            q.current_period_start
+        FROM users u
+        LEFT JOIN subscription_tiers st ON st.id = u.tier_id
+        LEFT JOIN user_usage_quotas q ON q.user_id = u.id
+        WHERE u.id = $1
+        """,
+        user_id,
+        DEFAULT_FALLBACK_MONTHLY_LIMIT,
+    )
     if row is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -104,6 +110,12 @@ async def fetch_quota_status(user_id: UUID) -> QuotaStatus:
         row["tier_name"],
         row["current_period_start"],
     )
+
+
+async def fetch_quota_status(user_id: UUID) -> QuotaStatus:
+    """讀取目前用量與當月上限（含 tier 名稱供除錯／日誌）。"""
+    async with get_pool().acquire() as conn:
+        return await fetch_quota_status_on_conn(conn, user_id)
 
 
 async def assert_preflight_llm_quota(user_id: UUID) -> None:

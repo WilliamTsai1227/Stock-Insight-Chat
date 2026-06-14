@@ -21,6 +21,13 @@ from app.backend.module.feedback_security import (
     public_feedback_config,
     run_pre_insert_checks,
 )
+from app.backend.module.feedback_rewards import (
+    FEEDBACK_TOKEN_REWARD,
+    apply_feedback_token_reward,
+    build_feedback_success_payload,
+    get_feedback_eligibility,
+    public_feedback_reward_config,
+)
 from app.backend.module.usage_quota import (
     DEFAULT_FALLBACK_MONTHLY_LIMIT,
     compute_quota_resets_at,
@@ -109,6 +116,23 @@ class SubmitFeedbackResponse(BaseModel):
     id: str
     status: str
     created_at: str
+    tokens_granted: int = 0
+    used_tokens: int = 0
+    monthly_token_limit: int = 0
+    remaining_tokens: int = 0
+    quota_exhausted: bool = False
+    submissions_today: int = 0
+    remaining_today: int = 0
+    daily_max: int = 3
+
+
+class FeedbackEligibilityResponse(BaseModel):
+    submissions_today: int
+    remaining_today: int
+    daily_max: int
+    token_reward: int
+    daily_timezone: str
+    can_submit_today: bool
 
 
 def _serialize_user_profile(row: asyncpg.Record, quota: Optional[dict] = None) -> dict:
@@ -225,8 +249,20 @@ async def get_my_usage_stats(
 
 @router.get("/api/public/feedback-config")
 async def get_feedback_public_config():
-    """前端建議回饋表單：Turnstile site key 與防刷設定（無需登入）。"""
-    return public_feedback_config()
+    """前端建議回饋表單：Turnstile site key、防刷與 Token 獎勵規則（無需登入）。"""
+    return {
+        **public_feedback_config(),
+        **public_feedback_reward_config(),
+    }
+
+
+@router.get("/api/user/feedback/eligibility", response_model=FeedbackEligibilityResponse)
+async def get_feedback_eligibility_status(
+    db: asyncpg.Connection = Depends(get_db),
+    current_user: asyncpg.Record = Depends(get_current_user),
+):
+    """目前登入使用者今日尚可提交幾次建議回饋。"""
+    return await get_feedback_eligibility(db, current_user["id"])
 
 
 @router.post("/api/user/feedback", status_code=status.HTTP_201_CREATED, response_model=SubmitFeedbackResponse)
@@ -247,8 +283,10 @@ async def submit_feedback(
     - 401         : 未登入
     - 409         : 短時間內重複相同內容
     - 422         : 欄位驗證失敗
-    - 429         : 提交過於頻繁
+    - 429         : 提交過於頻繁，或今日回饋次數已達上限（`feedback_daily_limit`）
     - 500         : 伺服器錯誤（不含 DB 細節）
+
+    成功提交後：寫入 `user_feedback.tokens_granted`，並從 `user_usage_quotas.used_tokens` 扣除獎勵 Token。
     """
     user_id = current_user["id"]
     now_utc = datetime.now(timezone.utc)
@@ -267,33 +305,47 @@ async def submit_feedback(
     )
 
     try:
-        row = await db.fetchrow(
-            """
-            INSERT INTO user_feedback
-                (user_id, category, message, page_url, user_agent, context, status, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6::jsonb, 'new', $7, $7)
-            RETURNING id, status, created_at
-            """,
-            user_id,
-            body.category,
-            body.message,
-            safe_page_url,
-            safe_user_agent,
-            json.dumps(ctx, ensure_ascii=False),
-            now_utc,
-        )
+        result = None
+        async with db.transaction():
+            row = await db.fetchrow(
+                """
+                INSERT INTO user_feedback
+                    (user_id, category, message, page_url, user_agent, context,
+                     status, tokens_granted, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb, 'new', $7, $8, $8)
+                RETURNING id, status, created_at
+                """,
+                user_id,
+                body.category,
+                body.message,
+                safe_page_url,
+                safe_user_agent,
+                json.dumps(ctx, ensure_ascii=False),
+                FEEDBACK_TOKEN_REWARD,
+                now_utc,
+            )
+            new_used = await apply_feedback_token_reward(db, user_id, FEEDBACK_TOKEN_REWARD)
+            logger.info(
+                "feedback reward granted user_id=%s tokens=%s used_tokens_after=%s",
+                user_id,
+                FEEDBACK_TOKEN_REWARD,
+                new_used,
+            )
+            result = await build_feedback_success_payload(
+                db,
+                user_id,
+                feedback_id=str(row["id"]),
+                feedback_status=row["status"],
+                created_at=row["created_at"].isoformat(),
+                tokens_granted=FEEDBACK_TOKEN_REWARD,
+            )
+        return result
     except asyncpg.PostgresError as e:
         logger.exception("submit_feedback database error user_id=%s", user_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to submit feedback. Please try again later.",
         ) from e
-
-    return {
-        "id": str(row["id"]),
-        "status": row["status"],
-        "created_at": row["created_at"].isoformat(),
-    }
 
 
 @router.delete("/api/user")

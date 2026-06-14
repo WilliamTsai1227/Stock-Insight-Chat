@@ -2139,6 +2139,7 @@ function showToast(message, type = 'info', duration = 4000) {
     const icon = document.createElement('i');
     const iconName = type === 'error'   ? 'alert-circle'
                   : type === 'success' ? 'check-circle-2'
+                  : type === 'warning' ? 'clock'
                   : 'info';
     icon.setAttribute('data-lucide', iconName);
 
@@ -2754,8 +2755,9 @@ function renderQuotaExceededInBubble(bubble, used, limit, quotaResetsAt) {
 
     const hint = document.createElement('p');
     hint.className = 'quota-error-hint';
-    hint.textContent =
-        '升級 Pro 或 Ultra 方案可獲得更高上限，或等待下個計費週期重置。';
+    hint.textContent = typeof window.formatFeedbackRewardHintText === 'function'
+        ? window.formatFeedbackRewardHintText()
+        : '每次提交建議回饋可獲得 2,500 Token，每天最多 3 次。';
 
     wrap.appendChild(title);
     wrap.appendChild(barWrap);
@@ -2770,6 +2772,15 @@ function renderQuotaExceededInBubble(bubble, used, limit, quotaResetsAt) {
         resetEl.className = 'quota-error-hint';
         resetEl.textContent = resetLabel;
         wrap.appendChild(resetEl);
+    }
+
+    if (typeof openFeedbackModal === 'function') {
+        const feedbackBtn = document.createElement('button');
+        feedbackBtn.type = 'button';
+        feedbackBtn.className = 'quota-error-feedback-btn';
+        feedbackBtn.textContent = '填寫建議回饋';
+        feedbackBtn.addEventListener('click', () => openFeedbackModal());
+        wrap.appendChild(feedbackBtn);
     }
     bubble.appendChild(wrap);
 }
@@ -2808,6 +2819,23 @@ async function refreshUserQuotaFromServer() {
         console.error('Failed to refresh user quota:', err);
     }
 }
+
+/** 回饋獎勵後若配額已低於上限，移除對話區的配額用盡提示卡 */
+function clearQuotaExceededBubblesIfUnlocked() {
+    const user = typeof getUser === 'function' ? getUser() : null;
+    if (!user || user.quota_exhausted === true) return;
+
+    const container = document.getElementById('chat-messages');
+    if (!container) return;
+
+    container.querySelectorAll('.message.ai .quota-error-card').forEach((card) => {
+        const msg = card.closest('.message.ai');
+        if (msg && msg.parentNode) msg.parentNode.removeChild(msg);
+    });
+}
+
+window.refreshUserQuotaFromServer = refreshUserQuotaFromServer;
+window.clearQuotaExceededBubblesIfUnlocked = clearQuotaExceededBubblesIfUnlocked;
 
 /**
  * @param {number} httpStatus

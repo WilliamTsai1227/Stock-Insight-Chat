@@ -198,6 +198,7 @@ erDiagram
 | user_agent | TEXT | NULLABLE | 瀏覽器 User Agent 字串（前端自動帶入，最多 512 字元） |
 | context | JSONB | DEFAULT `'{}'` | 送出當下的頁面情境快照（前端自動帶入） |
 | status | VARCHAR(20) | NOT NULL, DEFAULT `'new'` | 回饋處理狀態（見下方列舉） |
+| tokens_granted | BIGINT | NOT NULL, DEFAULT `0` | 本次回饋發放的 Token 獎勵（正常提交為 2500；供每日次數稽核） |
 | created_at | TIMESTAMPTZ | DEFAULT CURRENT_TIMESTAMP | 使用者第一次送出的時間 |
 | updated_at | TIMESTAMPTZ | DEFAULT CURRENT_TIMESTAMP | 這筆回饋最後一次被修改的時間 |
 

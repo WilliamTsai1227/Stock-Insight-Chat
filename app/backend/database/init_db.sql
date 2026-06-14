@@ -180,6 +180,7 @@ CREATE TABLE IF NOT EXISTS user_feedback (
     user_agent TEXT,
     context JSONB DEFAULT '{}',
     status VARCHAR(20) NOT NULL DEFAULT 'new',
+    tokens_granted BIGINT NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );

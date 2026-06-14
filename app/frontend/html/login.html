@@ -84,13 +84,38 @@
 
                 <p class="sso-note">
                     <i data-lucide="lock" style="width:12px;height:12px;vertical-align:middle;margin-right:4px;"></i>
-                    系統僅支援 Google 帳號登入，安全且無需設定密碼
+                    系統支援 Google 帳號登入，無需設定密碼
+                </p>
+
+                <p class="legal-consent">
+                    繼續表示您同意我們的
+                    <button type="button" class="legal-link" id="terms-link" data-legal="terms">服務條款</button>
+                    與
+                    <button type="button" class="legal-link" id="privacy-link" data-legal="privacy">隱私條款</button>
                 </p>
             </div>
         </div>
     </div>
 
+    <!-- 服務條款 / 隱私條款 Modal -->
+    <div class="legal-modal-overlay hidden" id="legal-modal" role="dialog" aria-modal="true" aria-labelledby="legal-modal-title">
+        <div class="legal-modal-card">
+            <div class="legal-modal-header">
+                <h3 id="legal-modal-title"></h3>
+                <button type="button" class="legal-modal-close" id="legal-modal-close" aria-label="關閉">
+                    <i data-lucide="x"></i>
+                </button>
+            </div>
+            <p class="legal-modal-updated" id="legal-modal-updated"></p>
+            <div class="legal-modal-body" id="legal-modal-body"></div>
+            <div class="legal-modal-footer">
+                <button type="button" class="legal-modal-btn" id="legal-modal-ok">我了解了</button>
+            </div>
+        </div>
+    </div>
+
     <script src="/js/api-config.js"></script>
+    <script src="/js/legal-content.js"></script>
     <script src="/js/login.js"></script>
     <script>lucide.createIcons();</script>
 </body>

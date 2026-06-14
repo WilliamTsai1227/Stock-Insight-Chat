@@ -49,11 +49,105 @@ const OAUTH_ERROR_MESSAGES = {
     session_error:        '無法建立登入 Session，請稍後再試。',
 };
 
+// ── 服務條款 / 隱私條款 Modal ───────────────────────────────────
+
+function appendFormattedText(parent, text) {
+    const parts = text.split(/(\*\*[^*]+\*\*)/g);
+    parts.forEach((part) => {
+        if (!part) return;
+        if (part.startsWith('**') && part.endsWith('**')) {
+            const strong = document.createElement('strong');
+            strong.textContent = part.slice(2, -2);
+            parent.appendChild(strong);
+        } else {
+            parent.appendChild(document.createTextNode(part));
+        }
+    });
+}
+
+function renderLegalBody(container, sections) {
+    while (container.firstChild) container.removeChild(container.firstChild);
+
+    sections.forEach((section) => {
+        const sec = document.createElement('section');
+        const h4 = document.createElement('h4');
+        h4.textContent = section.heading;
+        sec.appendChild(h4);
+
+        section.paragraphs.forEach((para) => {
+            const p = document.createElement('p');
+            appendFormattedText(p, para);
+            sec.appendChild(p);
+        });
+
+        container.appendChild(sec);
+    });
+}
+
+function closeLegalModal() {
+    const modal = document.getElementById('legal-modal');
+    if (!modal) return;
+    modal.classList.add('hidden');
+    document.body.style.overflow = '';
+}
+
+function openLegalModal(type) {
+    if (typeof LEGAL_CONTENT === 'undefined' || !LEGAL_CONTENT[type]) return;
+
+    const data = LEGAL_CONTENT[type];
+    const modal = document.getElementById('legal-modal');
+    const titleEl = document.getElementById('legal-modal-title');
+    const updatedEl = document.getElementById('legal-modal-updated');
+    const bodyEl = document.getElementById('legal-modal-body');
+
+    if (!modal || !titleEl || !updatedEl || !bodyEl) return;
+
+    titleEl.textContent = data.title;
+    updatedEl.textContent = `最後更新：${data.updated}`;
+    renderLegalBody(bodyEl, data.sections);
+
+    modal.classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+
+    const closeBtn = document.getElementById('legal-modal-close');
+    if (closeBtn) closeBtn.focus();
+}
+
+function initLegalModals() {
+    document.querySelectorAll('.legal-link[data-legal]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            openLegalModal(btn.getAttribute('data-legal'));
+        });
+    });
+
+    const closeBtn = document.getElementById('legal-modal-close');
+    const okBtn = document.getElementById('legal-modal-ok');
+    const modal = document.getElementById('legal-modal');
+
+    if (closeBtn) closeBtn.addEventListener('click', closeLegalModal);
+    if (okBtn) okBtn.addEventListener('click', closeLegalModal);
+
+    if (modal) {
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) closeLegalModal();
+        });
+    }
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && modal && !modal.classList.contains('hidden')) {
+            closeLegalModal();
+        }
+    });
+}
+
 // ── 偵測 OAuth callback 錯誤 ─────────────────────────────────────
 // 若 Google SSO 失敗，後端會把錯誤代碼帶在 ?error= 重導回登入頁
 window.addEventListener('DOMContentLoaded', () => {
     initUiTheme();
     initThemeToggle();
+    initLegalModals();
     if (typeof lucide !== 'undefined') lucide.createIcons();
 
     // 已登入則直接跳主頁

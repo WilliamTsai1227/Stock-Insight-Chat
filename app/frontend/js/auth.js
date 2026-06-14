@@ -517,6 +517,139 @@ function resetFeedbackTurnstileAfterError() {
     updateFeedbackSubmitState();
 }
 
+function getFeedbackRewardDefaults() {
+    return {
+        tokenReward: (feedbackConfig && feedbackConfig.token_reward) || 2500,
+        dailyMax: (feedbackConfig && feedbackConfig.daily_max) || 3,
+    };
+}
+
+function formatFeedbackRewardHintText() {
+    const { tokenReward, dailyMax } = getFeedbackRewardDefaults();
+    const rewardFmt = tokenReward.toLocaleString('zh-TW');
+    return `每次提交建議回饋可獲得 ${rewardFmt} Token，每天最多 ${dailyMax} 次。`;
+}
+
+const FEEDBACK_DAILY_LIMIT_MSG = '本日提交已達上限';
+
+function showFeedbackDailyLimitToast() {
+    if (typeof showToast === 'function') {
+        showToast(FEEDBACK_DAILY_LIMIT_MSG, 'warning');
+    }
+}
+
+function getFeedbackApiErrorDetail(data) {
+    const detail = data && data.detail;
+    if (detail && typeof detail === 'object' && !Array.isArray(detail)) return detail;
+    if (typeof detail === 'string') return { message: detail };
+    return null;
+}
+
+window.formatFeedbackRewardHintText = formatFeedbackRewardHintText;
+
+async function refreshFeedbackRewardHint() {
+    const hintEl = document.getElementById('feedback-reward-hint');
+    const submitBtn = document.getElementById('feedback-submit-btn');
+    if (!hintEl) return;
+
+    hintEl.hidden = false;
+    hintEl.className = 'feedback-reward-hint';
+    hintEl.textContent = formatFeedbackRewardHintText();
+
+    if (typeof authFetch !== 'function' || typeof AUTH_API === 'undefined') return;
+
+    try {
+        const res = await authFetch(`${AUTH_API}/user/feedback/eligibility`);
+        if (!res || !res.ok) return;
+        const data = await res.json();
+        const remaining = Number(data.remaining_today);
+        if (Number.isFinite(remaining) && remaining <= 0) {
+            hintEl.classList.add('is-muted');
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.textContent = '本日已達上限';
+            }
+            showFeedbackDailyLimitToast();
+        } else if (submitBtn) {
+            submitBtn.textContent = '傳給我們';
+        }
+    } catch (_) { /* noop */ }
+}
+
+function syncUserQuotaFromFeedbackResponse(data) {
+    if (!data || typeof data !== 'object') return;
+    try {
+        const raw = localStorage.getItem('user');
+        if (!raw) return;
+        const user = JSON.parse(raw);
+        if (typeof data.used_tokens === 'number') user.used_tokens = data.used_tokens;
+        if (typeof data.monthly_token_limit === 'number') {
+            user.monthly_token_limit = data.monthly_token_limit;
+        }
+        if (typeof data.remaining_tokens === 'number') {
+            user.remaining_tokens = data.remaining_tokens;
+        }
+        if (typeof data.quota_exhausted === 'boolean') {
+            user.quota_exhausted = data.quota_exhausted;
+        }
+        localStorage.setItem('user', JSON.stringify(user));
+        if (typeof applyUserTierBadge === 'function') applyUserTierBadge(user);
+        if (typeof updateSendButtonForStreamingState === 'function') {
+            updateSendButtonForStreamingState();
+        }
+    } catch (_) { /* noop */ }
+}
+
+function buildFeedbackSuccessToast(data) {
+    const granted = Number(data && data.tokens_granted);
+    const hasRewardFields = Number.isFinite(granted) && granted > 0
+        && typeof data.used_tokens === 'number';
+
+    if (!hasRewardFields) {
+        return '收到了，謝謝你！若配額未更新，請重新整理頁面或確認後端已部署最新版本。';
+    }
+
+    const grantedFmt = granted.toLocaleString('zh-TW');
+    const remainingFmt = Number(data.remaining_tokens).toLocaleString('zh-TW');
+
+    if (data.quota_exhausted === false) {
+        return `收到了，謝謝你！已增加 ${grantedFmt} Token，目前尚可再用 ${remainingFmt} Token。`;
+    }
+
+    const { dailyMax, tokenReward } = getFeedbackRewardDefaults();
+    const remainingToday = Number(data.remaining_today);
+    if (Number.isFinite(remainingToday) && remainingToday > 0) {
+        return (
+            `已增加 ${grantedFmt} Token，但本月仍超出上限。` +
+            `今日還可再提交 ${remainingToday} 次回饋（每次 ${tokenReward.toLocaleString('zh-TW')} Token）。`
+        );
+    }
+    return (
+        `已增加 ${grantedFmt} Token，但本月仍超出上限。` +
+        `今日回饋次數已用完（每天最多 ${dailyMax} 次），請明天再試。`
+    );
+}
+
+async function handleFeedbackSubmitSuccess(data) {
+    syncUserQuotaFromFeedbackResponse(data);
+
+    if (typeof refreshUserQuotaFromServer === 'function') {
+        await refreshUserQuotaFromServer();
+        // 避免 GET /user 覆蓋剛發放的配額（舊版後端或快取時序）
+        if (Number(data.tokens_granted) > 0 && typeof data.used_tokens === 'number') {
+            syncUserQuotaFromFeedbackResponse(data);
+        }
+    }
+
+    if (typeof clearQuotaExceededBubblesIfUnlocked === 'function') {
+        clearQuotaExceededBubblesIfUnlocked();
+    }
+
+    if (typeof showToast === 'function') {
+        showToast(buildFeedbackSuccessToast(data), data.quota_exhausted === false ? 'success' : 'error');
+    }
+}
+
 function collectFeedbackContext() {
     const ctx = {};
     if (typeof window.getFeedbackPageContext === 'function') {
@@ -606,6 +739,7 @@ function openFeedbackModal() {
 
     updateFeedbackSubmitState();
     mountFeedbackTurnstile();
+    refreshFeedbackRewardHint();
     if (modal) modal.classList.add('show');
     if (typeof lucide !== 'undefined') lucide.createIcons();
     setTimeout(() => { if (msgEl) msgEl.focus(); }, 100);
@@ -661,6 +795,20 @@ async function submitFeedback() {
         const data = await res.json().catch(() => ({}));
 
         if (!res.ok) {
+            const errDetail = getFeedbackApiErrorDetail(data);
+            if (res.status === 429 && errDetail && errDetail.code === 'feedback_daily_limit') {
+                showFeedbackDailyLimitToast();
+                if (feedbackMsg) {
+                    feedbackMsg.textContent = '';
+                    feedbackMsg.className = 'modal-msg';
+                }
+                if (submitBtn) {
+                    submitBtn.disabled = true;
+                    submitBtn.textContent = '本日已達上限';
+                }
+                resetFeedbackTurnstileAfterError();
+                return;
+            }
             const detail = parseFeedbackApiDetail(data, '傳送失敗，稍後再試試');
             if (feedbackMsg) {
                 feedbackMsg.textContent = detail;
@@ -674,9 +822,7 @@ async function submitFeedback() {
         }
 
         closeAllModals();
-        if (typeof showToast === 'function') {
-            showToast('收到了，謝謝你！', 'success');
-        }
+        await handleFeedbackSubmitSuccess(data);
     } catch (err) {
         if (feedbackMsg) {
             feedbackMsg.textContent = err.message || '好像連不上，稍後再試試';

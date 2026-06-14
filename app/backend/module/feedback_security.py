@@ -15,6 +15,8 @@ import asyncpg
 import httpx
 from fastapi import HTTPException, Request, status
 
+from app.backend.module.feedback_rewards import assert_daily_feedback_limit
+
 # --- 可透過 .env 調整 ---
 FEEDBACK_RATE_LIMIT_MAX = int(os.getenv("FEEDBACK_RATE_LIMIT_MAX", "5"))
 FEEDBACK_RATE_LIMIT_WINDOW_MINUTES = int(
@@ -288,6 +290,7 @@ async def run_pre_insert_checks(
     assert_honeypot_empty(website)
     assert_min_form_duration(form_opened_at)
     await verify_turnstile(captcha_token, request)
+    await assert_daily_feedback_limit(db, user_id)
     await assert_feedback_rate_limit(db, user_id)
     await assert_not_duplicate_feedback(db, user_id, message)
 

@@ -169,8 +169,12 @@ MONGODB_URL=mongodb+srv://user:password@cluster.mongodb.net/stock_insight
 | `FEEDBACK_MIN_SUBMIT_SECONDS` | `2` | 表單開啟後最少等待秒數（防 bot） |
 | `TURNSTILE_SITE_KEY` | — | Cloudflare Turnstile 站台 key（可選） |
 | `TURNSTILE_SECRET_KEY` | — | Turnstile secret；與 site key 同時設定才啟用 CAPTCHA |
+| `FEEDBACK_DAILY_MAX` | `3` | 每位使用者每曆日最多提交建議回饋次數 |
+| `FEEDBACK_TOKEN_REWARD` | `2500` | 每次成功提交發放的 Token 獎勵（從 `used_tokens` 扣除） |
+| `FEEDBACK_DAILY_TIMEZONE` | `Asia/Taipei` | 計算「每日」次數上限的時區 |
 
-未設定 Turnstile 時仍會套用 rate limit、honeypot、context 大小限制、重複內容檢查。
+未設定 Turnstile 時仍會套用 rate limit、honeypot、context 大小限制、重複內容檢查。  
+成功提交回饋後會自動發放 Token；每日次數見 `FEEDBACK_DAILY_MAX`。部署既有 DB 需執行 migration `V008__user_feedback_tokens_granted.sql`。
 
 ---
 
