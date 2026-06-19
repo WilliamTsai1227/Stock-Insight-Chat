@@ -3,11 +3,19 @@
 [![Dynamic Design](https://img.shields.io/badge/Design-Premium-FF69B4?style=for-the-badge)](https://github.com/WilliamTsai1227/Stock-Insight-Chat)
 [![Technology Stack](https://img.shields.io/badge/Stack-AI--Native-007ACC?style=for-the-badge)](https://github.com/WilliamTsai1227/Stock-Insight-Chat)
 
-> **股市洞察生成式聊天系統** —— 結合即時新聞、AI 產業分析與企業財報的智慧對話助手。
+> **Insight AI Workspace** —— 一般對話、即時網路搜尋，以及股市 Agent（新聞 RAG、AI 產業分析、標的推薦）的智慧對話平台。
 
 ##  系統概覽
 
-Stock Insight Chat 是一套專為投資者設計的 AI 智能對話系統。它不僅能理解使用者的提問，更能主動調用專業工具，從海量的新聞數據與 AI 分析報告中檢索關鍵片段（RAG），並結合企業歷史財報，提供具備深度見解的投資分析。
+Stock Insight Chat（Insight）提供三種對話模式：
+
+| 模式 | `chat_mode` | 說明 |
+| :--- | :--- | :--- |
+| **一般對話** | `general` | 直連 LLM；可選 Tavily 即時搜尋（依意圖改寫，必要時才搜） |
+| **股市 Agent（思考）** | `stock_agent` + `response_mode=thinking` | LangGraph Router + Analyst，多輪工具與 RAG |
+| **股市 Agent（快捷）** | `stock_agent` + `response_mode=flash` | 單輪新聞向量檢索 + 輕量 Analyst |
+
+股市 Agent 可主動調用專業工具，從 Qdrant 向量庫檢索新聞與 AI 分析片段（RAG），並產出投資分析報告。
 
 ---
 
@@ -17,7 +25,7 @@ Stock Insight Chat 是一套專為投資者設計的 AI 智能對話系統。它
 
 ### 後端架構重構（`app/backend/api/chat.py`）
 
-- **`asyncio.Queue` 生產者–消費者模式**：`POST /api/chat/messages` 以背景任務 **`background_agent_runner()`**（生產者）執行 LangGraph（`agent_app.astream_events`）、將 SSE 事件寫入 **`event_queue`**；**`event_generator()`**（消費者）僅負責 `yield` 佇列內容。Agent 回合與 HTTP 串流生命週期解耦。
+- **`asyncio.Queue` 生產者–消費者模式**：`POST /api/chat/messages` 依 `chat_mode` 啟動 **`background_general_runner()`**（一般對話）或 **`background_agent_runner()`**（股市 Agent），將 SSE 事件寫入 **`event_queue`**；**`event_generator()`**（消費者）僅負責 `yield` 佇列內容。LLM 回合與 HTTP 串流生命週期解耦。
 - **前端斷線仍完成持久化**：消費者若因 **`asyncio.CancelledError`**（例如瀏覽器關閉連線）結束，**不會終止**已 `create_task` 的背景任務；生產者仍會跑到圖走完，並呼叫 **`_insert_assistant_message`** 等將助理訊息寫入 **PostgreSQL**，最後以 **`event_queue.put(None)`** 作為結束標記。
 
 示意（節錄，`app/backend/api/chat.py`）：
@@ -85,7 +93,7 @@ async def event_generator():
 **核心洞察**：Router 的工作只是「判斷要叫哪些工具」與「工具是否找到資料」，不需要閱讀完整對話脈絡；Analyst 才需要完整歷史來撰寫分析報告。因此建立 **雙軌保護架構**：
 
 ```
-ToolMessage（精簡 800 chars）  → state["messages"]      → Router 判斷用（slim context）
+ToolMessage（精簡，預設 MAX_TOOL_ITEM_CHARS=500）→ state["messages"] → Router 判斷用（slim context）
 原始完整資料                    → state["retrieved_data"] → Analyst 分析用（完整正文）
 ```
 
@@ -110,8 +118,8 @@ ToolMessage（精簡 800 chars）  → state["messages"]      → Router 判斷�
      HumanMsg | AIMsg(calls=A) |                       | AIMsg(calls=B) | ToolMsg_B1
    ```
 
-3. **`MAX_TOOL_ITEM_CHARS`：`1200` → `800`**（`app/backend/agent/chat.py`）  
-   ToolMessage 的截斷上限再降；Router 只需確認「有無找到資料」，截斷版已足夠。Analyst 透過 `retrieved_data` 拿到未截斷原文，分析品質不變。
+3. **`MAX_TOOL_ITEM_CHARS` 預設 `500`**（`app/backend/agent/chat.py`，可經 `.env` 覆寫）  
+   ToolMessage 的截斷上限；Router 只需確認「有無找到資料」，截斷版已足夠。Analyst 透過 `retrieved_data` 拿到未截斷原文，分析品質不變。
 
 4. **`CONTEXT_CHAIN_MAX_HOPS` 預設值：`10` → `6`**（`app/backend/module/chat_context.py`）  
    從 DB 載出的歷史訊息數量上限降低。**注意**：若 `.env` 已設定此變數（如 `CONTEXT_CHAIN_MAX_HOPS=2`），則 `.env` 值優先，程式碼預設值不生效。
@@ -169,6 +177,17 @@ ToolMessage（精簡 800 chars）  → state["messages"]      → Router 判斷�
 
 ---
 
+### 一般對話：必要時才網路搜尋（`chat_mode=general`）
+
+`_rewrite_search_query()`（`app/backend/api/chat.py`）在呼叫 Tavily 前，以小模型判斷是否需即時／查證資料：
+
+- **不搜**（`__NO_SEARCH__`）：常識、程式、數學、翻譯、寫作、純聊天
+- **才搜**：時事、票價、活動、最新政策、需查證的事實
+
+改寫失敗或回傳空字串時**保守跳過搜尋**，不再 fallback 至原始 user query。開關：`GENERAL_CHAT_ENABLE_WEB_SEARCH`（預設 `1`）。
+
+---
+
 ##  快速開始 (Quick Start)
 
 
@@ -179,16 +198,13 @@ ToolMessage（精簡 800 chars）  → state["messages"]      → Router 判斷�
 - **主頁**: [http://localhost/index.html](http://localhost/index.html)
 - **後端健康檢查**: [http://localhost:8000/](http://localhost:8000/)
 
-#### 測試帳號 (Development Only)
-> [!WARNING]
-> 以下帳號僅供本機/開發測試使用，請勿用於正式環境或公開部署。
-
-- **Username**: `test`
-- **Email**: `test@mail.com`
-- **Password**: `1qaz!QAZ`
+#### 登入方式
+本專案僅支援 **Google SSO**（`login.html` → `/api/user/auth/google/start`）。請在 `.env` 設定 `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`、`GOOGLE_OAUTH_REDIRECT_URI` 與 `FRONTEND_URL`（詳見 `specifications/google_sso.md`）。
 
 ### 1. 啟動基礎設施
-透過 Docker Compose 啟動 Qdrant 向量資料庫與 PostgreSQL（請在**專案根目錄**執行，即與 `./deploy/` 同層）：
+透過 Docker Compose 啟動 **backend、Qdrant、frontend**（請在**專案根目錄**執行）：
+
+> **PostgreSQL**：`deploy/docker-compose.yml` 內的本機 `db` 服務預設已註解；請在專案根目錄 `.env` 設定 **`DATABASE_URL`** 指向外部 PostgreSQL（例如 AWS RDS）。完整變數說明見 [`specifications/env.md`](specifications/env.md)。
 
 ```bash
 # 一般啟動（會沿用現有映像；若 Dockerfile 無變更就不會重做映像）
@@ -226,21 +242,19 @@ docker-compose -f ./deploy/docker-compose.yml stop
 docker-compose -f ./deploy/docker-compose.yml down
 ```
 
-#### 重置本機 PostgreSQL（重新執行 `init_db.sql`）
+#### 資料庫初始化與 Migration
 
-PostgreSQL 官方映像**只在資料目錄為空的首次初始化**時，會執行 `docker-entrypoint-initdb.d` 內掛載的 `app/backend/database/init_db.sql`。若本機曾啟動過 Compose 並保留了具名 volume（例如 `db_data`），之後即使執行 `docker-compose … up --build`，**也不會再自動重跑**該腳本。
-
-當你可以接受**清空本機資料庫與相關持久化資料**時，可先刪除 volumes 再啟動，讓 Postgres 重新初始化並套用 `init_db.sql`：
+- **新環境**：對 `DATABASE_URL` 指向的 PostgreSQL 執行 `app/backend/database/init_db.sql`。
+- **既有環境**：依序套用 `app/backend/database/migrations/` 內的 SQL（如 `V005`～`V008`）。
+- **本機若仍啟用 Compose 內 `db` 服務**：Postgres 官方映像僅在**空資料目錄首次啟動**時執行 `init_db.sql`；保留 volume 時 `up --build` **不會**重跑初始化。
 
 ```bash
-docker-compose -f ./deploy/docker-compose.yml down -v
-docker-compose -f ./deploy/docker-compose.yml up --build -d
+# 範例：對 RDS 或本機 Postgres 套用 migration
+psql "$DATABASE_URL" -f app/backend/database/migrations/V008__user_feedback_tokens_granted.sql
 ```
 
 > [!WARNING]
-> `down -v` 會一併刪除 Compose 檔案中宣告的**所有具名 volume**（含 `db_data` 與 Qdrant 的 `qdrant_storage` 等），向量與對話資料都會消失。僅在開發環境且確認可重建資料時使用。
-
-**不建議**在每次「小幅度更新專案或 schema」都執行上述流程；日常 schema 演進應以 migration 或受控 SQL 更新為主，避免誤刪正式或需保留的資料。
+> `docker-compose … down -v` 會刪除 Compose 宣告的具名 volume（含 Qdrant 的 `qdrant_storage`），向量資料會消失。日常 schema 演進請用 migration，勿輕易清空 volume。
 
 ### 1-1. 重啟後端服務 (Restarting Backend)
 若你修改了後端程式碼（如 `chat.py` 或 `news.py`），需要重新構建 Image 並重啟容器：
@@ -251,18 +265,32 @@ docker-compose -f ./deploy/docker-compose.yml up -d --build backend
 > 使用 `--build` 參數確保 Docker 讀取最新的程式碼變動。
 
 ### 2. 環境設定
-在專案根目錄建立或編輯 `.env` 檔案，確保包含以下必要的配置：
+在專案根目錄建立或編輯 `.env` 檔案（完整清單見 [`specifications/env.md`](specifications/env.md)），至少需包含：
 ```bash
 # AI Provider
 OPENAI_API_KEY=sk-your-key-here
 
-# MongoDB (資料來源)
-MONGO_URI=mongodb://localhost:27017
+# PostgreSQL（必填；Compose 內 db 已註解時由 .env 注入 backend）
+DATABASE_URL=postgresql://user:password@host:5432/Insight
+
+# MongoDB（新聞／分析文稿來源；news.py 用 MONGO_URI，ai_analysis.py 用 MONGODB_URL）
+MONGO_URI=mongodb+srv://...
+MONGODB_URL=mongodb+srv://...
 MONGO_DB=stock_insight
 
-# Qdrant (向量目標)
+# Qdrant（本機 Docker 時 compose 已設 QDRANT_HOST=qdrant，直跑 Python 時用 localhost）
 QDRANT_HOST=localhost
 QDRANT_PORT=6333
+
+# Google SSO（登入必填）
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+GOOGLE_OAUTH_REDIRECT_URI=http://localhost/api/user/auth/google/callback
+FRONTEND_URL=http://localhost
+
+# 一般對話即時搜尋（選用；需 TAVILY_API_KEY）
+# GENERAL_CHAT_ENABLE_WEB_SEARCH=1
+# TAVILY_API_KEY=...
 
 # ── 快捷模式（選用）：檢索前「問句收成」用小模型 ──詳見下方 #### 快捷模式 小節
 # （程式預設收成關閉。若要開啟：取消下列三行前綴 `#`）
@@ -474,21 +502,22 @@ python3 app/backend/scripts/setup_qdrant.py --reset
 ---
 
 ## 🧪 測試工具 (Testing)
-本專案提供後端工具函式的自動化測試，確保檢索邏輯正常：
+本專案提供後端 API 與工具的自動化測試：
 ```bash
-# 執行所有工具測試
-pytest test/backend/tools/ -s
+# API 測試（需可連線的後端與有效 JWT／測試環境）
+pytest test/backend/api/ -s
 
-# 或執行個別測試
-# 1. 新聞檢索測試
-pytest test/backend/tools/test_news_tool.py -s
-# 2. AI 分析報告測試
-pytest test/backend/tools/test_ai_analysis_tool.py -s
-# 3. 推薦標的提取測試 (New)
-python test/backend/tools/test_recommendations_tool.py
-# 4. Agent 綜合對話測試
+# 新聞工具單元測試
+pytest test/backend/test_news.py -s
+
+# Prompt injection 安全測試（對 live /api/chat/messages）
+python test/prompt_injection_test.py
+
+# Agent 綜合對話（本機互動，非 pytest）
 python app/backend/agent/chat.py
 ```
+
+> 舊路徑 `test/backend/tools/` 已不存在；若文件仍引用該目錄，請改用上列指令。
 
 ---
 
@@ -583,7 +612,7 @@ flowchart TD
     G --> G2["keywords MatchValue\n如 '台積電'"]
     G --> G3["stock_names MatchValue\n如 '台積電'"]
 
-    F1 & F2 & G1 & G2 & G3 --> H["Qdrant search_groups\nCollection: news\ngroup_by: mongo_id\ngroup_size: 2\nlimit: top_k=10"]
+    F1 & F2 & G1 & G2 & G3 --> H["Qdrant search_groups\nCollection: news\ngroup_by: mongo_id\ngroup_size: 2\nlimit: top_k=5（RETRIEVAL_TOP_K）"]
 
     H --> I{score >= 0.3?}
     I -- 否 --> J[捨棄低分 chunk]
@@ -608,7 +637,7 @@ flowchart TD
     E --> E3["industry_list MatchValue\n⚠️ 精確匹配產業字串\n如 '半導體'"]
     E --> E4["chunk_type\n❌ Tool 層未傳入\n永遠不過濾"]
 
-    E1 & E2 & E3 & E4 --> F["Qdrant search_groups\nCollection: ai_analysis\ngroup_by: mongo_id\ngroup_size: 2\nlimit: top_k=10"]
+    E1 & E2 & E3 & E4 --> F["Qdrant search_groups\nCollection: ai_analysis\ngroup_by: mongo_id\ngroup_size: 2\nlimit: top_k=5（RETRIEVAL_TOP_K）"]
 
     F --> G{score >= 0.3?}
     G -- 否 --> H[捨棄]
@@ -631,7 +660,7 @@ flowchart TD
     E --> E1["publishAt DatetimeRange\nstart_date ~ end_date"]
     E --> E2["chunk_type = 'stock_insight'\n⚠️ Hardcoded，不可由 LLM 更改"]
 
-    E1 & E2 --> F["Qdrant search\nCollection: ai_analysis\n無 group_by 聚合\nlimit: top_k=10"]
+    E1 & E2 --> F["Qdrant search\nCollection: ai_analysis\n無 group_by 聚合\nlimit: top_k=5（RETRIEVAL_TOP_K）"]
 
     F --> G["逐筆解析 stock_list\n格式: list of lists\n如 ['tw', '6515', '穎崴']"]
     G --> H["彙整去重\nrecommended_stocks set\nrecommended_industries set"]
@@ -646,7 +675,8 @@ flowchart TD
 
 *   **後端系統**: Python FastAPI (非同步架構)
 *   **向量檢索**: Qdrant (Rust-based Vector Database)
-*   **數據儲存**: MongoDB Atlas (雲端全文存儲) & PostgreSQL (對話狀態管理)
+*   **數據儲存**: MongoDB（新聞／分析文稿來源）& PostgreSQL（使用者、對話、配額）
+*   **即時搜尋**: Tavily（一般對話可選）
 *   **AI 核心**: OpenAI GPT-5 & GPT-5 mini (雙模型架構)
 *   **工作排程**: LangGraph (Agent 邏輯編排與狀態隔離)
 *   **文本切分**: LangChain `RecursiveCharacterTextSplitter` (語意段落感知)
@@ -782,7 +812,7 @@ sequenceDiagram
     User->>API: 受保護 API（帶過期 AT）
     API-->>User: 401 Unauthorized
 
-    User->>API: POST /user/refresh（Cookie 自動帶 RT）
+    User->>API: POST /api/user/refresh（Cookie 自動帶 RT）
     API->>API: 1. 驗證 RT 簽名與 exp（pure stateless，不查 DB）
 
     API->>DB: 2. DELETE FROM refresh_tokens WHERE token = RT AND expires_at > NOW() RETURNING user_id
@@ -817,7 +847,7 @@ sequenceDiagram
     participant DB as PostgreSQL
 
     Note over User, DB: 登出（只撤銷目前這台裝置的 RT）
-    User->>API: POST /user/logout（Cookie 自動帶 RT）
+    User->>API: POST /api/user/logout（Cookie 自動帶 RT）
     API->>DB: DELETE FROM refresh_tokens WHERE token = RT
     DB-->>API: 刪除成功（此 RT 永久失效）
     API-->>User: Set-Cookie: refresh_token（Max-Age=0 清除） ＋ 200 OK
@@ -830,41 +860,62 @@ sequenceDiagram
 
 ##  核心 API 規範 (Messaging API)
 
-本系統的核心 API 採用高度透明的設計，提供完整的執行軌跡與效能數據。
+本系統以 **SSE（Server-Sent Events）** 串流回應，並提供完整執行軌跡與效能數據。詳細規格見 [`specifications/api_spec.md`](specifications/api_spec.md)。
 
-### 1. 發送訊息與分析 (`getAIResponse`)
-- **Endpoint**: `POST /api/getAIResponse`
-- **功能**: 啟動 LangGraph 雙模型工作流，進行搜尋與投資分析。
+### 1. 建立對話 (`POST /api/chat`)
+
+先建立 chat 取得 **`chat_id`**（必填），再送訊息。
+
+**Request Body**：
+```json
+{
+  "query": "台積電最新動向",
+  "project_id": null
+}
+```
+
+**Response** `201`：`{ "id": "uuid", "title": "…", "created_at": "…" }`
+
+### 2. 發送訊息與分析 (`POST /api/chat/messages`)
+
+- **Endpoint**: `POST /api/chat/messages`
+- **Header**: `Authorization: Bearer <access_token>`
+- **Content-Type**: `application/json`
+- **Response**: `text/event-stream`（SSE）
 
 #### **Request Body (JSON)**
 | 參數名稱 | 型別 | 必填 | 說明 |
 | :--- | :--- | :--- | :--- |
-| `query` | string | 是 | 使用者的問題內容。 |
-| `chat_id` | string | 否 | 傳入 UUID 以延續對話上下文；若為 `null` 則啟動新 session。 |
-| `agent_config` | object | 否 | 包含 `enabled_tools` (list)，若為空則由 Agent 自行判斷工具。 |
+| `query` | string | 是 | 使用者問題。 |
+| `chat_id` | UUID | 是 | 由 `POST /api/chat` 取得。 |
+| `chat_mode` | string | 否 | `general`（一般對話）或 `stock_agent`（股市 Agent，預設）。 |
+| `response_mode` | string | 否 | `chat_mode=stock_agent` 時：`thinking`（LangGraph，預設）或 `flash`（快捷）。 |
+| `agent_config` | object | 否 | 含 `enabled_tools`（list）；空則由 Agent 自行判斷。 |
 
 #### **範例請求**
 ```json
 {
   "query": "近期台積電表現如何？",
-  "chat_id": null,
+  "chat_id": "550e8400-e29b-41d4-a716-446655440000",
+  "chat_mode": "stock_agent",
+  "response_mode": "thinking",
   "agent_config": {
     "enabled_tools": ["search_stock_news", "get_market_recommendations"]
   }
 }
 ```
 
-#### **Response Body (JSON)**
-| 欄位名稱 | 說明 |
+#### **SSE 事件類型**
+| event | 說明 |
 | :--- | :--- |
-| `status` | 請求狀態 (`success` / `error`)。 |
-| `chat_id` | 本次對話的 UUID，前端後續應帶回此 ID 以延續語境。 |
-| `total_execution_time` | API 總執行耗時（秒）。 |
-| `steps` | **核心執行軌跡 (ReAct Trace)**：包含所有 Router 的思考過程與 Analyst 的生成內容。 |
-| `final_content` | 最後一個分析節點產出的報告內容（快捷讀區）。 |
-| `retrieval_sources` | 條列本次檢索到的所有原始來源 Metadata (含 ID, URL, Preview)。 |
+| `thinking` | Router 思考片段（股市 Agent） |
+| `tool_start` / `tool_done` | 工具開始／完成（含 `tavily_global_search` 等） |
+| `token` | LLM 逐字輸出 |
+| `title_update` | 首則訊息時 LLM 產出的正式標題 |
+| `done` | 完成；`data` 含 `final_content`、`steps`、`retrieval_sources`、`total_execution_time` |
+| `error` | 錯誤訊息 |
 
-#### **ReAct 執行範例 (以台積電化學公司偵測為例)**
+#### **ReAct 執行範例（股市 Agent）**
 當問題較為複雜時，Agent 會啟動多次思考循環：
 1. **Step 1 (Router)**: 搜尋台積電供應商名單。
 2. **Step 2 (Router)**: 針對名單中的「台灣化學纖維」再次進行精確風險搜尋（ReAct）。
@@ -891,8 +942,8 @@ sequenceDiagram
 
 ### 2. 歷史讀取策略 (Context Loading)
 為了避免超出 LLM Token 上限，系統結合 **滑動視窗** 與 **動態摘要**：
-1.  **遞迴回溯 (Recursive CTE)**：後端不使用 `ORDER BY created_at` 盲目撈取，而是從「最新的訊息」沿著 `parent_id` 往上遞迴 (最多 10 層)，撈出純淨無干擾（不含被放棄的分支）的對話邏輯鏈。
-2.  **動態摘要注入 (`chats.summary`)**：對於超過 10 則的舊歷史，系統會在背景產生精短摘要寫回 `chats` 表，並作為 Context 的第一句話送給 LLM。
+1.  **遞迴回溯 (Recursive CTE)**：後端不使用 `ORDER BY created_at` 盲目撈取，而是從「最新的訊息」沿著 `parent_id` 往上遞迴（上限由 **`CONTEXT_CHAIN_MAX_HOPS`** 控制，程式預設 `6`），撈出純淨無干擾（不含被放棄的分支）的對話邏輯鏈。
+2.  **動態摘要注入 (`chats.summary`)**：對於超出載入範圍的舊歷史，系統可在背景產生精短摘要寫回 `chats` 表，並作為 Context 的第一句話送給 LLM。
 
 ---
 
@@ -959,7 +1010,7 @@ sequenceDiagram
 *   **精準過濾 (Payload Filtering)**:
     *   `news` collection: 支援 `publishAt` (時間)、`stock_codes` (股票代碼)、`type` (新聞類型) 過濾
     *   `ai_analysis` collection: 支援 `publishAt` (時間)、`chunk_type` (語意角色)、`sentiment_label` (情緒)、`industry_list` (產業) 過濾
-*   **智慧 chunk_type 路由**: `search_recommendations` 工具自動鎖定 `chunk_type=stock_insight`，精準命中潛力標的分析。
+*   **智慧 chunk_type 路由**：`get_market_recommendations` 工具自動鎖定 `chunk_type=stock_insight`，精準命中潛力標的分析。
 *   **輸出**: 回傳 Top-K 個不重複的文章/報告，每篇附帶完整 metadata。
 
 ### 2. 第二階段：全文提領 (MongoDB)
@@ -1070,7 +1121,7 @@ docker-compose -f ./deploy/docker-compose.yml exec db \
   psql -U postgres -d Insight \
   -f - < app/backend/database/migrations/V006__quota_reset_logs.sql
 
-# 或 RDS／任意連線
+# 或 RDS／任意連線（推薦）
 psql "$DATABASE_URL" -f app/backend/database/migrations/V006__quota_reset_logs.sql
 ```
 
@@ -1184,8 +1235,11 @@ class UsageManager:
 - [x] search_groups 聚合去重
 - [x] Batch Embedding + Dry Run 預覽
 - [x] LangGraph Agent 核心邏輯實現 (支援 ReAct 模式)
+- [x] 一般對話模式 + Tavily 意圖改寫（必要時才搜尋）
+- [x] Google SSO 登入（移除 email/password 表單）
+- [x] 建議回饋 + Token 獎勵（`user_feedback`、每日上限）
 - [x] 前端對話介面開發 (Vanilla JS + HTML/CSS 玻璃擬態設計)
 - [x] Router Context Explosion 修復（slim context + 雙軌保護架構，Router tokens ↓ ~75%）
 
 ---
-*Last Update: 2026-05-19*
+*Last Update: 2026-06-10*
