@@ -32,11 +32,11 @@ services:
   qdrant:
     image: qdrant/qdrant:latest
     restart: always
-    mem_limit: 3g
+    mem_limit: 1g
     deploy:
       resources:
         limits:
-          memory: 3G
+          memory: 1G
     ports:
       - "6333:6333"
     volumes:

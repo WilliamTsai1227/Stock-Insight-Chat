@@ -1,5 +1,7 @@
 # EC2 / 生產環境：從 Docker Hub pull 映像，不在伺服器上 build。
 #
+# 架構：前端靜態檔部署於 AWS S3 + Cloudflare；EC2 僅跑 backend + qdrant。
+#
 # EC2 上建議目錄結構：
 #   /opt/stock-insight/
 #   ├── docker-compose.prod.yml   ← 本檔（或 symlink）
@@ -13,11 +15,12 @@
 #   docker compose -f docker-compose.prod.yml pull
 #   docker compose -f docker-compose.prod.yml up -d
 #
-# 本機 build & push 範例（在專案根目錄）：
+# 本機 build & push 範例（在專案根目錄，僅 backend）：
 #   docker build -f deploy/backend.Dockerfile -t ${DOCKERHUB_USER}/stock-insight-backend:${IMAGE_TAG} .
 #   docker push ${DOCKERHUB_USER}/stock-insight-backend:${IMAGE_TAG}
-#   docker build -f deploy/frontend.Dockerfile -t ${DOCKERHUB_USER}/stock-insight-frontend:${IMAGE_TAG} .
-#   docker push ${DOCKERHUB_USER}/stock-insight-frontend:${IMAGE_TAG}
+#
+# 前端請另行上傳至 S3，並由 Cloudflare 提供 CDN / DNS / HTTPS。
+# 前端需設定 window.STOCK_INSIGHT_API_BASE 指向後端 API（例如 https://api.example.com/api）。
 
 services:
   backend:
@@ -30,31 +33,23 @@ services:
       # DATABASE_URL、OPENAI_API_KEY 等由 .env 注入（生產環境指向 AWS RDS）
     depends_on:
       - qdrant
-    # 前方有 ALB 做 /api/* → backend 時，不必對外暴露 8000
-    # ports:
-    #   - "8000:8000"
+    ports:
+      - "8000:8000"
+    # Security Group 僅允許 Cloudflare / ALB 來源，勿對 0.0.0.0/0 全開
 
   qdrant:
     image: qdrant/qdrant:latest
     restart: always
-    mem_limit: 3g
+    mem_limit: 1g
     deploy:
       resources:
         limits:
-          memory: 3G
+          memory: 1G
     volumes:
       - qdrant_storage:/qdrant/storage
     # 僅 docker network 內存取；勿對外開 6333
     # ports:
     #   - "6333:6333"
-
-  frontend:
-    image: ${DOCKERHUB_USER}/stock-insight-frontend:${IMAGE_TAG}
-    restart: always
-    ports:
-      - "80:80"
-    depends_on:
-      - backend
 
 volumes:
   qdrant_storage:
