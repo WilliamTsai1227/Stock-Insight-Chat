@@ -1,10 +1,12 @@
 # EC2 / 生產環境：從 Docker Hub pull 映像，不在伺服器上 build。
 #
-# 架構：前端靜態檔部署於 AWS S3 + Cloudflare；EC2 僅跑 backend + qdrant。
+# 架構：前端靜態檔部署於 AWS S3 + Cloudflare；EC2 跑 nginx + backend + qdrant。
 #
 # EC2 上建議目錄結構：
 #   /opt/stock-insight/
 #   ├── docker-compose.prod.yml   ← 本檔（或 symlink）
+#   ├── nginx/
+#   │   └── ec2-api.conf          ← 從 repo deploy/nginx/ 複製
 #   └── .env                      ← DATABASE_URL、API keys 等（勿 commit）
 #
 # 映像名稱由環境變數決定（可寫在 .env 或 export）：
@@ -16,15 +18,18 @@
 #   docker compose -f docker-compose.prod.yml up -d
 #
 # 本機 build & push 範例（在專案根目錄，僅 backend）：
-#   docker build -f deploy/backend.Dockerfile -t ${DOCKERHUB_USER}/stock-insight-backend:${IMAGE_TAG} .
-#   docker push ${DOCKERHUB_USER}/stock-insight-backend:${IMAGE_TAG}
+#   docker build -f deploy/backend.Dockerfile -t ${DOCKERHUB_USER}/insight-chat-backend:${IMAGE_TAG} .
+#   docker push ${DOCKERHUB_USER}/insight-chat-backend:${IMAGE_TAG}
 #
 # 前端請另行上傳至 S3，並由 Cloudflare 提供 CDN / DNS / HTTPS。
 # 前端需設定 window.STOCK_INSIGHT_API_BASE 指向後端 API（例如 https://api.example.com/api）。
+#
+# 對外流量：Cloudflare → nginx (:80) → backend（docker network，不暴露 8000）
+# Security Group 僅開 80/443（建議僅 Cloudflare IP）；勿對外開 8000
 
 services:
   backend:
-    image: ${DOCKERHUB_USER}/stock-insight-backend:${IMAGE_TAG}
+    image: ${DOCKERHUB_USER}/insight-chat-backend:${IMAGE_TAG}
     restart: always
     env_file:
       - .env
@@ -33,9 +38,17 @@ services:
       # DATABASE_URL、OPENAI_API_KEY 等由 .env 注入（生產環境指向 AWS RDS）
     depends_on:
       - qdrant
+    # 不 bind host port；僅 nginx 經 docker network 存取
+
+  nginx:
+    image: nginx:stable-alpine
+    restart: always
     ports:
-      - "8000:8000"
-    # Security Group 僅允許 Cloudflare / ALB 來源，勿對 0.0.0.0/0 全開
+      - "80:80"
+    volumes:
+      - ./nginx/ec2-api.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend
 
   qdrant:
     image: qdrant/qdrant:latest
