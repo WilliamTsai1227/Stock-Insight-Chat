@@ -40,15 +40,15 @@ services:
       - qdrant
     # 不 bind host port；僅 nginx 經 docker network 存取
 
-  nginx:
-    image: nginx:stable-alpine
-    restart: always
-    ports:
-      - "80:80"
-    volumes:
-      - ./nginx/ec2-api.conf:/etc/nginx/conf.d/default.conf:ro
-    depends_on:
-      - backend
+  # nginx:
+  #   image: nginx:stable-alpine
+  #   restart: always
+  #   ports:
+  #     - "80:80"
+  #   volumes:
+  #     - ./nginx/ec2-api.conf:/etc/nginx/conf.d/default.conf:ro
+  #   depends_on:
+  #     - backend
 
   qdrant:
     image: qdrant/qdrant:latest
