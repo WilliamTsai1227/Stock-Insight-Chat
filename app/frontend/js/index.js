@@ -3083,7 +3083,7 @@ async function sendMessage() {
             })
         });
 
-        if (!response) return;  // authFetch 已處理 401 → 跳轉 login.html
+        if (!response) return;  // authFetch 已處理 401 → 跳轉 /login
         if (!response.ok) {
             if (response.status === 429) {
                 await refreshUserQuotaFromServer();

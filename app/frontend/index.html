@@ -4,6 +4,18 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0">
     <title>Insight | AI Workspace</title>
+    <script>
+        // 快速跳轉：無登入快取且非 OAuth 回跳（?sso=1）時直接去登入頁，避免主頁閃現。
+        // 真正的登入驗證仍由 auth.js 的 tryRefreshToken() 把關。
+        (function () {
+            try {
+                if (!localStorage.getItem('user') &&
+                    !new URLSearchParams(location.search).has('sso')) {
+                    location.replace('/login');
+                }
+            } catch (_) {}
+        })();
+    </script>
     <link rel="stylesheet" href="/css/index.css">
     <!-- Google Fonts: Outfit & Inter -->
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">

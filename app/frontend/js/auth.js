@@ -157,7 +157,7 @@ async function tryRefreshToken() {
 async function authFetch(url, options = {}) {
     let token = getAccessToken();
     if (!token) {
-        window.location.href = 'login.html';
+        window.location.href = '/login';
         return;
     }
 
@@ -213,7 +213,7 @@ async function logout() {
         // 靜默失敗（離線登出也要能清本地狀態）
     }
     localStorage.removeItem('user');
-    window.location.href = 'login.html';
+    window.location.href = '/login';
 }
 
 
@@ -951,7 +951,7 @@ async function confirmDeleteAccount() {
         setTimeout(() => {
             clearAccessToken();
             localStorage.removeItem('user');
-            window.location.href = 'login.html';
+            window.location.href = '/login';
         }, 2000);
     } catch {
         msgEl.textContent = '無法連線至伺服器';
@@ -990,8 +990,13 @@ window.addEventListener('DOMContentLoaded', async () => {
     const ok = await tryRefreshToken();
     if (!ok) {
         localStorage.removeItem('user');
-        window.location.href = 'login.html';
+        window.location.href = '/login';
         return;
+    }
+
+    // OAuth 回跳會帶 ?sso=1（讓 index.html 的快速跳轉檢查放行），驗證成功後清掉保持網址乾淨
+    if (new URLSearchParams(window.location.search).has('sso')) {
+        window.history.replaceState({}, '', window.location.pathname);
     }
 
     // 每次進入主頁同步 profile（含訂閱方案名稱），並更新 localStorage

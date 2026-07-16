@@ -119,7 +119,7 @@ def _fe_error(error_code: str, return_base: Optional[str] = None) -> RedirectRes
     """重導到前端登入頁並帶上錯誤代碼（Query String）。"""
     base = resolve_frontend_return_url(return_base)
     return RedirectResponse(
-        url=f"{base}/login.html?error={error_code}",
+        url=f"{base}/login?error={error_code}",
         status_code=302,
     )
 
@@ -364,7 +364,8 @@ async def google_callback(
     # 6. 設定 HttpOnly RT Cookie 並 302 回前端
     # 注意：必須在 RedirectResponse 上直接呼叫 set_cookie，
     # 不可用 injected Response 物件——FastAPI 不會合併其 headers 到 RedirectResponse。
-    redirect = RedirectResponse(url=f"{frontend_base}/index.html", status_code=302)
+    # ?sso=1 讓 index.html 的快速跳轉檢查放行（此時前端 localStorage 尚無 user）
+    redirect = RedirectResponse(url=f"{frontend_base}/?sso=1", status_code=302)
     redirect.set_cookie(
         key="refresh_token",
         value=rt,

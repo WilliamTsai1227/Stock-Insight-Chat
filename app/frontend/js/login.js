@@ -152,7 +152,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
     // 已登入則直接跳主頁
     if (localStorage.getItem('user')) {
-        window.location.href = 'index.html';
+        window.location.href = '/';
         return;
     }
 
