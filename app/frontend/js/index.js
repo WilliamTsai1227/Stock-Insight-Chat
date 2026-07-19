@@ -1037,6 +1037,11 @@ function initEventListeners() {
         closeSidebarDrawer();
     });
 
+    document.getElementById('explore-btn').addEventListener('click', () => {
+        showExploreView();
+        closeSidebarDrawer();
+    });
+
     initMobileSidebar();
     initSidebarResize();
 
@@ -2303,6 +2308,7 @@ async function submitCreateProject() {
  *   - 兩者皆未提供時      : 退化為僅顯示 hero（向後相容）
  */
 function showProjectView(project, options = {}) {
+    hideExploreView();
     const main = document.querySelector('.main-content');
     if (main) main.classList.add('project-view-mode');
     document.getElementById('chat-messages').style.display  = 'none';
@@ -2510,11 +2516,43 @@ function setActivePvTab(tab) {
 
 /** 切回聊天視圖 */
 function showChatView() {
+    hideExploreView();
     document.getElementById('project-view').style.display   = 'none';
     const main = document.querySelector('.main-content');
     if (main) main.classList.remove('project-view-mode');
     document.getElementById('chat-messages').style.display  = '';
     document.querySelector('.chat-input-area').style.display = '';
+}
+
+/**
+ * 顯示探索視圖（iframe 嵌入 Kinetic Charts）。
+ * 首次開啟才設定 iframe src（lazy load，不進探索頁的使用者不會打到 kinetic）；
+ * 之後只切換顯示狀態，iframe 不卸載，圖表與畫線狀態得以保留。
+ */
+function showExploreView() {
+    maybeParkViewportForLeavingChat(state.currentChatId);
+
+    const frame = document.getElementById('explore-frame');
+    if (!frame.src) frame.src = resolveStockInsightExploreUrl();
+
+    document.getElementById('chat-messages').style.display  = 'none';
+    document.getElementById('project-view').style.display   = 'none';
+    const main = document.querySelector('.main-content');
+    if (main) main.classList.remove('project-view-mode');
+    document.querySelector('.chat-input-area').style.display = 'none';
+    document.getElementById('explore-view').style.display    = 'flex';
+
+    document.getElementById('explore-btn').classList.add('active');
+    setMainChatTitle('探索');
+    updateSendButtonForStreamingState();
+}
+
+/** 離開探索視圖（僅隱藏，iframe 保留） */
+function hideExploreView() {
+    const view = document.getElementById('explore-view');
+    if (view) view.style.display = 'none';
+    const btn = document.getElementById('explore-btn');
+    if (btn) btn.classList.remove('active');
 }
 
 function clearChatMessages() {

@@ -166,6 +166,17 @@ body.sidebar-resizing {
     color: var(--accent);
 }
 
+/* 探索按鈕：沿用 .new-chat-btn 外觀，僅補選中狀態 */
+.explore-btn.active {
+    background: var(--card-bg);
+    border-color: rgba(176, 176, 176, 0.35);
+    color: var(--accent);
+}
+
+.explore-btn.active i {
+    color: var(--accent);
+}
+
 /* 可捲動列表容器 */
 .sidebar-scroll {
     flex: 1;
@@ -615,6 +626,21 @@ body.sidebar-resizing {
 /* 專案頁保留 chat-header（含使用者頭像選單）；縮減內容區上緣留白（原 5rem 是配合隱藏 header 用） */
 .main-content.project-view-mode .project-view {
     padding-top: 1.5rem;
+}
+
+/* 探索視圖：iframe 撐滿 chat-header 以下整個主內容區 */
+.explore-view {
+    display: none;          /* 由 index.js 切為 flex */
+    flex: 1;
+    min-height: 0;
+}
+
+.explore-view iframe {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: var(--content-surface-gradient);
 }
 
 .chat-header {

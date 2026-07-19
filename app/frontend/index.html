@@ -27,7 +27,8 @@
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
     <!-- Highlight.js — 程式碼語法高亮 -->
     <link id="hljs-theme" rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/atom-one-dark.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/highlight.min.js"></script>
+    <!-- 瀏覽器版壓縮檔發佈在 @highlightjs/cdn-assets，npm 的 highlight.js 套件內沒有 lib/highlight.min.js -->
+    <script src="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.9.0/highlight.min.js"></script>
 </head>
 <body class="dark-theme">
     <div class="app-container">
@@ -44,6 +45,12 @@
             <button id="new-chat-btn" class="new-chat-btn">
                 <i data-lucide="plus"></i>
                 <span>新對話</span>
+            </button>
+
+            <!-- 探索：iframe 嵌入 Kinetic Charts 技術分析 -->
+            <button id="explore-btn" class="new-chat-btn explore-btn">
+                <i data-lucide="compass"></i>
+                <span>探索</span>
             </button>
 
             <!-- 可捲動列表區 -->
@@ -170,6 +177,12 @@
                         <p id="pv-files-empty-subtitle" class="pv-empty-subtitle"></p>
                     </div>
                 </div>
+            </div>
+
+            <!-- 探索視圖：iframe 嵌入 Kinetic Charts（nginx /explore/ 反向代理）。
+                 首次點擊「探索」才設定 src；切換視圖只隱藏不卸載，保留圖表狀態。 -->
+            <div id="explore-view" class="explore-view">
+                <iframe id="explore-frame" title="探索 — Kinetic Charts 技術分析"></iframe>
             </div>
 
             <!-- 輸入區塊 -->

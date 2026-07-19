@@ -1,31 +1,37 @@
 # EC2 / 生產環境：從 Docker Hub pull 映像，不在伺服器上 build。
 #
-# 架構：前端靜態檔部署於 AWS S3 + Cloudflare；EC2 跑 nginx + backend + qdrant。
+# 架構：前端靜態檔部署於 AWS S3 + Cloudflare；EC2 跑 backend + kinetic + qdrant。
+# 不使用 nginx —— backend 直接對外開 port，/explore/* 由 backend 內建的
+# 反向代理（app/backend/api/explore.py）轉發給 kinetic 容器。
 #
 # EC2 上建議目錄結構：
 #   /opt/stock-insight/
 #   ├── docker-compose.prod.yml   ← 本檔（或 symlink）
-#   ├── nginx/
-#   │   └── ec2-api.conf          ← 從 repo deploy/nginx/ 複製
-#   └── .env                      ← DATABASE_URL、API keys 等（勿 commit）
+#   ├── .env                      ← DATABASE_URL、API keys 等（勿 commit）
+#   └── .env.kinetic              ← kinetic 專用（見 .env.kinetic.example）
 #
 # 映像名稱由環境變數決定（可寫在 .env 或 export）：
 #   DOCKERHUB_USER=your-dockerhub-user
 #   IMAGE_TAG=1.0.0
+#   KINETIC_TAG=1.0.0
 #
 # 常用指令（在含本檔的目錄執行）：
 #   docker compose -f docker-compose.prod.yml pull
 #   docker compose -f docker-compose.prod.yml up -d
 #
-# 本機 build & push 範例（在專案根目錄，僅 backend）：
+# 本機 build & push 範例：
+#   （Stock-Insight-Chat 專案根目錄）
 #   docker build -f deploy/backend.Dockerfile -t ${DOCKERHUB_USER}/insight-chat-backend:${IMAGE_TAG} .
 #   docker push ${DOCKERHUB_USER}/insight-chat-backend:${IMAGE_TAG}
+#   （Stock-Analysis 專案根目錄）
+#   docker build -f deploy/Dockerfile -t ${DOCKERHUB_USER}/kinetic-charts:${KINETIC_TAG} .
+#   docker push ${DOCKERHUB_USER}/kinetic-charts:${KINETIC_TAG}
 #
 # 前端請另行上傳至 S3，並由 Cloudflare 提供 CDN / DNS / HTTPS。
 # 前端需設定 window.STOCK_INSIGHT_API_BASE 指向後端 API（例如 https://api.example.com/api）。
 #
-# 對外流量：Cloudflare → nginx (:80) → backend（docker network，不暴露 8000）
-# Security Group 僅開 80/443（建議僅 Cloudflare IP）；勿對外開 8000
+# 對外流量：Cloudflare → backend :8000（host port）
+# Security Group 僅開 backend 對外的 port（建議僅 Cloudflare IP）
 
 services:
   backend:
@@ -35,20 +41,34 @@ services:
       - .env
     environment:
       - QDRANT_HOST=qdrant
+      # /explore/* 反向代理的上游；拿掉這行即可完全關閉探索功能
+      - KINETIC_UPSTREAM=http://kinetic:8000
       # DATABASE_URL、OPENAI_API_KEY 等由 .env 注入（生產環境指向 AWS RDS）
     depends_on:
       - qdrant
-    # 不 bind host port；僅 nginx 經 docker network 存取
+      - kinetic
+    ports:
+      # backend 直接對外開 8000。Cloudflare proxy 原生不支援 8000，
+      # 需靠 Cloudflare Origin Rule 改寫目的 port：
+      #   If: Hostname equals api.insight-chat.xyz → Rewrite port to 8000
+      # 注意規則要涵蓋整個 hostname（勿只 match /api 路徑，
+      # 否則 /explore/* 與根路徑 health check 會 522）
+      - "8000:8000"
 
-  # nginx:
-  #   image: nginx:stable-alpine
-  #   restart: always
-  #   ports:
-  #     - "80:80"
-  #   volumes:
-  #     - ./nginx/ec2-api.conf:/etc/nginx/conf.d/default.conf:ro
-  #   depends_on:
-  #     - backend
+  # 探索（Kinetic Charts / Stock-Analysis 專案）：backend 以 /explore/ 反向代理至此。
+  # 注意：
+  #   - 必須維持單一容器、單一 Uvicorn worker（背景掃描器與 Discord 告警跑在行程內，
+  #     多副本會加倍打 Yahoo 上游並重複發送告警）；image 內已強制 --workers 1。
+  #   - 用獨立的 .env.kinetic，避免與 chat 的 POSTGRES_* / DATABASE_URL 混用；
+  #     其中 DATABASE_URL 必須明確指向 RDS 上的 kinetic database（先 CREATE DATABASE kinetic;
+  #     兩張表由應用啟動時自動建立）。
+  kinetic:
+    image: ${DOCKERHUB_USER}/kinetic-charts:${KINETIC_TAG}
+    restart: always
+    env_file:
+      - .env.kinetic
+    # 不 bind host port；僅 backend 經 docker network 存取（kinetic API 無認證，
+    # 登入閘門由 backend 的 /explore 代理把關，勿直接對外開 port）
 
   qdrant:
     image: qdrant/qdrant:latest

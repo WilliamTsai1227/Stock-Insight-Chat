@@ -27,6 +27,8 @@ ENV/
 # 環境變數 (重要！不可進 Git)
 .env
 .env.*
+# 範本不含實際密鑰，允許進 Git
+!.env.example
 
 # 資料庫本地資料 (Docker 掛載)
 db_data/

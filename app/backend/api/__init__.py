@@ -4,6 +4,7 @@ from .chat import router as chat_router
 from .auth import router as auth_router
 from .user import router as user_router
 from .project import router as project_router
+from .explore import router as explore_router
 
 
 api_router = APIRouter()
@@ -22,5 +23,8 @@ api_router.include_router(user_router)
 
 # 4. 專案管理
 api_router.include_router(project_router)
+
+# 5. 探索（Kinetic Charts 反向代理，KINETIC_UPSTREAM 未設定時回 404）
+api_router.include_router(explore_router)
 
 __all__ = ["api_router"]

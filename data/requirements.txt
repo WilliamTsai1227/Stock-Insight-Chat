@@ -1,0 +1,7 @@
+# AWS Lambda (container image) 依賴 — MongoDB → Qdrant 向量同步
+motor>=3.4,<4
+qdrant-client>=1.9,<2
+openai>=1.30,<2
+langchain-text-splitters>=0.2,<0.4
+fastembed>=0.3,<0.8
+tzdata

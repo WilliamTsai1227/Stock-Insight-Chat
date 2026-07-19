@@ -12,18 +12,20 @@ class SubscriptionTierModel(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     name: str
     monthly_token_limit: int
-    max_projects: int = 3
+    max_projects: int = 10
     features: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=datetime.now)
 
 class UserModel(BaseModel):
     """
     使用者模型 (users table)
+    僅支援 Google SSO：以 google_sub (Google OIDC subject) 為身分主鍵，無密碼欄位
     """
     id: UUID = Field(default_factory=uuid4)
     email: str
     username: str
-    password_hash: str
+    google_sub: str
+    last_login_provider: str = "google"
     status: str = "active"
     tier_id: Optional[UUID] = None
     last_login_at: Optional[datetime] = None

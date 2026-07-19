@@ -32,3 +32,20 @@ function resolveStockInsightApiBase() {
     }
     return `${proto}//${host}:${backendPort}/api`;
 }
+
+/**
+ * 解析「探索」（Kinetic Charts）iframe 的 URL。
+ *
+ * 預設與 API 同主機、掛在 /explore/（nginx 反向代理至 kinetic 容器；
+ * 需同主機 refresh_token cookie 才會自動帶上通過 auth_request 驗證）。
+ *
+ * 可選覆寫（在載入本檔之前設定）：
+ * - window.STOCK_INSIGHT_EXPLORE_URL = 完整 URL
+ *   （本機 dev 可指向獨立跑的 Kinetic，例如 http://localhost:9002/）
+ */
+function resolveStockInsightExploreUrl() {
+    if (typeof window.STOCK_INSIGHT_EXPLORE_URL === 'string' && window.STOCK_INSIGHT_EXPLORE_URL) {
+        return window.STOCK_INSIGHT_EXPLORE_URL;
+    }
+    return resolveStockInsightApiBase().replace(/\/api$/, '') + '/explore/';
+}
