@@ -1,6 +1,9 @@
 # 📋 專案開發待辦清單 (Project TODO List)
 
 ## 🔐 身份驗證系統 (Authentication)
+
+> **note（現況）**：本節部分項目為早期「密碼註冊/登入」設計的歷史紀錄。系統已改為 **Google SSO Only**，移除本地密碼、`register`/`login` 端點與 Argon2 雜湊。現況以 [`auth_system_spec.md`](./auth_system_spec.md)、[`google_sso.md`](./google_sso.md) 為準。
+
 - [x] **資料庫優化**: 為 `init_db.sql` 加入關鍵欄位索引 (Index)。
 - [x] **系統架構設計**: 定義 JWT (AT/RT) 雙權杖認證流程。
 - [x] **安全性工具**: 實作 `security.py` (Argon2 雜湊、JWT 簽發與驗證)。
@@ -17,7 +20,7 @@
 ## 📈 核心功能擴充
 - [ ] **會員資料**: 實作 `/api/user/profile` 與 `/api/user/usage` 接口。
 - [ ] **歷史紀錄**: 實作對話分頁查詢功能。
-- [ ] **Google SSO**: 串接 Google OAuth2 登入。
+- [x] **Google SSO**: 串接 Google OAuth2 登入（已成為唯一登入方式）。
 
 ## 🎨 前端開發 (Frontend)
 - [ ] **權杖管理**: 實作前端自動刷新 Token 的攔截器 (Interceptor)。

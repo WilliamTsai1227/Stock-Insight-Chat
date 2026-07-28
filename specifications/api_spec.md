@@ -16,11 +16,15 @@
 | **使用者** | 取得個人資料 | `/api/user` | `GET` | 是 |
 | | 修改個人資料 | `/api/user` | `PATCH` | 是 |
 | | 刪除帳號 | `/api/user` | `DELETE` | 是 |
-| **對話** | 取得所有對話 | `/api/chat/all` | `GET` | 是 |
-| | 取得單一對話 | `/api/chat` | `GET` | 是 |
+| | 提交建議回饋 | `/api/user/feedback` | `POST` | 是 |
+| **對話** | 建立對話 | `/api/chat` | `POST` | 是 |
+| | 取得所有對話 | `/api/chat/all` | `GET` | 是 |
+| | 取得單一對話（訊息） | `/api/chat` | `GET` | 是 |
 | | 發送訊息（SSE） | `/api/chat/messages` | `POST` | 是 |
-| | 修改對話標題 | `/api/chat/title` | `PATCH` | 是 |
+| | 修改對話標題 | `/api/chat` | `PATCH` | 是 |
 | | 刪除對話 | `/api/chat` | `DELETE` | 是 |
+| | 指派對話至專案 | `/api/chat/project` | `POST` | 是 |
+| | 將對話移出專案 | `/api/chat/project` | `DELETE` | 是 |
 | **專案** | 取得所有專案 | `/api/project/all` | `GET` | 是 |
 | | 建立專案 | `/api/project` | `POST` | 是 |
 | | 修改專案 | `/api/project` | `PATCH` | 是 |
@@ -221,22 +225,33 @@ RT Rotation：換取新的 Access Token + 新的 Refresh Token。
 ```json
 {
   "query": "台積電最新財報分析",
-  "chat_id": "選填，不填則建立新對話",
-  "chat_mode": "general | flash | agent",
+  "chat_id": "必填，需先呼叫 POST /api/chat 取得",
+  "chat_mode": "general | stock_agent",
+  "response_mode": "thinking | flash",
   "agent_config": {
-    "enabled_tools": ["news_search", "technical_analysis"]
+    "enabled_tools": ["search_stock_news", "search_market_ai_analysis", "get_market_recommendations"]
   }
 }
 ```
+
+| 欄位 | 型別 | 必填 | 說明 |
+|------|------|:----:|------|
+| `query` | string | 是 | 使用者問題（最長 2000 字元） |
+| `chat_id` | UUID | 是 | 由 `POST /api/chat` 取得 |
+| `chat_mode` | string | 否 | `general`（一般對話）或 `stock_agent`（股市 Agent，預設） |
+| `response_mode` | string | 否 | `chat_mode=stock_agent` 時生效：`thinking`（預設）或 `flash` |
+| `agent_config` | object | 否 | 含 `enabled_tools`；空則由 Agent 自行判斷 |
 
 **SSE Event 格式**：
 
 | event type | data | 說明 |
 |---|---|---|
+| `thinking` | `{ "text": "..." }` | Router 思考片段（股市 Agent） |
 | `token` | `{ "text": "..." }` | 串流 token |
 | `tool_start` | `{ "tool": "tavily_global_search" }` | 工具開始執行 |
 | `tool_done` | `{ "tool": "tavily_global_search" }` | 工具執行完成 |
-| `final` | `{ "final_content": "...", "chat_id": "uuid", "message_id": "uuid", "steps": [...], "retrieval_sources": [...] }` | 完整回應 |
+| `title_update` | `{ "title": "..." }` | 首則訊息時產出的正式標題 |
+| `done` | `{ "final_content": "...", "steps": [...], "retrieval_sources": [...], "total_execution_time": ... }` | 完成，含執行軌跡與耗時 |
 | `error` | `{ "message": "..." }` | 錯誤 |
 
 ---
@@ -283,4 +298,4 @@ RT Rotation：換取新的 Access Token + 新的 Refresh Token。
 | `FRONTEND_URL` | 前端根網址（登入後重導目標） | `http://localhost` |
 | `COOKIE_SECURE` | Cookie 是否只在 HTTPS 送出 | `false`（開發）/ `true`（正式） |
 | `SECRET_KEY` | JWT 簽名密鑰 | 隨機長字串 |
-| `REFRESH_TOKEN_EXPIRE_DAYS` | RT 有效天數（預設 30） | `30` |
+| `REFRESH_TOKEN_EXPIRE_DAYS` | RT 有效天數（預設 7） | `7` |

@@ -1,6 +1,6 @@
 # 前端規格說明書 (Frontend Specification)
 
-本系統採用現代化、高品質的 **「玻璃擬態 (Glassmorphism)」** 與 **「AI-Native」** UI 設計風格。
+前端採用 **玻璃擬態 (Glassmorphism)** 深色主題 UI。
 
 ## 1. 核心設計語彙
 *   **視覺風格**: 半透明背景 (Backdrop Filter)、細緻描邊、深色主題、Outlined Icons。

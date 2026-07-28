@@ -210,7 +210,7 @@ erDiagram
 
 ### 2.3 user_usage_quotas (當前用量)
 
-使用者在當前計量週期內的即時累計用量。**高頻更新的計數器**，與 `token_usage_logs`（append-only 流水）分表以兼顧效能與對帳。配額檢查邏輯見 [`usage_quota.py`](../app/backend/module/usage_quota.py)：Pre-flight 429 + 原子條件遞增 `UPDATE ... WHERE used_tokens + delta <= limit`。
+使用者在當前計量週期內的即時累計用量。**高頻更新的計數器**，與 `token_usage_logs`（append-only 流水）分表以兼顧效能與對帳。配額檢查邏輯見 [`usage_quota.py`](../app/backend/module/usage_quota.py)：Pre-flight 429（入口攔截）+ 原子遞增 `UPDATE ... SET used_tokens = used_tokens + delta`（`increment_used_tokens`，允許單輪略超、由下一輪 pre-flight 攔截的「最終一致」策略）。
 
 | 欄位名稱 | 資料型別 | 限制 | 說明 |
 | :--- | :--- | :--- | :--- |

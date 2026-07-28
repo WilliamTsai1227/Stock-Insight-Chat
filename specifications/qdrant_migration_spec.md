@@ -57,10 +57,14 @@
 
 ---
 
-## 4. 檢索策略：`search_groups`
-為了避免同一篇文章的多個 Chunks 充斥搜尋結果，系統實施以下策略：
-1.  **聚合**: 使用 `search_groups` 並指定 `group_by="mongo_id"`。
-2.  **合併**: 設定 `group_size=2`，取每篇文章最相關的前 2 個 chunks 並在工具層進行內容合併。
+## 4. 檢索策略：分組去重
+
+為了避免同一篇文章的多個 Chunks 充斥搜尋結果，系統依 `mongo_id` 分組：
+
+1.  **聚合**: 依 payload `mongo_id` 分組（`group_by="mongo_id"`）。
+2.  **合併**: 每組保留分數最高的 2 個 chunks（`group_size=2`），並在工具層合併內容。
+
+> 目前檢索為 **Hybrid + RRF**（dense + BM25 sparse 融合），分組去重等價於先前的 `search_groups` 效果。詳見 [`tools_spec.md`](./tools_spec.md) §1、§2。
 
 ---
 

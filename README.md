@@ -3,7 +3,7 @@
 > **AI 股市洞察對話平台** — 以 LangGraph 多角色 Agent + RAG（Qdrant Hybrid Search）為核心，
 > 支援一般對話、即時網路搜尋與股市深度分析的全端專案（FastAPI + Vanilla JS，部署於 AWS）。
 
-**技術重點速覽**：SSE 串流的生產者–消費者解耦｜Router/Analyst 雙模型 Agent｜Hybrid RAG（dense + BM25）｜Context 工程（Router Token ↓~75%）｜Google SSO + RT Rotation 安全設計｜Token 配額計量｜Serverless 增量向量同步
+**技術重點速覽**：SSE 串流的生產者–消費者解耦｜Router/Analyst 雙模型 Agent｜Hybrid RAG（dense + BM25）｜Context 工程（壓縮 Router 上下文）｜Google SSO + RT Rotation 安全設計｜Token 配額計量｜Serverless 增量向量同步
 
 ---
 
@@ -60,7 +60,7 @@ flowchart LR
 
 ---
 
-## 核心技術亮點
+## 核心技術
 
 ### 1. SSE 串流：生產者–消費者解耦（斷線仍完成持久化）
 
@@ -96,7 +96,7 @@ SSE 事件：`thinking`（Router 思考）· `tool_start` / `tool_done` · `toke
 
 **冪等資料管線**：`uuid5(mongo_id + chunk_type + chunk_idx)` 產生確定性 point ID，重跑遷移等同 upsert，永不重複寫入。
 
-### 4. Context 工程：Router Token ↓~75%（量化優化）
+### 4. Context 工程：壓縮 Router 上下文
 
 **問題根因（兩層）**：① Router 每次收到完整 DB 歷史；② 同輪 ReAct 重試時，各批 ToolMessage 疊加累積，第 3 次進 Router 已含前兩批全部工具結果。
 
@@ -114,13 +114,7 @@ ToolMessage（截斷 500 字）→ state["messages"]        → Router 判斷用
 | DB 歷史中舊 Analyst 報告截斷至 800 字（[chat_context.py](app/backend/module/chat_context.py)） | Router + Analyst |
 | `RETRIEVAL_TOP_K` 15 → 5 | 檢索注入量 |
 
-**實測成果**（由 `token_usage_logs` 逐輪記錄驗證）：
-
-| 指標 | 優化前 | 優化後 |
-| :--- | :--- | :--- |
-| Router 首輪 prompt tokens（長對話） | ~6,000 | ~2,000（↓67%） |
-| Router 同輪重試累積 | 每批 +5k–10k | 每批 +1k–2k（↓80%） |
-| Analyst prompt tokens | ~20k–43k | ~8k–15k |
+**如何驗證成效**：每輪 Router / Analyst 的 prompt、completion tokens 都逐輪寫入 `token_usage_logs`，因此優化前後能以「同類型對話」直接比對各階段的 token 用量，量化驗證壓縮效果，而非憑感覺。優化後 Router 首輪與同輪重試所帶的上下文明顯縮減，Analyst 的注入量也隨檢索 top-k 下修而下降。
 
 ### 5. 認證安全：Google SSO + JWT RT Rotation
 
@@ -139,8 +133,10 @@ ToolMessage（截斷 500 字）→ state["messages"]        → Router 判斷用
 
 三級訂閱（free 200k / pro 1M / ultra 5M tokens 月額度），兩道防線（[app/backend/module/usage_quota.py](app/backend/module/usage_quota.py)）：
 
-1. **Pre-flight**：進 LangGraph 前檢查 `used_tokens >= monthly_limit` → 直接 429，不開串流。
-2. **原子條件遞增**：每輪 LLM 結束時 `UPDATE ... WHERE used_tokens + delta <= limit`，與寫入 `token_usage_logs` 流水同一 transaction——高併發下不超扣，計數器（quotas）與 append-only 流水（logs）分表，兼顧高頻更新效能與對帳能力。
+1. **Pre-flight（入口攔截）**：進 LangGraph 前檢查 `used_tokens >= monthly_limit` → 直接 429，不開串流。
+2. **原子遞增 + 最終一致（結算）**：每輪 LLM 結束時以單一 `UPDATE ... SET used_tokens = used_tokens + delta` **原子累加**實際用量，與寫入 `token_usage_logs` 流水置於同一 transaction，計數器（quotas）與 append-only 流水（logs）分表——兼顧高頻更新效能與逐輪對帳能力。
+
+   > **設計取捨（刻意允許單輪略超）**：此處**不**在超限當下中斷回合，而是無條件累加、由**下一輪的 pre-flight** 攔截，屬「允許略超、最終一致」。理由是**使用者體驗**：若在「明明還有剩餘額度」時因本輪預估會超限而砍掉半篇回應，體驗很差；因此讓進行中的回合跑完，下一輪再擋。**若改以成本嚴格為優先**，可將累加改為條件式 `UPDATE ... WHERE used_tokens + delta <= limit`（原子強制不超扣），代價是可能中斷正在串流的回合。目前實作採前者（見 [usage_quota.py](app/backend/module/usage_quota.py) `increment_used_tokens`）。
 
 ### 7. Serverless 增量向量同步
 

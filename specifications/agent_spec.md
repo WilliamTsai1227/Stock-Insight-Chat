@@ -1,16 +1,16 @@
 # Stock Insight Agent 規格說明 (Agent Specification)
 
-本文件定義了「股市洞察系統」的核心對話大腦 (Agent) 實作邏輯與架構設計。
+本文件定義 Stock Insight Chat 的 Agent 實作邏輯與架構設計。
 
 ## 1. 核心開發框架：LangGraph (ReAct)
 
-系統採用 **LangGraph** 的 **Stateful Graph** 架構實作 **ReAct (Reasoning and Acting)** 循環，確保 Agent 具備嚴謹的思考流程。
+系統採用 **LangGraph** 的 **Stateful Graph** 架構實作 **ReAct (Reasoning and Acting)** 循環。
 
 ### 核心節點與流轉：
 1.  **Router (導航)**: 使用 `gpt-5-mini` 進行意圖辨識。它決定接下來要調用哪些工具，或是否已經具備充足資訊。支援動態綁定前端指定的工具集。
 2.  **Retry Check (重試檢查)**: 一個安全閥節點。若工具回傳空結果且未達重試上限（與程式常數 **`ROUTER_MAX_CYCLES = 3`** 對齊之 Router 輪次），則注入提示引導 Router 調整策略（如擴大時間範圍或更換關鍵字）。
 3.  **Tools (工具箱)**: 並行執行 (`asyncio.gather`) 所有被觸發的工具。執行完畢後**回到 Router** 進行下一輪思考。
-4.  **Analyst (分析)**: 使用 `gpt-5` 進行深度報告撰寫。這保證了最後的分析文本具備極高的專業度與 Gemini 風格的高層次洞察。
+4.  **Analyst (分析)**: 使用 `gpt-5` 撰寫最終分析報告。
 
 ---
 
@@ -50,7 +50,7 @@ class AgentState(TypedDict):
 
 ## 5. 執行追蹤 (Transparency & Tracing)
 
-系統為前端提供了全透明的執行指標：
+系統為前端提供以下執行指標：
 *   **執行步驟 (Steps)**: 詳細列出每一輪 Router 的 `thought` 與 `tool_calls`（含參數）。
 *   **性能監測**: 記錄每個節點的 `execution_time`。
 *   **精確來源 (retrieval_sources)**: 每個回答均附帶原始資料的 `mongo_id`、`publishAt`、`url` 與 `score`。
@@ -59,10 +59,10 @@ class AgentState(TypedDict):
 
 ## 6. 指令規範 (Analyst Instructions)
 
-最後的回覆必須遵循 **Gemini 風格**：
-1.  **語意化結構**: 使用多級標題，避免死板的條列式。
-2.  **數據高亮**: 重要的「日期、股價、股票代碼 (XXXX)」必須使用 **粗體**。
-3.  **深度合成**: 交叉驗證多來源資訊，解釋對投資者的實質意義。
+最終回覆須遵循以下格式規範：
+1.  **語意化結構**: 使用多級標題，避免單一條列式。
+2.  **數據高亮**: 重要的「日期、股價、股票代碼 (XXXX)」使用 **粗體**。
+3.  **多來源整合**: 交叉比對多來源資訊，說明對投資者的實質意義。
 4.  **標的總結**: 在報告末尾列出提到的股票，並附上入選理由。
 
 ---
@@ -107,9 +107,9 @@ Agent 產出的 `trace` 包含完整的執行軌跡。後端 API 層會負責：
 
 **範圍**：快取僅限**該次** `call_tools` 執行，不跨輪持久化（避免舊向量與語義漂移混淆）。
 
-### 8.4 縮小檢索廣度：`RETRIEVAL_TOP_K = 8`
+### 8.4 縮小檢索廣度：`RETRIEVAL_TOP_K = 5`
 
-**做法**：呼叫 `search_news`、`search_ai_analysis`、`search_recommendations` 時，明確傳入 `top_k=RETRIEVAL_TOP_K`（預設 **8**；相較於工具函式預設常見的 **10**）。
+**做法**：呼叫 `search_news`、`search_ai_analysis`、`search_recommendations` 時，明確傳入 `top_k=RETRIEVAL_TOP_K`（預設 **5**；相較於工具函式預設常見的 **10**）。
 
 **效果**：
 
@@ -120,7 +120,7 @@ Agent 產出的 `trace` 包含完整的執行軌跡。後端 API 層會負責：
 
 ### 8.5 縮短寫入 LLM 的工具正文：`MAX_TOOL_ITEM_CHARS` 與 `_clip_for_llm`
 
-**做法**：對 **餵給模型的 ToolMessage 字串**（`@tool` 包裝層與 `call_tools` 內的 `ai_content`）在組字時，對每則 `content` 套用 `_clip_for_llm(..., MAX_TOOL_ITEM_CHARS)`，預設 **1200** 字元，超過則截斷並以「…」結尾。
+**做法**：對 **餵給模型的 ToolMessage 字串**（`@tool` 包裝層與 `call_tools` 內的 `ai_content`）在組字時，對每則 `content` 套用 `_clip_for_llm(..., MAX_TOOL_ITEM_CHARS)`，預設 **500** 字元，超過則截斷並以「…」結尾。
 
 **效果**：
 
@@ -131,9 +131,9 @@ Agent 產出的 `trace` 包含完整的執行軌跡。後端 API 層會負責：
 
 #### 8.5.1 Router 決策與截斷：無法數學「保證」的取捨
 
-ToolMessage 中的正文經 `_clip_for_llm(..., MAX_TOOL_ITEM_CHARS)`（預設約 **1200** 字）後，**Router** 判斷「有無資料、是否重試、下一輪工具參數」所依據的主要是：**標題、metadata、每則開頭約 1200 字、以及空結果時的固定文案**（如「找不到相關新聞」）。多數情境下，開頭片段已足夠做上述決策。
+ToolMessage 中的正文經 `_clip_for_llm(..., MAX_TOOL_ITEM_CHARS)`（預設約 **500** 字）後，**Router** 判斷「有無資料、是否重試、下一輪工具參數」所依據的主要是：**標題、metadata、每則開頭約 500 字、以及空結果時的固定文案**（如「找不到相關新聞」）。多數情境下，開頭片段已足夠做上述決策。
 
-**並無嚴格保證**：若關鍵資訊僅出現在 **1200 字之後**（例如數字、轉折語意落在文末），Router 可能低估該筆資料價值或較難微調下一輪參數。這是 **品質／延遲／成本** 的權衡，無法僅由截斷「證明」行為與全文等價。
+**並無嚴格保證**：若關鍵資訊僅出現在 **500 字之後**（例如數字、轉折語意落在文末），Router 可能低估該筆資料價值或較難微調下一輪參數。這是 **品質／延遲／成本** 的權衡，無法僅由截斷「證明」行為與全文等價。
 
 **可調整方向**：
 

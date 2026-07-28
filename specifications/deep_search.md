@@ -1142,7 +1142,7 @@ ALB → ECS Fargate
 
 **Phase 1a 建議實作順序：**
 
-1. Migration V006 + 更新 `init_db.sql`
+1. Migration（下一個可用版本，如 V009）+ 更新 `init_db.sql`
 2. `module/s3_storage.py`
 3. `research/chunker.py` + `research/ingest_worker.py`
 4. `setup_qdrant.py` 加 `research_documents`
@@ -1157,11 +1157,13 @@ ALB → ECS Fargate
 
 > 執行前請備份。詳見 [`sql_dev_handbook.md`](./sql_dev_handbook.md)。
 
-**檔案：** `app/backend/database/migrations/V006__deep_search_research_workspaces_and_files.sql`
+**檔案：** `app/backend/database/migrations/V009__deep_search_research_workspaces_and_files.sql`
+
+> 版本號取下一個可用值：既有 migration 已到 **V008**（`V006` 已被 `quota_reset_logs` 佔用），實作時請確認並遞增。
 
 ```sql
 -- ============================================================
--- Migration V006: 深度研究 — research_workspaces + 擴充 files
+-- Migration V009: 深度研究 — research_workspaces + 擴充 files
 -- ============================================================
 
 BEGIN;

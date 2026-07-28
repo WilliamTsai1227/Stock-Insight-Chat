@@ -1,9 +1,6 @@
 # 📈 Stock Insight Chat
 
-[![Dynamic Design](https://img.shields.io/badge/Design-Premium-FF69B4?style=for-the-badge)](https://github.com/WilliamTsai1227/Stock-Insight-Chat)
-[![Technology Stack](https://img.shields.io/badge/Stack-AI--Native-007ACC?style=for-the-badge)](https://github.com/WilliamTsai1227/Stock-Insight-Chat)
-
-> **Insight AI Workspace** —— 一般對話、即時網路搜尋，以及股市 Agent（新聞 RAG、AI 產業分析、標的推薦）的智慧對話平台。
+> 提供一般對話、即時網路搜尋，以及股市 Agent（新聞 RAG、AI 產業分析、標的推薦）的對話平台。
 
 ##  系統概覽
 
@@ -61,13 +58,13 @@ async def event_generator():
 ### 移動端與 UI 修復（frontend）
 
 - **鍵盤／視區與 fixed 版面**：`.app-container` 使用 **`100vh` + `100dvh`** 與 **`width/max-width: 100%`**，減少行動瀏覽器網址列與虛擬鍵盤造成的溢出；`**@media (max-width: 1024px)**` 內對 **`.chat-input-area`**、`env(safe-area-inset-*)` 調整留白，並搭配側欄抽屜、`min-width: 0` 的 flex 子項等，緩解小螢幕跑版（`app/frontend/css/index.css`）。
-- **智慧自動捲動**：`chat-messages` 的 `scroll` 監聽以距離底部的閾值更新 **`isUserScrolledUp`**；**`scrollToBottom`** 在非 **`force`** 時若使用者已往上讀舊訊息則不拉回底部；並以 **`targetChatId`** 對齊目前對話，**切換對話時**不會錯頻捲動（`app/frontend/js/index.js`）。
+- **自動捲動**：`chat-messages` 的 `scroll` 監聽以距離底部的閾值更新 **`isUserScrolledUp`**；**`scrollToBottom`** 在非 **`force`** 時若使用者已往上讀舊訊息則不拉回底部；並以 **`targetChatId`** 對齊目前對話，**切換對話時**不會錯頻捲動（`app/frontend/js/index.js`）。
 - **Google SSO 登入**：登入頁（`login.html`）移除 email/password 表單，改為單一「以 Google 帳號登入」按鈕。點擊後導向後端 `/api/user/auth/google/start`，完成 OAuth 流程後自動取得 AT 並 fetch 用戶資料（`app/frontend/js/login.js`、`app/frontend/js/auth.js`）。
 - **複製回答（非 HTTPS 降級）**：優先 **`navigator.clipboard.writeText`**（需安全上下文）；否則以隱藏 **`textarea`** + **`document.execCommand('copy')`**，方便區網 **HTTP** 等環境仍可複製（`app/frontend/js/index.js` 內 **`copyToClipboard`**）。
 
 ---
 
-### 大幅縮減 Context（降低延遲與用量）
+### 縮減 Context（降低延遲與用量）
 
 檢索參數 **`RETRIEVAL_TOP_K`** 由 **15** 調為 **5**：每次工具（如向量搜尋新聞）取回並累積進 **`retrieved_data`**／注入 Analyst 的筆數上限跟著下降，進而減少 Token 與後續 Router／Analyst 成本（`app/backend/agent/chat.py` 頂部常數 **`RETRIEVAL_TOP_K`**，並由 **`call_tools` → search_news／search_ai_analysis 等 `top_k=`** 使用）。
 
@@ -166,14 +163,14 @@ ToolMessage（精簡，預設 MAX_TOOL_ITEM_CHARS=500）→ state["messages"] �
 | `ROUTER_HISTORY_TURNS` | **僅 Router** | 在已載入的 messages 裡再裁切 Router 看的歷史輪數 |
 | 方向 A（同輪 ToolMessage 裁切） | **僅 Router** | Router 重試時只看最新一批工具結果，Analyst 不受影響 |
 
-**預期效果（含本次補強）**：
+**如何驗證效果**：每輪 Router / Analyst 的 prompt、completion tokens 皆逐輪寫入 `token_usage_logs`，因此優化前後可用「同類型對話」直接比對各階段 token 用量，量化驗證壓縮效果而非憑感覺。方向性成果：
 
-| 指標 | 優化前 | 優化後（估計） |
+| 指標 | 方向 | 主因 |
 |---|---|---|
-| Router 第 1 次 prompt tokens（長對話） | ~6000 | ~2000（↓ ~67%，主因：舊報告截斷） |
-| Router 同輪重試 token 累積 | 每批 +5k–10k | 每批 +1k–2k（↓ 約 80%，主因：方向 A） |
-| Analyst prompt tokens | ~20k–43k | ~8k–15k |
-| Analyst 分析品質 | ✅ | ✅ 不變（retrieved_data 雙軌保護） |
+| Router 第 1 次 prompt tokens（長對話） | 明顯下降 | 舊 Analyst 報告截斷 |
+| Router 同輪重試 token 累積 | 明顯下降 | 方向 A（同輪只留最新一批 ToolMessage） |
+| Analyst prompt tokens | 下降 | 檢索 top-k 下修 |
+| Analyst 分析品質 | 不變 | retrieved_data 雙軌保護 |
 
 ---
 
@@ -696,7 +693,7 @@ flowchart TD
 
 ---
 
-### 前端無縫換 Token 三機制（`auth.js`）
+### 前端換 Token 三機制（`auth.js`）
 
 為確保用戶在發送聊天時不因 Token 驗證而感受到等待，前端實作三重機制：
 
@@ -923,22 +920,22 @@ sequenceDiagram
 
 ---
 
-###  核心模型架構 (Next-Gen AI Stack)
-為了達到速度與品質的最佳平衡，系統採用雙模型動態協作：
-- **Router LLM**: `GPT-5 mini` (負責極速意圖辨識、工具決策與 ReAct 導航)。
-- **Analyst LLM**: `GPT-5` (負責旗艦級資料合成、深度投資見解與專業報告產出)。
-- **Embedding**: `text-embedding-3-small` (高效能且低成本的向量轉換)。
+###  核心模型架構
+以雙模型分工，依角色選用不同成本的模型：
+- **Router LLM**: `GPT-5 mini`（意圖辨識、工具決策與 ReAct 導航）。
+- **Analyst LLM**: `GPT-5`（整合檢索資料、產出投資分析報告）。
+- **Embedding**: `text-embedding-3-small`（向量轉換）。
 
 ---
 
 ##  對話歷史結構與溯源 (Chat History & Parent DAG Architecture)
 
-系統捨棄了傳統的「陣列式」對話儲存，改採用進階的 **「自參照樹狀結構 (Self-referencing DAG)」**。透過 `messages` 表中的 `parent_id` 欄位，系統能夠精確掌握上下句的關聯性。
+系統以 **自參照樹狀結構 (Self-referencing DAG)** 取代陣列式對話儲存。透過 `messages` 表的 `parent_id` 欄位記錄上下句關聯。
 
 ### 1. 解決的問題 (Why Parent ID?)
 *   **支援「重新生成」(Regenerate)**：當使用者要求重新回答時，兩則 AI 回答會共用同一個 User 訊息的 `parent_id`，前端可藉此繪製版本切換 `< 1/2 >` UI。
 *   **精確追問與溯源**：後端能得知使用者是在針對滿天飛的回答中的「哪一句話」進行追問，進而提供正確的 Context。
-*   **防禦訊息超車 (Race Conditions)**：即便網路延遲導致資料庫寫入順序錯亂，憑藉 `parent_id` 依然能百分之百還原正確的時間線邏輯。
+*   **防禦訊息超車 (Race Conditions)**：即便網路延遲導致資料庫寫入順序錯亂，仍可憑 `parent_id` 還原正確的時間線邏輯。
 
 ### 2. 歷史讀取策略 (Context Loading)
 為了避免超出 LLM Token 上限，系統結合 **滑動視窗** 與 **動態摘要**：
@@ -949,22 +946,22 @@ sequenceDiagram
 
 ##  資料遷移與維護
 
-系統內建完善的數據 ETL 工具，可確保 Qdrant 與 MongoDB 資料同步：
+資料 ETL 工具負責 Qdrant 與 MongoDB 的資料同步：
 
-*   `setup_qdrant.py`: 自動初始化 Collection 與建立高性能索引（含 Datetime / Keyword / Integer / Bool 等），支援 `--reset` 全刪重建；**collection 若已存在則跳過新建但仍會補索引**；並在執行時輸出 **結構驗證**（`dense` 1536、`text` sparse、payload 索引欄位是否齊備）。細節見 **§4「`setup_qdrant.py`：重複執行、提示訊息與結構驗證」**。
+*   `setup_qdrant.py`: 初始化 Collection 與建立索引（含 Datetime / Keyword / Integer / Bool 等），支援 `--reset` 全刪重建；**collection 若已存在則跳過新建但仍會補索引**；並在執行時輸出 **結構驗證**（`dense` 1536、`text` sparse、payload 索引欄位是否齊備）。細節見 **§4「`setup_qdrant.py`：重複執行、提示訊息與結構驗證」**。
 *   `migrate_to_qdrant.py`: 具備**防重複機制**的遷移腳本。
     *   利用 `uuid5` 產生確定性 ID（基於 `mongo_id` + `chunk_type` + `chunk_idx`），確保資料變動時僅執行 `upsert`。
     *   支援 `--dry-run` 模式預覽切分結果。
     *   支援 `--collection` 指定遷移特定 collection。
-    *   Batch Embedding (批次 256 筆)，大幅加速遷移效率。
-    *   Exponential backoff 重試機制，提升穩定性。
-*   `test_qdrant_filter.py`: 全面驗證 v2 metadata 的過濾/聚合功能。
+    *   Batch Embedding（批次 256 筆），減少 API 往返次數。
+    *   Exponential backoff 重試機制。
+*   `test_qdrant_filter.py`: 驗證 v2 metadata 的過濾/聚合功能。
 
 ---
 
 ##  資料切分與儲存策略 (Chunking & Storage Strategy)
 
-為了確保 RAG (檢索增強生成) 的品質與系統的強健性，本專案採用**混合式切分策略**，針對不同資料性質使用最適合的方法：
+為配合 RAG (檢索增強生成) 檢索，本專案針對不同資料性質採用不同切分策略：
 
 ### 1. 文本切分 (Chunking Strategy)
 
@@ -972,7 +969,7 @@ sequenceDiagram
 *   **工具**: LangChain `RecursiveCharacterTextSplitter`
 *   **參數**: `chunk_size=800`, `chunk_overlap=150`
 *   **分隔符**: `["\n\n", "\n", "。", "，", "；", " ", ""]`（優先在段落與句號處斷開）
-*   **智慧判斷**: 短文 (≤ 800 字) 不切分，直接作為單一 chunk (`chunk_type=full`)；長文才進行語意切分 (`chunk_type=partial`)
+*   **長度判斷**: 短文 (≤ 800 字) 不切分，直接作為單一 chunk (`chunk_type=full`)；長文才進行語意切分 (`chunk_type=partial`)
 *   **上下文注入**: 每個片段開頭均加上 `[標題]` 前綴，確保 Embedding 具備主題背景
 
 #### AI Analysis Collection — 按欄位語意角色拆分
@@ -1005,12 +1002,12 @@ sequenceDiagram
 
 ### 1. 第一階段：向量檢索 (Qdrant)
 *   **目標**: 快速定位最相關的資料片段。
-*   **搜尋方式**: 透過 `text-embeddings-3-small` 產生的 `query_vector` 進行 **Cosine Similarity (餘弦相似度)** 搜尋。
+*   **搜尋方式**: 透過 `text-embedding-3-small` 產生的 `query_vector` 進行 **Cosine Similarity (餘弦相似度)** 搜尋。
 *   **去重聚合**: 使用 `search_groups(group_by="mongo_id")` 確保同一篇文章/報告不會因多 chunks 而重複出現。
 *   **精準過濾 (Payload Filtering)**:
     *   `news` collection: 支援 `publishAt` (時間)、`stock_codes` (股票代碼)、`type` (新聞類型) 過濾
     *   `ai_analysis` collection: 支援 `publishAt` (時間)、`chunk_type` (語意角色)、`sentiment_label` (情緒)、`industry_list` (產業) 過濾
-*   **智慧 chunk_type 路由**：`get_market_recommendations` 工具自動鎖定 `chunk_type=stock_insight`，精準命中潛力標的分析。
+*   **chunk_type 過濾**：`get_market_recommendations` 工具固定鎖定 `chunk_type=stock_insight`，只取潛力標的分析片段。
 *   **輸出**: 回傳 Top-K 個不重複的文章/報告，每篇附帶完整 metadata。
 
 ### 2. 第二階段：全文提領 (MongoDB)
@@ -1026,13 +1023,13 @@ sequenceDiagram
 
 ### 4. 時間同步機制 (Temporal Sync)
 *   **邏輯**: Agent 會根據當下問題鎖定一個時間窗口（如：最近一週）。
-*   **同步**: 將完全相同的 `start_date` 與 `end_date` 分發給 **新聞、分析與推薦** 三大工具，確保 RAG 產出的結論在時間維度上是嚴謹一致的。
+*   **同步**: 將相同的 `start_date` 與 `end_date` 分發給 **新聞、分析與推薦** 三個工具，使檢索結果在時間維度上一致。
 
 ---
 
 ##  Token 管理與會員等級設計 (Membership & Token Economics)
 
-為了支撐商業化營運，系統設計了一套嚴謹的 Token 計量與會員等級系統。這不僅是資料庫欄位的增加，更涉及高併發下的數據一致性與效能平衡。
+為支援商業化計量，系統實作 Token 計量與會員等級。此設計涉及高併發下的數據一致性與更新效能。
 
 ### 1. 會員等級與配額 (Subscription Tiers)
 系統預設提供三種等級，透過 `subscription_tiers` 表定義（`init_db.sql` 種子＋migration **`V005__seed_subscription_tiers.sql`** 可對齊既有庫）：
@@ -1048,11 +1045,12 @@ sequenceDiagram
     `POST /api/chat/messages` 在寫入 user 訊息與啟動 Agent 前呼叫 `assert_preflight_llm_quota`：讀取 `user_usage_quotas.used_tokens` 與 `subscription_tiers.monthly_token_limit`（JOIN `users`）。若 **`used_tokens >= monthly_token_limit`**，直接 **HTTP 429**，不進圖、不開串流主流程。  
     同時會 **`ensure_quota_row_exists`**，避免舊帳號缺 `user_usage_quotas` 列。
 
-2.  **原子條件遞增（每一輪 `on_chat_model_end`）**  
-    `record_token_usage`（`token_usage.py`）在**同一個 DB transaction** 內先執行  
-    `UPDATE user_usage_quotas ... WHERE used_tokens + delta <= monthly_limit`（見 `try_increment_used_tokens`）。  
-    若本輪加總會超過上限，**不遞增、不寫 `token_usage_logs`**（並印 `[QUOTA]` 日誌）。  
-    注意：LLM 該輪若已實際呼叫，供應商端成本仍可能已發生；Pre-flight 可降低「已滿額仍整段開打」的情況。
+2.  **原子遞增 + 最終一致（每一輪 `on_chat_model_end`）**  
+    `record_token_usage`（`token_usage.py`）在**同一個 DB transaction** 內，以單一  
+    `UPDATE user_usage_quotas SET used_tokens = used_tokens + delta`（見 `increment_used_tokens`）**原子累加**本輪實際用量，並同步 append `token_usage_logs`。  
+    此處**刻意採無條件累加、允許單輪略超上限**：不在超限當下中斷進行中的回合（避免使用者在「還有剩餘額度」時被砍掉半篇回應），而由**下一輪的 pre-flight** 攔截——屬「允許略超、最終一致」。  
+    **若改以成本嚴格為優先**，可將累加改為條件式 `WHERE used_tokens + delta <= monthly_limit`（原子強制不超扣），代價是可能中斷正在串流的回合。  
+    注意：LLM 該輪若已實際呼叫，供應商端成本仍已發生；Pre-flight 的作用是降低「已滿額仍整段重新開打」的情況。
 
 ### 3. Token 管理架構 (Token Management Architecture)
 
@@ -1063,10 +1061,10 @@ sequenceDiagram
     *   `user_usage_quotas`：每人每月累計 **`used_tokens`**（與 `subscription_tiers.monthly_token_limit` 比對）。
     *   `token_usage_logs`：每次 LLM 結算一列（對帳／模型用量／粗估成本）。
 *   **Redis（規劃中，尚未接線）**：
-    *   可作微秒級預檢或預留；目前以 Postgres 原子 `UPDATE … WHERE used_tokens + n <= limit` 為準。
+    *   可作微秒級預檢或預留；目前以 Postgres 原子 `UPDATE … SET used_tokens = used_tokens + n`（入口另有 pre-flight 攔截）為準。
 
 #### B. 高併發與一致性（目前實作）
-*   **條件式原子遞增**（與寫流水同一 transaction）：見 **§2** 與 `usage_quota.try_increment_used_tokens`。
+*   **原子遞增 + 最終一致**（與寫流水同一 transaction）：見 **§2** 與 `usage_quota.increment_used_tokens`（無條件累加、允許單輪略超、下一輪 pre-flight 攔截）。
 *   **MQ / 非同步回寫 Worker**：尚未實作；高 QPS 時可再評估。
 
 ### 4. 即時限流與延伸 (Real-time Guardrails)
@@ -1239,7 +1237,7 @@ class UsageManager:
 - [x] Google SSO 登入（移除 email/password 表單）
 - [x] 建議回饋 + Token 獎勵（`user_feedback`、每日上限）
 - [x] 前端對話介面開發 (Vanilla JS + HTML/CSS 玻璃擬態設計)
-- [x] Router Context Explosion 修復（slim context + 雙軌保護架構，Router tokens ↓ ~75%）
+- [x] Router Context Explosion 修復（slim context + 雙軌保護架構，壓縮 Router 上下文）
 
 ---
 *Last Update: 2026-06-10*
