@@ -92,6 +92,20 @@ def build_analyst_system_prompt(current_now: str) -> str:
     """
 
 
+def build_analyst_length_suffix(target_min: int, target_max: int, hard_cap: int) -> str:
+    """思考模式 Analyst 的篇幅約束（附加在 build_analyst_system_prompt 之後）。
+
+    控制的是「最終報告的可見字數」，避免長篇冗述；與 reasoning_effort（思考深度）無關。
+    字數由呼叫端經環境變數帶入，方便日後調整。（快捷模式另有自己的篇幅守則，不使用本函式。）
+    """
+    return f"""
+    ### [篇幅與節奏 — 必守]
+    * **總篇幅**：全篇繁體中文請控制在約 **{target_min}–{target_max}** 字（至多不超過約 **{hard_cap}** 字）。寧可精煉、勿冗長。
+    * **精簡原則**：同一觀點只論述一次；刪除長引言、重複鋪陳與過度堆疊的逐日數據列舉。若同類數據很多，擇要點出趨勢即可，不必逐筆羅列。
+    * **結構**：以 **3～6** 個 `##`／`###` 標題組織全文；文末標的清單簡明列出「名稱＋一句入選理由」即可，避免逐檔長篇說明。
+    * **取捨**：優先保留與使用者問題最直接相關的事實、關鍵數據與風險判斷；次要細節可省略。"""
+
+
 def build_flash_analyst_system_prompt(current_now: str) -> str:
     """快捷模式：在仍依據參考資料的約束下，縮短文風以降低尾段 LLM 延遲。"""
     base = build_analyst_system_prompt(current_now)

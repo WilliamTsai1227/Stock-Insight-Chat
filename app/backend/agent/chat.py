@@ -39,7 +39,11 @@ from dotenv import load_dotenv
 
 from langchain_openai import OpenAIEmbeddings
 
-from app.backend.agent.prompts import build_analyst_system_prompt, build_router_system_prompt
+from app.backend.agent.prompts import (
+    build_analyst_system_prompt,
+    build_router_system_prompt,
+    build_analyst_length_suffix,
+)
 from app.backend.agent.stream_usage_chat_openai import StreamUsageChatOpenAI
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage, SystemMessage
 from langchain_core.tools import tool
@@ -382,12 +386,28 @@ tools = [search_stock_news, search_market_ai_analysis, get_market_recommendation
 # OpenAI streaming：在尾包帶 usage（供 astream_events / on_chat_model_end 聚合）
 _OPENAI_STREAM_OPTS: Dict[str, Any] = {"stream_options": {"include_usage": True}}
 
+# reasoning 模型（gpt-5 / gpt-5-mini）的思考強度：延遲對此極度敏感。
+# 目前 langchain-openai 版本無 reasoning_effort 欄位，故經 model_kwargs 直接帶進 OpenAI API。
+# 合法值：minimal / low / medium / high。Router 只需選工具 → minimal；Analyst 需論述 → low。
+# 若要恢復預設深度思考，設為 medium/high 或留空（留空則不帶此參數，走模型預設）。
+_ROUTER_REASONING_EFFORT = os.getenv("ROUTER_REASONING_EFFORT", "minimal").strip()
+_ANALYST_REASONING_EFFORT = os.getenv("ANALYST_REASONING_EFFORT", "low").strip()
+
+
+def _with_reasoning_effort(base: Dict[str, Any], effort: str) -> Dict[str, Any]:
+    """把 reasoning_effort 併入 model_kwargs；effort 為空字串時不帶（走模型預設）。"""
+    kw = dict(base)
+    if effort:
+        kw["reasoning_effort"] = effort
+    return kw
+
+
 # --- 模型配置 ---
 # 1. 導航模型 (Router): 速度快、工具調用準確（搭配 LangGraph / astream_events 串流）
 router_model_base = StreamUsageChatOpenAI(
     model="gpt-5-mini",
     temperature=1,
-    model_kwargs=_OPENAI_STREAM_OPTS,
+    model_kwargs=_with_reasoning_effort(_OPENAI_STREAM_OPTS, _ROUTER_REASONING_EFFORT),
 )
 # Flash 快捷模式：單次 `ainvoke` 非串流；OpenAI 不允許在非 stream 請求帶 `stream_options`
 flash_router_model = StreamUsageChatOpenAI(
@@ -410,11 +430,43 @@ flash_rewrite_model = StreamUsageChatOpenAI(
     temperature=0,
     model_kwargs=_flash_rewrite_kw,
 )
+# 思考模式 Analyst 最終報告的「可見字數」目標（軟性，由 prompt 約束）。
+# 三者任一設為空或 <=0 → 不加篇幅約束（恢復不限長度的舊行為）。
+_ANALYST_TARGET_MIN_WORDS = os.getenv("ANALYST_TARGET_MIN_WORDS", "1200").strip()
+_ANALYST_TARGET_MAX_WORDS = os.getenv("ANALYST_TARGET_MAX_WORDS", "1800").strip()
+_ANALYST_HARD_CAP_WORDS = os.getenv("ANALYST_HARD_CAP_WORDS", "2600").strip()
+
+
+def _compute_analyst_length_suffix() -> str:
+    try:
+        mn = int(_ANALYST_TARGET_MIN_WORDS)
+        mx = int(_ANALYST_TARGET_MAX_WORDS)
+        cap = int(_ANALYST_HARD_CAP_WORDS)
+    except ValueError:
+        return ""
+    if mn <= 0 or mx <= 0 or cap <= 0:
+        return ""
+    return build_analyst_length_suffix(mn, mx, cap)
+
+
+# 於 module 載入時算好，避免每次 call_analyst 重建字串
+_ANALYST_LENGTH_SUFFIX = _compute_analyst_length_suffix()
+
 # 2. 分析模型 (Analyst): 深度思考、文筆詳盡
+# 可選硬上限：ANALYST_MAX_COMPLETION_TOKENS（預設不設）。
+# ⚠️ gpt-5 為 reasoning 模型，max_completion_tokens 會「連思考 token 一起算」，
+#    設太低可能把報告從中間截斷甚至無輸出；請當作寬鬆保險絲，篇幅控制以 prompt 為主。
+_analyst_model_kwargs = _with_reasoning_effort(_OPENAI_STREAM_OPTS, _ANALYST_REASONING_EFFORT)
+_an_max = os.getenv("ANALYST_MAX_COMPLETION_TOKENS", "").strip()
+if _an_max:
+    try:
+        _analyst_model_kwargs["max_completion_tokens"] = int(_an_max)
+    except ValueError:
+        pass
 analyst_model = StreamUsageChatOpenAI(
     model="gpt-5",
     temperature=1,
-    model_kwargs=_OPENAI_STREAM_OPTS,
+    model_kwargs=_analyst_model_kwargs,
 )
 # 快捷模式專用：`gpt-5` 等新模型不接受 `max_tokens`，須改用 `max_completion_tokens`
 # （置於 model_kwargs；環境變數名仍為 FLASH_ANALYST_MAX_TOKENS）
@@ -614,6 +666,8 @@ async def call_analyst(state: AgentState):
     current_now = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
 
     analyst_prompt = build_analyst_system_prompt(current_now)
+    if _ANALYST_LENGTH_SUFFIX:
+        analyst_prompt += "\n" + _ANALYST_LENGTH_SUFFIX
     full_ref = _format_retrieved_data_for_analyst(state.get("retrieved_data", []))
     tail: List[BaseMessage] = []
     if full_ref.strip():
