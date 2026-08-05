@@ -37,6 +37,12 @@ services:
   backend:
     image: ${DOCKERHUB_USER}/insight-chat-backend:${IMAGE_TAG}
     restart: always
+    # 記憶體上限（t4g.small 僅 2G，需與 qdrant 1G + kinetic + OS 共用）。
+    # mem_limit = 硬上限（超過就 OOM-kill 該容器，exit 137，靠 restart: always 重啟）；
+    # memswap_limit 略高於 mem_limit → 短暫尖峰先落到 swap，避免瞬間被殺。
+    # 上限是天花板不是保留量；請用 `docker stats` 觀察實際用量再微調。
+    mem_limit: 640m
+    memswap_limit: 1024m
     env_file:
       - .env
     environment:
@@ -65,6 +71,10 @@ services:
   kinetic:
     image: ${DOCKERHUB_USER}/kinetic-charts:${KINETIC_TAG}
     restart: always
+    # 掃描器 + yfinance/pandas。實測穩態約 280~305M（逼近舊上限 384M），
+    # 故上限微調到 448M 留喘息空間；memswap_limit 保留 swap 緩衝吸收尖峰。
+    mem_limit: 448m
+    memswap_limit: 640m
     env_file:
       - .env.kinetic
     # 不 bind host port；僅 backend 經 docker network 存取（kinetic API 無認證，
@@ -73,11 +83,17 @@ services:
   qdrant:
     image: qdrant/qdrant:latest
     restart: always
-    mem_limit: 1g
+    # t4g.small 僅 2G，qdrant 由 1G 降下來騰空間給 backend/kinetic。
+    # 實測僅用 ~100M，故只小幅降到 448M（仍有 ~4 倍餘裕，保守不冒險）。
+    # memswap_limit=mem_limit → 禁用 swap（向量庫走 swap 會很慢，
+    # 寧可硬性 OOM 也不要拖慢查詢）。
+    # 若 `docker stats` 顯示 qdrant 貼著上限，再往上調（但別讓三容器上限總和超過 2G）。
+    mem_limit: 448m
+    memswap_limit: 448m
     deploy:
       resources:
         limits:
-          memory: 1G
+          memory: 448M
     volumes:
       - qdrant_storage:/qdrant/storage
     # 僅 docker network 內存取；勿對外開 6333
