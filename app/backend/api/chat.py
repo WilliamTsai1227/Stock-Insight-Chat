@@ -33,6 +33,36 @@ from app.backend.module.usage_quota import assert_preflight_llm_quota
 
 router = APIRouter(tags=["Chat"])
 
+
+# ── 背景任務管理 ──────────────────────────────────────────────────────────────
+# fire-and-forget 的 asyncio.create_task 若不保留回傳的 Task，event loop 只持有
+# 弱參考，任務可能在 await（等 LLM / DB）交還控制權時被 GC 靜默回收而中途消失；
+# 且任務內拋出的例外若無人 await 會被靜默吞掉。以下工具解掉這兩個坑：
+#   1. 把 Task 放進模組層級 set → 提供強參考，GC 不會回收（完成後自動移除）。
+#   2. add_done_callback 主動取出 exception → 失敗可見（會印出 traceback）。
+# 注意：這讓「任務失敗可見」，但尚未做到重試 / 重啟（真正的 supervision
+# 仍須靠持久化佇列 + worker）。
+_background_tasks: "set[asyncio.Task]" = set()
+
+
+def _on_background_done(task: "asyncio.Task") -> None:
+    _background_tasks.discard(task)          # 完成即移除，避免 set 無限成長
+    if task.cancelled():
+        return
+    exc = task.exception()                   # 取出例外 → 不再被靜默吞掉
+    if exc is not None:
+        import traceback
+        print(f"[BG] 背景任務失敗: {exc!r}")
+        traceback.print_exception(type(exc), exc, exc.__traceback__)
+
+
+def _spawn_background(coro) -> "asyncio.Task":
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)              # 強參考，GC 不會回收
+    task.add_done_callback(_on_background_done)
+    return task
+
+
 # 股市 Agent（thinking / flash）回應結尾固定附加的免責聲明
 _STOCK_DISCLAIMER = (
     "\n\n---\n"
@@ -1894,13 +1924,13 @@ async def get_ai_response(
         finally:
             await event_queue.put(None)
 
-    # 啟動背景生產者任務
+    # 啟動背景生產者任務（保留強參考避免被 GC，並記錄失敗例外）
     if request.chat_mode == "general":
-        asyncio.create_task(background_general_runner())
+        _spawn_background(background_general_runner())
     elif request.response_mode == "flash":
-        asyncio.create_task(background_flash_runner())
+        _spawn_background(background_flash_runner())
     else:
-        asyncio.create_task(background_agent_runner())
+        _spawn_background(background_agent_runner())
 
     # 2. 消費者 (SSE Generator)：只負責從信箱拿信，就算斷線被 Cancelled，也不會影響 background_agent_runner
     async def event_generator():
