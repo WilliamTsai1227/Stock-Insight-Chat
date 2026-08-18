@@ -1,9 +1,14 @@
 # AWS 生產環境上線執行方案
 
-> **⚠️ 此為計畫開發 / 上線執行指南**
+> **⚠️ 此為計畫方案，非目前的正式架構**
 >
-> 本文件為 **Stock-Insight-Chat**（含深度研究 Deep Search）在 AWS 上的完整雲端架設與上線步驟。  
-> 相關功能規格見 [`deep_search.md`](./deep_search.md)；本機 Docker 維運見 [`docker_ops_handbook.md`](./docker_ops_handbook.md)。
+> 本文件描述的是 **Route 53 + WAF + ALB + ECS Fargate + 前端容器** 的完整託管方案，作為未來擴展的參考。
+>
+> **正式站目前跑的不是這一套**，而是「Cloudflare + 單台 EC2（docker compose）+ S3 靜態前端」：
+> 對外沒有 ALB / WAF / Route 53、沒有 nginx、前端不打包成 image。
+> **實際部署與維運請以 [`ec2_deploy.md`](./ec2_deploy.md) 與 [`release_handbook.md`](./release_handbook.md) 為準。**
+>
+> 深度研究功能規格見 [`deep_search.md`](./deep_search.md)（同樣尚未實作）；本機 Docker 維運見 [`docker_ops_handbook.md`](./docker_ops_handbook.md)。
 
 ---
 
@@ -32,7 +37,9 @@
 
 ### 1.1 目標
 
-- 將現有 Docker Compose 四服務（backend / frontend / db / qdrant）遷移至 AWS 生產環境
+- 將應用遷移至完整託管的 AWS 生產環境
+  （**注意**：本節寫作時的假設是「Docker Compose 四服務 backend / frontend / db / qdrant」；
+  現況已演進為 **backend / kinetic / qdrant** 三服務 + S3 靜態前端 + RDS，見 [`ec2_deploy.md`](./ec2_deploy.md) §1）
 - 支援 HTTPS、Google SSO、SSE 長連線聊天
 - 預留深度研究功能：S3 原始 PDF、背景 ingest worker
 - **先上線、後優化**：第一階段以可運維、可備份、可 HTTPS 為優先

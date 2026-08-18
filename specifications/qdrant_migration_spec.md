@@ -16,30 +16,46 @@
 
 ## 2. Collection 結構設計 (Schema)
 
+> **索引欄位的權威來源是 [`app/backend/scripts/setup_qdrant.py`](../app/backend/scripts/setup_qdrant.py) 的 `COLLECTION_DEFINITIONS`。** 下表「索引類型」欄已與其對齊；標示 **(無)** 代表 payload 裡有這個欄位、但**沒有建 payload index**（仍可讀取與回傳，只是不能高效過濾）。
+>
+> 兩個 collection 的向量結構皆為 `vectors_config["dense"]`（1536 維 Cosine）+ `sparse_vectors_config["text"]`（BM25，`modifier=IDF`）。
+
 ### A. Collection: `news` (股市新聞)
 | 欄位 (Payload Key) | 資料型態 | 索引類型 | 來源說明 |
 | :--- | :--- | :--- | :--- |
-| `mongo_id` | String | Keyword | MongoDB 的 `_id` 字串 (用於聚合) |
-| `title` | String | Text | 新聞標題 |
 | `publishAt` | String (ISO) | **Datetime** | 帶時區的 ISO 範式 (Asia/Taipei) |
-| `source` | String | Keyword | 新聞來源 (如: anue) |
-| `type` | String | Keyword | 新聞類型 (如: 台股新聞、國際新聞) |
-| `keywords` | Array[String] | Keyword | 新聞關鍵字標籤 |
+| `source` | String | Keyword | 新聞來源 (如: anue, cnyes) |
+| `category` | String | Keyword | 分類 (headline, tw_stock, etc.) |
+| `type` | String | Keyword | 新聞類型 (台股新聞 / 國際新聞) |
 | `stock_codes` | Array[String] | Keyword | 涉及股票代號 (如: ["2330"]) |
 | `stock_names` | Array[String] | Keyword | 涉及股票名稱 (如: ["台積電"]) |
-| `content` | String | (無) | 該片段完整內容 |
+| `keywords` | Array[String] | Keyword | 新聞關鍵字標籤 |
+| `collection_type` | String | Keyword | 固定為 `"news"` |
+| `chunk_type` | String | Keyword | `"full"` / `"partial"` |
+| `chunk_idx` | Integer | Integer | 片段序號 |
+| `total_chunks` | Integer | Integer | 該篇總片段數 |
+| `mongo_id` | String | **(無)** | MongoDB `_id` 字串；用於**結果分組**，非過濾條件，故未建索引 |
+| `title` | String | **(無)** | 新聞標題 |
+| `content` | String | **(無)** | 該片段完整內容 |
 
 ### B. Collection: `ai_analysis` (AI 產業分析)
 | 欄位 (Payload Key) | 資料型態 | 索引類型 | 來源說明 |
 | :--- | :--- | :--- | :--- |
-| `mongo_id` | String | Keyword | MongoDB 的 `_id` 字串 |
-| `title` | String | Text | 分析報告標題 |
 | `publishAt` | String (ISO) | **Datetime** | 帶時區的 ISO 範式 |
-| `chunk_type` | String | Keyword | 片段角色 (summary / key_news / stock_insight) |
-| `sentiment_label` | String | Keyword | 統一情緒標籤 (positive/negative/neutral) |
+| `sentiment_label` | String | Keyword | 統一情緒標籤 (positive / negative / neutral) |
 | `industry_list` | Array[String] | Keyword | 涉及產業標籤 |
-| `stock_list` | Array | Keyword | 涉及股票資訊 |
-| `source_news_titles` | Array[String] | (無) | 參考的新聞標題清單 |
+| `category` | String | Keyword | 分類 (headline, etc.) |
+| `chunk_type` | String | Keyword | 片段角色 (summary / key_news / stock_insight) |
+| `collection_type` | String | Keyword | 固定為 `"ai_analysis"` |
+| `is_summary` | Boolean | **Bool** | 是否為彙總報告 |
+| `analysis_batch` | Integer | Integer | 分析批次 |
+| `chunk_idx` | Integer | Integer | 片段序號 |
+| `mongo_id` | String | **Text** | MongoDB `_id` 字串；此 collection 有建 text index 供 `group_by` 聚合 |
+| `title` | String | **(無)** | 分析報告標題 |
+| `stock_list` | Array | **(無)** | 涉及股票資訊；工具層自行解析為 `名稱(代碼)` |
+| `source_news_titles` | Array[String] | **(無)** | 參考的新聞標題清單 |
+
+> 注意兩個 collection 的 `mongo_id` 處理不同：`ai_analysis` 建了 text index，`news` 沒有。若日後要對 `news.mongo_id` 做 filter，需先在 `setup_qdrant.py` 補上索引定義並重跑。
 
 ---
 
@@ -99,5 +115,7 @@
 ```
 
 ---
-*版本：v2.0 (2026-04-23)*
-*更新記錄：同步遷移腳本 v2 邏輯，細化 Payload 欄位與確定性 UUID 機制。*
+*版本：v2.1 (2026-08-16)*
+*更新記錄：*
+- *v2.1 — §2 索引類型與 `setup_qdrant.py` 的 `COLLECTION_DEFINITIONS` 逐欄對齊；補上先前漏列的 `collection_type` / `chunk_type` / `chunk_idx` / `total_chunks` / `category` / `is_summary` / `analysis_batch`，並標示未建索引的欄位。*
+- *v2.0 (2026-04-23) — 同步遷移腳本 v2 邏輯，細化 Payload 欄位與確定性 UUID 機制。*

@@ -58,10 +58,14 @@ CREATE TABLE IF NOT EXISTS users (
 ## 4. 既有資料庫 Migration SQL
 
 > **執行前請先備份資料庫！**
-> 
-> 進入 DB 容器：
+>
+> 連進 DB（`db` 容器預設停用，改連 RDS，見 [`sql_dev_handbook.md`](./sql_dev_handbook.md) §2）：
 > ```bash
-> docker-compose -f ./deploy/docker-compose.yml exec db psql -U postgres -d Insight
+> psql "$(grep '^DATABASE_URL=' .env | cut -d= -f2-)"
+> ```
+> 需啟用 db 服務時：
+> ```bash
+> docker compose -f ./deploy/docker-compose.yml exec db psql -U postgres -d Insight
 > ```
 
 ### 情境 A：開發環境（刪除所有舊帳號，乾淨重來）
@@ -140,7 +144,9 @@ ALTER TABLE users ALTER COLUMN last_login_provider SET DEFAULT 'google';
 #### 步驟一：進入 DB
 
 ```bash
-docker-compose -f ./deploy/docker-compose.yml exec db psql -U postgres -d Insight
+psql "$(grep '^DATABASE_URL=' .env | cut -d= -f2-)"
+# 需啟用 db 服務時：
+# docker compose -f ./deploy/docker-compose.yml exec db psql -U postgres -d Insight
 ```
 
 #### 步驟二：確認現有帳號
@@ -203,8 +209,10 @@ SELECT id, email, username, google_sub, last_login_provider FROM users;
 #### 步驟五：重啟後端並用 Google 登入
 
 ```bash
-docker-compose -f ./deploy/docker-compose.yml restart backend
+docker compose -f ./deploy/docker-compose.yml up -d backend
 ```
+
+（若這一步同時改了 `.env` 的 `GOOGLE_*`，**必須用 `up -d` 重建容器** —— `restart` 不會重讀 `env_file`，見 [`docker_ops_handbook.md`](./docker_ops_handbook.md) §3.1。）
 
 用步驟三填入的同一個 Gmail 帳號點「以 Google 帳號登入」，後端 callback 會自動：
 - 比對 email → 找到舊帳號

@@ -2,6 +2,22 @@
 
 本文件定義 Stock Insight Chat 的 Agent 實作邏輯與架構設計。
 
+## 0. 三種對話路徑（先看這個）
+
+`POST /api/chat/messages` 依 `chat_mode` 與 `response_mode` 走三條完全不同的程式路徑：
+
+| 路徑 | 觸發條件 | 實作 | 模型 |
+| :--- | :--- | :--- | :--- |
+| **思考模式**（本文件主體） | `chat_mode=stock_agent` + `response_mode=thinking`（預設） | [`agent/chat.py`](../app/backend/agent/chat.py) LangGraph ReAct | Router `gpt-5-mini` / Analyst `gpt-5` |
+| **快捷模式（Flash）** | `chat_mode=stock_agent` + `response_mode=flash` | [`agent/flash_pipeline.py`](../app/backend/agent/flash_pipeline.py) 線性管線，**不走 LangGraph** | `FLASH_ANALYST_MODEL`（預設 `gpt-5-mini`） |
+| **一般對話** | `chat_mode=general` | [`agent/general_chat.py`](../app/backend/agent/general_chat.py) | `GENERAL_CHAT_MODEL`（預設 `gpt-4o-mini`） |
+
+Flash 模式預設**略過 Router LLM**（`FLASH_SKIP_ROUTER=1`），直接以使用者原文填檢索參數，省掉一次 LLM 往返；其可調變數見 [`env.md`](./env.md) §九與 [`readme_full_details.md`](./readme_full_details.md)。一般對話不做向量檢索，可選開啟網路搜尋（`GENERAL_CHAT_ENABLE_WEB_SEARCH`）。
+
+**§1 之後的內容只描述思考模式。**
+
+---
+
 ## 1. 核心開發框架：LangGraph (ReAct)
 
 系統採用 **LangGraph** 的 **Stateful Graph** 架構實作 **ReAct (Reasoning and Acting)** 循環。
@@ -11,6 +27,21 @@
 2.  **Retry Check (重試檢查)**: 一個安全閥節點。若工具回傳空結果且未達重試上限（與程式常數 **`ROUTER_MAX_CYCLES = 3`** 對齊之 Router 輪次），則注入提示引導 Router 調整策略（如擴大時間範圍或更換關鍵字）。
 3.  **Tools (工具箱)**: 並行執行 (`asyncio.gather`) 所有被觸發的工具。執行完畢後**回到 Router** 進行下一輪思考。
 4.  **Analyst (分析)**: 使用 `gpt-5` 撰寫最終分析報告。
+
+### 1.1 推理強度（`reasoning_effort`）
+
+`gpt-5` / `gpt-5-mini` 是 reasoning 模型，**延遲對思考強度極度敏感**。兩個節點各自可調：
+
+| 環境變數 | 預設 | 理由 |
+| :--- | :--- | :--- |
+| `ROUTER_REASONING_EFFORT` | `minimal` | Router 只需選工具與參數，不需深度推理 |
+| `ANALYST_REASONING_EFFORT` | `low` | Analyst 需論述，但預設深度過重會明顯拖慢 |
+
+實作細節：目前的 `langchain-openai` 版本沒有 `reasoning_effort` 欄位，因此經 `model_kwargs` 直接帶進 OpenAI API（[`chat.py`](../app/backend/agent/chat.py) 的 `_with_reasoning_effort()`）。留空＝不傳此參數，走模型預設。
+
+**Flash 模式與一般對話的模型不套用這兩個變數。**
+
+驗證方式：OpenAI Platform → Logs → 展開該筆的 Tokens，看 **reasoning tokens**（`minimal` 應接近 0）。
 
 ---
 
@@ -31,7 +62,16 @@ class AgentState(TypedDict):
 為了防止 AI 的幻覺與資源浪費，系統實作了**硬性工具過濾**：
 *   **權限檢查**: 在 `call_router` 階段，系統會讀取 `enabled_tools`。
 *   **動態繫結**: 僅將「被允許且系統已實作」的工具物件 (Tool objects) 透過 `.bind_tools()` 提供給 Router。
-*   **目前支援工具**: `search_stock_news`, `search_market_ai_analysis`, `get_market_recommendations`。
+*   **目前支援工具**（[`chat.py`](../app/backend/agent/chat.py) 的 `tools` 清單，共 **4** 個）：
+
+| 工具 | 資料來源 | 說明 |
+| :--- | :--- | :--- |
+| `search_stock_news` | Qdrant `news` + MongoDB | 股市新聞 Hybrid 檢索 |
+| `search_market_ai_analysis` | Qdrant `ai_analysis` + MongoDB | AI 深度分析報告檢索 |
+| `get_market_recommendations` | Qdrant `ai_analysis` | 結構化推薦股票／產業提取 |
+| `tavily_global_search` | **Tavily Search API（外部）** | 即時網路搜尋：最新時事、一般知識、政策法規、非股市或非向量庫覆蓋的問題 |
+
+`tavily_global_search` 需要 `TAVILY_API_KEY`，未設定時不可用；單輪呼叫次數由 `TAVILY_MAX_CALLS_PER_TURN`（預設 2）限制，避免 Agent 反覆搜尋拖慢回應。工具規格見 [`tools_spec.md`](./tools_spec.md) §2-D。
 
 ---
 
@@ -167,3 +207,16 @@ ToolMessage 中的正文經 `_clip_for_llm(..., MAX_TOOL_ITEM_CHARS)`（預設�
 | `MAX_TOOL_ITEM_CHARS` | Router（與對話中的 Tool 摘要）讀到較長片段；完整正文仍由 Analyst 【完整參考資料】提供。 | Router 上下文更短；但若關鍵在文末仍可能影響 Router 判斷（見 8.5.1）。 |
 
 若延遲仍主要卡在 **Analyst**，應優先評估模型選型、`max_tokens`、或拆短 system prompt；若卡在 **Qdrant**，可再評估工具層的 `group_size`、score 閾值等（見 `news.py` / `ai_analysis.py`，非本檔規格核心）。
+
+### 8.8 延遲調校的實務順序
+
+上面 8.2–8.5 是**檢索側**的優化。實務上思考模式的延遲大頭通常在 **LLM 推理本身**，建議的調整順序是：
+
+1. **`ROUTER_REASONING_EFFORT=minimal`**（見 §1.1）—— Router 通常能省數秒，且幾乎不影響品質。
+2. **`ANALYST_REASONING_EFFORT`** 由 `low` 再降到 `minimal` —— 影響論述深度，改動前後請比對實際輸出。
+3. **縮報告篇幅**：`ANALYST_TARGET_MAX_WORDS` / `ANALYST_HARD_CAP_WORDS`（見 [`env.md`](./env.md) §6.1）。若 reasoning tokens 已經很低但時間仍長，瓶頸就是輸出長度，調 effort 沒用。
+4. 最後才動 `RETRIEVAL_TOP_K`（程式常數）與 `MAX_TOOL_ITEM_CHARS`。
+
+前三項都是**純 `.env` 變更**，不需重 build image；改完用 `up -d backend` 重建容器即可（`restart` 不會重讀 env）。
+
+診斷方法：OpenAI Platform → Logs，對照 Router 與 Analyst 兩筆的 tokens 與時間，先確認時間花在哪一段再動手。

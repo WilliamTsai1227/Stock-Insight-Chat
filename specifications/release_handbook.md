@@ -24,16 +24,20 @@
 docker login    # 第一次或憑證過期時
 
 export DOCKERHUB_USER=<你的dockerhub帳號>
-export IMAGE_TAG=latest         
+export IMAGE_TAG=1.0.1          # 遞增版本號，不要用 latest（見 §1.5）
 
-docker build -f deploy/backend.Dockerfile \
+docker build --platform linux/arm64 -f deploy/backend.Dockerfile \
   -t ${DOCKERHUB_USER}/insight-chat-backend:${IMAGE_TAG} .
 docker push ${DOCKERHUB_USER}/insight-chat-backend:${IMAGE_TAG}
 ```
 
-- image 名稱以 `deploy/docker-compose.prod.yml` 為準：`insight-chat-backend`。
-- 在 Apple Silicon 上 build 給 x86 EC2 用時，`docker build` 要加 `--platform linux/amd64`；
-  EC2 若是 Graviton（ARM）則不用。
+- ⚠️ **image 名稱必須是 `insight-chat-backend`**，以 `deploy/docker-compose.prod.yml` 的 `image:` 為準。
+  推到別的 repo 名（例如 `stock-insight-backend`）時，EC2 `pull` 會報 `not found`。
+- ⚠️ **`--platform linux/arm64` 是必要的**：正式站 EC2 是 **t4g.small = Graviton（ARM）**。
+  Apple Silicon 原生產出 arm64，加著無害；Intel Mac 或 x86 CI 不加會讓容器起不來（`exec format error`）。
+- ⚠️ **不要用 `latest`**：EC2 端無法分辨新舊，`pull` 可能拿到快取的舊 image，回滾也沒有可切的版本。
+
+> **為什麼一定要遞增 tag？** `docker compose up -d` 只在**本機沒有該 tag 時**才會去拉。沿用同一個 tag 時，EC2 上已經有那個名字的 image，於是 `pull` 沒抓到新的、`up -d` 也認為沒變化 —— 結果就是「明明 push 了、行為卻沒變」。換一個新 tag（`1.0.1` → `1.0.2`，或 git short SHA）同時解決這件事和回滾（§1.4）。
 
 ### 1.2 EC2 套用（SSH 進 EC2 的部署目錄，例 `/opt/stock-insight/`）
 
@@ -52,6 +56,10 @@ docker compose -f docker-compose.prod.yml up -d backend
 docker compose -f docker-compose.prod.yml ps                  # backend running
 docker compose -f docker-compose.prod.yml logs backend --tail 30   # 無 traceback、pool created
 curl -s https://<API網域>/            # health check 回應正常
+
+# 確認新程式碼真的進了 image（遞增 tag 就是為了讓這步有意義）
+docker compose -f docker-compose.prod.yml exec backend \
+  grep -n "<你這次改的關鍵字>" app/backend/<改到的檔案>.py
 ```
 
 再開正式站實際跑一輪核心流程：登入 → 發一則訊息（SSE 有串流回來）→ 側欄探索打得開。
@@ -119,7 +127,11 @@ aws s3 sync app/frontend/ s3://<你的前端bucket>/ --delete
 docker compose -f docker-compose.prod.yml up -d backend   # 重建容器讓新 env 生效
 ```
 
-注意 `restart` **不會**重讀 env_file，必須用 `up -d`（詳見 docker_ops_handbook.md §4）。
+注意 `restart` **不會**重讀 env_file，必須用 `up -d` 重建容器（詳見 [`docker_ops_handbook.md`](./docker_ops_handbook.md) §3.1）。改完驗證有沒有讀到：
+
+```bash
+docker compose -f docker-compose.prod.yml exec backend env | grep <變數名>
+```
 
 ### 3.3 有 DB migration 時
 
@@ -153,9 +165,11 @@ EC2 改 `.env` 的 `KINETIC_TAG` → `pull kinetic` + `up -d kinetic`。
 
 | 症狀 | 處理 |
 |------|------|
-| EC2 pull 拉不到新 image | tag 打錯或沒 push 成功：`docker manifest inspect <帳號>/insight-chat-backend:<tag>` 確認存在 |
-| backend 起不來 | `logs backend` 看 traceback；最常見是 `.env` 缺新變數（對照 `.env.prod.example`） |
-| image 在 EC2 跑不起來（exec format error） | build 時少了 `--platform linux/amd64`（Apple Silicon → x86 EC2） |
+| EC2 pull 報 `not found` | **push 的 repo 名與 compose 不符**（要 `insight-chat-backend`），或 tag 沒 push 成功：`docker manifest inspect <帳號>/insight-chat-backend:<tag>` 確認存在 |
+| **改了程式碼但行為沒變** | 沿用了同一個 tag，EC2 用到快取的舊 image：換新 tag 重 build/push/pull；用 `exec backend grep <關鍵字> <檔案>` 驗證 |
+| backend 起不來 | `logs backend` 看 traceback；最常見是 `.env` 缺新變數（對照 `.env.prod.example` 與 [`env.md`](./env.md)） |
+| image 在 EC2 跑不起來（exec format error） | build 時少了 `--platform linux/arm64`。正式站是 **t4g = Graviton（ARM）**；只有目標機器是 x86 EC2 時才用 `linux/amd64` |
+| 改了 `.env` 沒生效 | 用了 `restart`（不重讀 env_file）：改用 `up -d backend` |
 | 前端改動沒生效 | Cloudflare 快取沒清、或瀏覽器快取：purge + 無痕視窗重試 |
 | 探索頁 502 | kinetic 容器沒起來，或 backend 環境變數 `KINETIC_UPSTREAM` 遺失 |
 | 部署後磁碟變滿 | 舊 image 堆積：`docker image prune -a --filter "until=168h"` |

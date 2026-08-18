@@ -143,7 +143,7 @@ ToolMessage（精簡，預設 MAX_TOOL_ITEM_CHARS=500）→ state["messages"] �
 | `HISTORY_ASSISTANT_MAX_CHARS` | `800` | DB 歷史中 Analyst 回答的截斷字元上限 |
 | `FLASH_SKIP_ROUTER` | `1`（略過規劃 LLM） | 快捷：**`0`** 時會呼叫 Router（較慢，可細調檢索關鍵字） |
 | `FLASH_ANALYST_MODEL` | `gpt-5-mini` | 快捷模式 Analyst 用模型 |
-| `FLASH_ANALYST_MAX_TOKENS` | `2800` | 對應 API 的 **`max_completion_tokens`**。`gpt-5`／`gpt-5-mini` 會先消耗內部推理 token，數值過小時**可見正文可能只剩標題一二句**；設為空字串則不傳上限（較長但較慢） |
+| `FLASH_ANALYST_MAX_TOKENS` | `5000` | 對應 API 的 **`max_completion_tokens`**。`gpt-5`／`gpt-5-mini` 會先消耗內部推理 token，數值過小時**可見正文可能只剩標題一二句**；設為空字串則不傳上限（較長但較慢） |
 | `FLASH_RETRIEVAL_TOP_K` | `10` | 快捷 **`search_news`** 每輪向量取回上限（思考模式仍用程式內 `RETRIEVAL_TOP_K`） |
 | `FLASH_REF_MAX_BODY_CHARS` | `2200` | 快捷注入 Analyst【完整參考資料】時每段正文長度上限 |
 | `FLASH_DATE_RANGE_DAYS` | `80` | 快捷 `search_stock_news` 預設 `start_date`／`end_date` 區間跨度（回溯天數） |
@@ -372,7 +372,7 @@ FRONTEND_URL=http://localhost
 |------|---------------------------|----------|
 | `FLASH_SKIP_ROUTER` | `1` | `1`＝略過 Router LLM（較快）；`0`＝啟動 Router 協助改寫檢索關鍵字（較慢） |
 | `FLASH_ANALYST_MODEL` | `gpt-5-mini` | 快捷模式 Analyst 使用的模型 |
-| `FLASH_ANALYST_MAX_TOKENS` | `2800` | 對應 **`max_completion_tokens`**。`gpt-5-mini` 等會先耗用推理 token，設太小會**只剩標題／半句可見正文**。**不設定**或**空白**＝不傳上限 |
+| `FLASH_ANALYST_MAX_TOKENS` | `5000` | 對應 **`max_completion_tokens`**。`gpt-5-mini` 等會先耗用推理 token，設太小會**只剩標題／半句可見正文**。**不設定**＝用程式預設 `5000`；設為**空字串**＝不傳上限 |
 | `FLASH_RETRIEVAL_TOP_K` | `10` | **`search_news`（快捷）** 每輪取回筆數；思考模式不依此變數 |
 | `FLASH_REF_MAX_BODY_CHARS` | `2200` | 每段「參考正文」注入 Analyst【完整參考資料】前的截斷上限；字數愈少通常愈快 |
 | `FLASH_DATE_RANGE_DAYS` | `80` | 快捷兩工具預設 `start_date`／`end_date` 的回溯天數；不寫入時同樣為 `80` |
@@ -384,7 +384,9 @@ FRONTEND_URL=http://localhost
 | `FLASH_MERGED_RETRIEVE_CAP` | `max(FLASH_RETRIEVAL_TOP_K×2,16)` | 雙軌合併後參考上限 |
 
 > **為什麼回答只有一兩行？**  
-> `.env` 若仍是 **`FLASH_ANALYST_MAX_TOKENS=900`**（或其他過小數值），在 **`gpt-5-mini`** 上很常發生：**`max_completion_tokens` 多半先被內部推理用掉**，對使用者可見的段落幾乎寫不完，看起來像只有標題＋半截句子。請改 **`2800` 或以上**、或**刪除此變數／留空**讓程式用新預設或不設上限。
+> `.env` 若仍是 **`FLASH_ANALYST_MAX_TOKENS=900`**（或其他過小數值），在 **`gpt-5-mini`** 上很常發生：**`max_completion_tokens` 多半先被內部推理用掉**，對使用者可見的段落幾乎寫不完，看起來像只有標題＋半截句子。請改 **`2800` 或以上**、或**刪除此變數**讓程式用預設 `5000`（設成空字串則完全不傳上限）。
+>
+> 注意專案根目錄 `.env.example` 的註解範例寫的是 `2800`，比程式預設保守；兩者都可用，但別誤以為 `2800` 是預設值。
 
 **什麼時候才需要在 `.env` 加上述變數？**
 
@@ -1077,7 +1079,7 @@ sequenceDiagram
 
 ### 4-A. 手動配額重置與 `quota_reset_logs`（Insight-Monitor）
 
-營運上若需**提前歸零某使用者的配額計數**（讓其可繼續發問），但**保留全部花費流水**，請使用姊妹專案 **[Insight-Monitor](../Insight-Monitor)** 的「配額重置」頁，或依下列 SQL 手動執行。
+營運上若需**提前歸零某使用者的配額計數**（讓其可繼續發問），但**保留全部花費流水**，請使用姊妹專案 **Insight-Monitor**（獨立 repo，與本專案同層）的「配額重置」頁，或依下列 SQL 手動執行。
 
 #### 三表分工
 
@@ -1192,7 +1194,7 @@ WHERE user_id = 'YOUR_USER_UUID'::uuid
 ORDER BY reset_at DESC;
 ```
 
-Monitor 實作細節見 [Insight-Monitor README](../Insight-Monitor/README.md#配額重置quota_reset_logs)。
+Monitor 實作細節見 Insight-Monitor repo 的 `README.md`「配額重置（quota_reset_logs）」一節。
 
 ### 5. Python Class 設計實踐（參考用）
 

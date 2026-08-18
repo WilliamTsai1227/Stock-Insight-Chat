@@ -47,10 +47,14 @@ docker compose -f docker-compose.yml <子命令>
 |--------|------|--------|
 | **`backend`** | FastAPI + Agent | `8000` |
 | **`frontend`** | Nginx + 靜態前端 | `80` |
-| **`db`** | PostgreSQL 16 | `5432` |
 | **`qdrant`** | 向量資料庫 | `6333` |
+| ~~`db`~~ | PostgreSQL 16 | **預設停用** |
 
-`.env` 由 compose 的 `env_file: ../.env` 注入 **backend**；改 `.env` 後需重啟 backend 才會載入新值。
+> ⚠️ **`db` 服務目前在 [`deploy/docker-compose.yml`](../deploy/docker-compose.yml) 中是整段註解掉的**，本機開發直接連 AWS RDS（由 `.env` 的 `DATABASE_URL` 指定）。因此 `exec db`、`restart db`、`logs db` 這類指令會回 `no such service: db`。
+>
+> 若你要在本機跑一顆 PostgreSQL 容器，需先把 compose 內 `db:` 與 `volumes:` 的 `db_data:` 兩段取消註解，再 `up -d db`。本手冊凡標示「（需啟用 db 服務）」的段落都以此為前提。
+
+`.env` 由 compose 的 `env_file: ../.env` 注入 **backend**；改 `.env` 後需**重建容器**才會載入新值（見 §3.1）。
 
 ---
 
@@ -96,22 +100,31 @@ docker compose -f ./deploy/docker-compose.yml ps
 
 ## 3. 重啟（Restart）
 
-### 3.1 只重啟 backend（改 `.env` 最常用）
+### 3.1 改了 `.env` 之後（最常用）
 
-例如調整 `GENERAL_CHAT_MODEL`、`OPENAI_API_KEY`、`FLASH_*` 等，**不必重建映像**：
+例如調整 `GENERAL_CHAT_MODEL`、`OPENAI_API_KEY`、`ROUTER_REASONING_EFFORT`、`FLASH_*` 等，**不必重建映像**，但**必須重建容器**：
 
 ```bash
-docker compose -f ./deploy/docker-compose.yml restart backend
+docker compose -f ./deploy/docker-compose.yml up -d backend
 ```
 
-> `restart` 會用**同一個映像**重新建立容器，並重新讀取 `env_file`（`.env`）。
+> ⚠️ **不要用 `restart`。** `docker compose restart` 只是把**同一個容器**停掉再啟動，環境變數是容器**建立當下**就固定的，`restart` 不會重讀 `env_file`，改了 `.env` 也不會生效。
+>
+> `up -d` 會偵測到設定變更並**重新建立**容器（沿用同一個映像，很快），新的 `.env` 才會進去。
+>
+> 驗證有沒有讀到：
+> ```bash
+> docker compose -f ./deploy/docker-compose.yml exec backend env | grep <變數名>
+> ```
+
+`restart` 仍然有用 —— 當你只是想讓行程重跑一次（例如清掉記憶體狀態、重連外部服務），而**沒有**改任何設定時。
 
 ### 3.2 重啟其他單一服務
 
 ```bash
 docker compose -f ./deploy/docker-compose.yml restart frontend
-docker compose -f ./deploy/docker-compose.yml restart db
 docker compose -f ./deploy/docker-compose.yml restart qdrant
+# docker compose -f ./deploy/docker-compose.yml restart db   # 需啟用 db 服務，見 §1.3
 ```
 
 ### 3.3 重啟全部服務
@@ -126,11 +139,15 @@ docker compose -f ./deploy/docker-compose.yml restart
 
 | 你改了什麼 | 建議指令 |
 |------------|----------|
-| 只改 **`.env`**（模型名、API key、開關） | `restart backend` |
+| 只改 **`.env`**（模型名、API key、開關） | **`up -d backend`**（重建容器；`restart` 不會重讀 env） |
 | 改 **`app/backend/`** Python 程式 | `up -d --build backend` |
 | 改 **`app/backend/requirements.txt`** | `build --no-cache backend` 再 `up -d backend`（見 §5） |
 | 改 **前端** `app/frontend/` | `up -d --build frontend` |
+| 改 **`deploy/docker-compose.yml`** 本身 | `up -d`（會重建受影響的服務） |
+| 什麼都沒改，只想讓行程重跑 | `restart <服務>` |
 | 改 **`init_db.sql`** 且 DB **已存在** | 不會自動套用；請用 [`sql_dev_handbook.md`](./sql_dev_handbook.md) 手動 migration |
+
+> 生產環境（EC2）同樣適用「改 `.env` 要用 `up -d`」這條規則，見 [`ec2_deploy.md`](./ec2_deploy.md) §8.3。
 
 ---
 
@@ -178,8 +195,8 @@ docker compose -f ./deploy/docker-compose.yml logs -f --timestamps backend
 
 ```bash
 docker compose -f ./deploy/docker-compose.yml logs -f frontend
-docker compose -f ./deploy/docker-compose.yml logs -f db
 docker compose -f ./deploy/docker-compose.yml logs -f qdrant
+# docker compose -f ./deploy/docker-compose.yml logs -f db   # 需啟用 db 服務，見 §1.3
 ```
 
 ### 6.3 全部服務一起
@@ -215,7 +232,15 @@ docker compose -f ./deploy/docker-compose.yml exec backend sh
 docker compose -f ./deploy/docker-compose.yml exec backend pip show openai
 ```
 
-### 7.2 db（PostgreSQL / psql）
+### 7.2 PostgreSQL / psql
+
+**目前預設連 AWS RDS**，本機沒有 db 容器可 exec。請用本機的 `psql` 直接連（連線字串取自 `.env` 的 `DATABASE_URL`）：
+
+```bash
+psql "$(grep '^DATABASE_URL=' .env | cut -d= -f2-)"
+```
+
+（需啟用 db 服務時）改為進容器：
 
 ```bash
 docker compose -f ./deploy/docker-compose.yml exec db psql -U postgres -d Insight
@@ -236,7 +261,8 @@ docker compose -f ./deploy/docker-compose.yml exec frontend sh
 ### 8.1 改了 `.env` 的模型或 API key
 
 ```bash
-docker compose -f ./deploy/docker-compose.yml restart backend
+docker compose -f ./deploy/docker-compose.yml up -d backend        # 重建容器，非 restart
+docker compose -f ./deploy/docker-compose.yml exec backend env | grep <變數名>   # 確認讀到
 docker compose -f ./deploy/docker-compose.yml logs --tail 50 backend
 ```
 
@@ -267,8 +293,8 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8000/docs
 | 用途 | URL |
 |------|-----|
 | 前端 | http://localhost （port 80） |
-| 後端 API / Swagger | http://localhost:8000 |
-| PostgreSQL | `localhost:5432` |
+| 後端 API / Swagger | http://localhost:8000 （`/docs`） |
+| PostgreSQL | AWS RDS（見 `.env` 的 `DATABASE_URL`）；啟用 db 服務時為 `localhost:5432` |
 | Qdrant | http://localhost:6333 |
 
 ---
@@ -277,10 +303,10 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8000/docs
 
 | Volume | 用途 |
 |--------|------|
-| `deploy_db_data` 或 `db_data` | PostgreSQL 資料（實際名稱以 `docker volume ls` 為準） |
-| `deploy_qdrant_storage` 或 `qdrant_storage` | Qdrant 向量資料 |
+| `deploy_qdrant_storage` 或 `qdrant_storage` | Qdrant 向量資料（實際名稱以 `docker volume ls` 為準） |
+| `deploy_db_data` 或 `db_data` | PostgreSQL 資料 —— **僅在啟用 db 服務時存在**；舊的 volume 可能仍佔磁碟，可手動 `docker volume rm` |
 
-**清空本機 DB 並重新跑 `init_db.sql`**（會刪光資料）：
+**清空本機 DB 並重新跑 `init_db.sql`**（會刪光資料，**需啟用 db 服務**）：
 
 ```bash
 docker compose -f ./deploy/docker-compose.yml down
@@ -288,6 +314,8 @@ docker volume ls | grep db
 docker volume rm <實際_volume_名稱>
 docker compose -f ./deploy/docker-compose.yml up -d db
 ```
+
+> 連 RDS 時**沒有**這個捷徑：`init_db.sql` 是冪等的，直接對目標 database 執行即可；要清資料請用 SQL（`TRUNCATE` / `DROP TABLE`），並確認你連的不是正式庫。
 
 詳見 [`sql_dev_handbook.md`](./sql_dev_handbook.md) §5.3。
 

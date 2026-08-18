@@ -425,7 +425,7 @@ stateDiagram-v2
   "chat_id": "abc-123",
   "project_id": "def-456",
   "chat_mode": "general",
-  "response_mode": "think"
+  "response_mode": "thinking"
 }
 ```
 

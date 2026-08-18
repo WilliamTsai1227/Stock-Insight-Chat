@@ -197,22 +197,30 @@ shasum -a 256 app/backend/agent/stream_usage_chat_openai.py
 
 > **Schema 變更、migration 流程、init_db 與既有 volume 的差異**：請見 [`sql_dev_handbook.md`](./sql_dev_handbook.md)。
 
-本專案使用 Docker Compose 部署，資料庫預設在 `db` container 中執行。以下方式為標準登入做法：
+> ⚠️ **`db` 服務目前在 [`deploy/docker-compose.yml`](../deploy/docker-compose.yml) 中是整段註解掉的**，本機開發與生產都直接連 **AWS RDS**（由 `.env` 的 `DATABASE_URL` 指定）。`exec db psql` 會回 `no such service: db`。
 
-### 1-1 使用 Docker Compose（推薦）
+### 1-1 本機 `psql` 直連（目前預設做法）
 
 在**專案根目錄**執行：
 
 ```bash
-docker-compose -f ./deploy/docker-compose.yml exec db psql -U postgres -d Insight
+grep '^DATABASE_URL=' .env      # 先確認你要連哪一個 database
+psql "$(grep '^DATABASE_URL=' .env | cut -d= -f2-)"
 ```
 
-（Compose V2 使用者可將 `docker-compose` 改為 `docker compose`。）
+本機若沒有 `psql`：macOS 可 `brew install libpq && brew link --force libpq`。  
+RDS 強制 TLS 時，連線字串尾端加 `?sslmode=require`。
 
-### 1-2 直接使用 Docker Exec
-若知道 container 的明確名稱（可透過 `docker ps` 確認，如 `deploy-db-1`），可使用：
+> 對**正式** RDS 下 SQL 前務必確認連的是哪一台、哪一個 database（chat 用 `Insight`、探索用 `kinetic`）。本文件多數查詢是唯讀的，但 §1-3 之後有 DDL。
+
+### 1-2 走 db 容器（需啟用 db 服務）
+
+先把 compose 內 `db:` 與 `volumes:` 的 `db_data:` 取消註解並 `up -d db`，之後：
 
 ```bash
+docker compose -f ./deploy/docker-compose.yml exec db psql -U postgres -d Insight
+
+# 或已知 container 名稱時（docker ps 可查，如 deploy-db-1）
 docker exec -it <db_container_name> psql -U postgres -d Insight
 ```
 

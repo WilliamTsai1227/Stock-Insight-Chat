@@ -5,6 +5,7 @@
 ## 1. 核心元件
 *   **向量庫 (Vector Store)**: Qdrant（**Qdrant 伺服器需 ≥ v1.10** 以支援 Query API / RRF 融合）
 *   **文件庫 (Document Store)**: MongoDB (僅用於獲取全文)
+*   **外部搜尋 (External Search)**: Tavily Search API（`tavily_global_search`，見 §2-D；不經 Qdrant/MongoDB，本節其餘規格不適用）
 *   **Dense Embeddings**: OpenAI `text-embedding-3-small` (1536 dims)，向量名稱 **`dense`**
 *   **Sparse (BM25)**: FastEmbed `Qdrant/bm25`，索引與查詢分別使用 `passage_embed` / `query_embed`；Qdrant 端 sparse 向量名稱 **`text`**，`SparseVectorParams.modifier = IDF`（與 FastEmbed 慣例一致）
 *   **融合策略**: **RRF (Reciprocal Rank Fusion)**：對同一 filter 下 dense 與 sparse 兩路 prefetch 結果做排名融合（非加權分數相加）
@@ -61,6 +62,31 @@ python3 app/backend/scripts/migrate_to_qdrant.py
     2.  **Hybrid + RRF** 檢索，`chunk_type="stock_insight"` 等條件以 **must** filter 保留。
     3.  解析 Payload 中的 `stock_list` (自動格式化為 `名稱(代碼)`)。
 *   **Output**: 返回結構化的 `stocks` (list) 與 `industries` (list) 以及資料來源清單。
+
+### D. 即時網路搜尋 (`tavily_global_search`)
+
+*   **目標**: 向量庫覆蓋不到的問題 —— 最新時事、一般知識、產品說明、政策法規、非股市專業問題。
+*   **資料來源**: **Tavily Search API（外部服務）**，不經 Qdrant 或 MongoDB。
+*   **Input**: `query` (str) —— 搜尋關鍵字，中英文皆可。**僅此一個參數**，無日期或標的過濾。
+*   **執行邏輯**:
+    1.  呼叫 [`tools/global_search.py`](../app/backend/tools/global_search.py) 的 `tavily_search()`。
+    2.  依 `TAVILY_INCLUDE_ANSWER` 決定是否附帶 Tavily 的即時摘要。
+    3.  每則結果的正文同樣套用 `_clip_for_llm(..., MAX_TOOL_ITEM_CHARS)` 截斷。
+    4.  失敗時**不拋例外**，回傳 `網路搜尋失敗：<原因>` 字串交給 Router 判斷。
+*   **Output**: 標題、URL、發布日期與內容片段的文字區塊。
+
+**優先順序**：Router 的 system prompt 明確指示 —— 若問題能由 `search_stock_news` 或 `search_market_ai_analysis` 回答，**優先用那兩個**；Tavily 是覆蓋不到時的補位。
+
+**相關環境變數**（完整說明見 [`env.md`](./env.md) §八）：
+
+| 變數 | 預設 | 說明 |
+| :--- | :--- | :--- |
+| `TAVILY_API_KEY` | `""` | **未設定時本工具不可用** |
+| `TAVILY_MAX_RESULTS` | `5` | 每次回傳筆數 |
+| `TAVILY_SEARCH_DEPTH` | `basic` | `basic` / `advanced`（後者深但慢且貴） |
+| `TAVILY_INCLUDE_ANSWER` | `1` | 是否附帶即時摘要 |
+| `TAVILY_TIMEOUT_SEC` | `15` | 單次逾時秒數 |
+| `TAVILY_MAX_CALLS_PER_TURN` | `2` | 單輪呼叫次數上限，防止反覆搜尋拖慢回應 |
 
 ---
 

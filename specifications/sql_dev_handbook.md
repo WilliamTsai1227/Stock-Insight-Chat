@@ -9,86 +9,104 @@
 
 | 情境 | `init_db.sql` 會自動生效嗎？ | 你該做什麼 |
 |------|------------------------------|------------|
-| **全新** Postgres volume（第一次 `docker compose up`） | ✅ 會。映像掛載的 `init_db.sql` 只在 **volume 空白時** 由 `docker-entrypoint-initdb.d` 執行一次 | 把 DDL 寫進 `app/backend/database/init_db.sql` |
-| **已有** `db_data` volume（本機開發最常見） | ❌ 不會。重啟 `db` 容器 **不會** 重跑 init | 在 **`db` 容器內用 `psql` 手動執行**，並新增 `migrations/V00x__*.sql` 留存 |
+| **AWS RDS**（本機開發與生產目前都是這個） | ❌ 不會。RDS 沒有 `docker-entrypoint-initdb.d` 機制 | 用 `psql` 手動執行（§3），並新增 `migrations/V00x__*.sql` 留存 |
+| **全新** Postgres volume（需啟用 db 服務，第一次 `up`） | ✅ 會。`init_db.sql` 只在 **volume 空白時** 由 `docker-entrypoint-initdb.d` 執行一次 | 把 DDL 寫進 `app/backend/database/init_db.sql` |
+| **已有** `db_data` volume | ❌ 不會。重啟 `db` 容器 **不會** 重跑 init | 手動執行 migration，同上 |
 | **只想改幾筆測試資料** | — | 直接 `psql` 執行 `UPDATE` / `DELETE`（開發環境即可） |
 
 > **重要**：後端程式碼（FastAPI）**不會**在啟動時自動跑 migration 檔；migration 目錄是給人類與維運對照用的「版本化 SQL」，需自行 `psql` 或管線執行。
 
 ---
 
-## 2. Docker 服務對照
+## 2. 你的 PostgreSQL 在哪？
 
-`deploy/docker-compose.yml` 與本手冊相關的服務：
+> ⚠️ **`db` 服務目前在 [`deploy/docker-compose.yml`](../deploy/docker-compose.yml) 中是整段註解掉的。** 本機開發與生產都直接連 **AWS RDS**，由 `.env` 的 `DATABASE_URL` 指定。
+>
+> 也就是說 `docker compose exec db psql ...` 會回 `no such service: db`。本手冊預設走 **§3.1 本機 psql 直連**；凡標示「（需啟用 db 服務）」的指令，都要先把 compose 內 `db:` 與 `volumes:` 的 `db_data:` 取消註解才能用。
+
+| 情境 | 連線方式 |
+|------|----------|
+| **本機開發（目前預設）** | 本機 `psql` 直連 `.env` 的 `DATABASE_URL`（RDS） |
+| **生產維運** | 同上，但 `DATABASE_URL` 指向正式 RDS —— **動手前先確認你連的是哪一個** |
+| **要跑一顆本機 db 容器** | 取消註解 compose 的 `db:` 段，之後可用 `exec db psql` |
+
+`deploy/docker-compose.yml` 其他服務：
 
 | 服務名稱 | 映像／用途 | 你要進去改 SQL 嗎？ |
 |----------|------------|---------------------|
-| **`db`** | `postgres:16-alpine` | ✅ **是**。所有 schema / 資料變更都在這裡做 |
-| **`backend`** | FastAPI + Agent | ❌ 一般不裝 `psql`。除錯 API、看 log 用 |
+| **`backend`** | FastAPI + Agent | ❌ 容器內未安裝 `psql`。除錯 API、看 log 用 |
 | **`frontend`** | Nginx | ❌ |
 | **`qdrant`** | 向量庫 | ❌（非 PostgreSQL） |
+| ~~`db`~~ | `postgres:16-alpine` | 預設停用，見上方說明 |
 
-連線資訊（與 compose 一致）：
+**啟用 db 服務時**的連線資訊（與 compose 內註解一致）：
 
-- **Host（容器內）**：`db`
-- **Host（本機）**：`localhost`（port `5432` 已映射）
-- **User**：`postgres`
-- **Password**：`password123`
-- **Database**：`Insight`
+- **Host（容器內）**：`db`／**Host（本機）**：`localhost:5432`
+- **User**：`postgres`／**Password**：`password123`／**Database**：`Insight`
 
 ---
 
-## 3. 進入容器與連線 PostgreSQL
+## 3. 連線 PostgreSQL
 
-以下指令預設在**專案根目錄**（`Stock-Insight-Chat/`，內含 `deploy/`）執行。  
-Compose V2 可用 `docker compose`；舊版二進制請改為 `docker-compose`。
+以下指令預設在**專案根目錄**（`Stock-Insight-Chat/`，內含 `deploy/`）執行。
 
-### 3.1 確認容器已啟動
+### 3.1 本機 `psql` 直連（目前預設做法）
 
-```bash
-docker compose -f ./deploy/docker-compose.yml ps
-```
-
-### 3.2 進入 `db` 並開互動式 `psql`（最常用）
+先確認你要連的是哪一個 database：
 
 ```bash
-docker compose -f ./deploy/docker-compose.yml exec db psql -U postgres -d Insight
+grep '^DATABASE_URL=' .env
 ```
 
-成功後提示字元為：`Insight=#`  
-離開：`\q`
-
-### 3.3 不進互動模式，單次執行一條 SQL
+開互動式 session：
 
 ```bash
-docker compose -f ./deploy/docker-compose.yml exec db \
-  psql -U postgres -d Insight -c "SELECT version();"
+psql "$(grep '^DATABASE_URL=' .env | cut -d= -f2-)"
 ```
 
-### 3.4 從主機檔案執行整份 migration
+離開：`\q`。若本機沒有 `psql`：`brew install libpq && brew link --force libpq`（macOS）。
+
+> RDS 通常要求 TLS。連不上且錯誤訊息提到 SSL 時，在連線字串尾端加 `?sslmode=require`
+> （這是給 `psql` 用的；後端程式走的是 `.env` 的 `DATABASE_SSL=require`，見 [`env.md`](./env.md)）。
+
+### 3.2 單次執行一條 SQL
 
 ```bash
-docker compose -f ./deploy/docker-compose.yml exec -T db \
-  psql -U postgres -d Insight \
-  -f - < app/backend/database/migrations/V004__token_usage_logs_add_caller.sql
+psql "$(grep '^DATABASE_URL=' .env | cut -d= -f2-)" -c "SELECT version();"
 ```
 
-或先 `docker compose cp` 再 `psql -f /path/in/container`（路徑依環境調整）。
+### 3.3 執行整份 migration
 
-### 3.5 進入 `backend` 容器（僅除錯應用，不改 schema）
+```bash
+psql "$(grep '^DATABASE_URL=' .env | cut -d= -f2-)" \
+  -f app/backend/database/migrations/V004__token_usage_logs_add_caller.sql
+```
+
+> 對**正式** RDS 執行前，先確認 `DATABASE_URL` 指向的是你要改的那一個 database
+> （chat 用 `Insight`、探索用 `kinetic`，兩者在同一台 RDS 上）。
+
+### 3.4 進入 `backend` 容器（僅除錯應用，不改 schema）
 
 ```bash
 docker compose -f ./deploy/docker-compose.yml exec backend sh
 ```
 
-在內可檢查環境變數、`python` 等。**Schema 變更請一律用 §3.2 的 `db` + `psql`。**
+在內可檢查環境變數、`python` 等；容器內**未安裝 `psql`**。
 
-### 3.6 本機已安裝 `psql` 時（可選）
-
-若 `5432` 已映射，也可不進容器：
+### 3.5 走 db 容器（需啟用 db 服務，見 §2）
 
 ```bash
-PGPASSWORD=password123 psql -h localhost -U postgres -d Insight
+docker compose -f ./deploy/docker-compose.yml ps
+docker compose -f ./deploy/docker-compose.yml exec db psql -U postgres -d Insight
+
+# 單次執行
+docker compose -f ./deploy/docker-compose.yml exec db \
+  psql -U postgres -d Insight -c "SELECT version();"
+
+# 從主機檔案執行 migration
+docker compose -f ./deploy/docker-compose.yml exec -T db \
+  psql -U postgres -d Insight \
+  -f - < app/backend/database/migrations/V004__token_usage_logs_add_caller.sql
 ```
 
 ---
@@ -106,14 +124,16 @@ PGPASSWORD=password123 psql -h localhost -U postgres -d Insight
       ↓
 4. 新增 app/backend/database/migrations/V00x__描述.sql
       ↓
-5. 在本機「已有 volume」的 DB 上 exec db psql 執行 migration
+5. 對目標 DB 執行 migration（§3.3）
       ↓
 6. 修改後端 Python（查詢欄位、ORDER BY、寫入 updated_at 等）
       ↓
-7. 重啟 backend（必要時 --build）
+7. up -d --build backend（改程式）／up -d backend（只改 .env）
       ↓
 8. 在 psql 驗證：\d 表名、SELECT 一筆、跑相關 API
 ```
+
+> 部署到生產時**先跑 migration、再部署新後端**（新程式碼可能依賴新欄位）；順序見 [`release_handbook.md`](./release_handbook.md) §3.3。
 
 ### 4.1 修改 `init_db.sql`
 
@@ -161,15 +181,18 @@ COMMIT;
 | `V003__token_usage_logs_composite_indexes.sql` | 用量表複合索引 |
 | `V004__token_usage_logs_add_caller.sql` | `token_usage_logs.caller` |
 | `V005__seed_subscription_tiers.sql` | 訂閱等級種子資料 |
+| `V006__quota_reset_logs.sql` | 新增 `quota_reset_logs` 表 |
+| `V007__user_feedback.sql` | 新增 `user_feedback` 表 |
+| `V008__user_feedback_tokens_granted.sql` | `user_feedback.tokens_granted` |
 
-### 4.3 在本機既有資料庫執行 migration
+### 4.3 對既有資料庫執行 migration
 
 ```bash
-docker compose -f ./deploy/docker-compose.yml exec db \
-  psql -U postgres -d Insight
+psql "$(grep '^DATABASE_URL=' .env | cut -d= -f2-)" \
+  -f app/backend/database/migrations/V008__user_feedback_tokens_granted.sql
 ```
 
-貼上 migration 內容，或 §3.4 從檔案餵入。
+或開互動式 session（§3.1）後貼上 migration 內容。**需啟用 db 服務**時見 §3.5。
 
 ### 4.4 驗證
 
@@ -189,19 +212,17 @@ WHERE table_name = 'chats' AND column_name = 'updated_at';
 \di idx_chats_updated_at
 ```
 
-重啟後端：
+套用後端變更：
 
 ```bash
-docker compose -f ./deploy/docker-compose.yml restart backend
-```
-
-（完整 Docker 維運指令見 [`docker_ops_handbook.md`](./docker_ops_handbook.md)。）
-
-程式或依賴有變更時：
-
-```bash
+# 改了 Python 程式或依賴
 docker compose -f ./deploy/docker-compose.yml up -d --build backend
+
+# 只改了 .env（注意：restart 不會重讀 env_file）
+docker compose -f ./deploy/docker-compose.yml up -d backend
 ```
+
+（完整 Docker 維運指令見 [`docker_ops_handbook.md`](./docker_ops_handbook.md) §3、§4。）
 
 ---
 
@@ -221,12 +242,22 @@ docker compose -f ./deploy/docker-compose.yml up -d --build backend
 
 ### 5.3 開發環境重置整個資料庫（會刪光資料）
 
-僅限本機開發、確認可清空時：
+**連 RDS 時（目前預設）**：沒有「清 volume」這個捷徑。`init_db.sql` 本身是冪等的（全部 `IF NOT EXISTS`），重跑不會清資料；真要清空請用 SQL，**且務必先確認 `DATABASE_URL` 不是正式庫**：
+
+```bash
+grep '^DATABASE_URL=' .env      # 先看清楚你要清的是哪一個
+psql "$(grep '^DATABASE_URL=' .env | cut -d= -f2-)" \
+  -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+psql "$(grep '^DATABASE_URL=' .env | cut -d= -f2-)" \
+  -f app/backend/database/init_db.sql
+```
+
+**需啟用 db 服務時**，可用清 volume 的方式：
 
 ```bash
 docker compose -f ./deploy/docker-compose.yml down
-docker volume rm deploy_db_data
-# 若 volume 名稱不同，先用：docker volume ls | grep db
+docker volume ls | grep db
+docker volume rm <實際_volume_名稱>
 docker compose -f ./deploy/docker-compose.yml up -d db
 ```
 
@@ -261,7 +292,7 @@ UPDATE chats SET title = '測試標題' WHERE id = '...';
 
 - [ ] `init_db.sql` 已更新（新環境可一鍵建庫）
 - [ ] `migrations/V00x__*.sql` 已新增（既有環境可重現）
-- [ ] 本機 `db_data` 上已手動跑過 migration 並驗證 `\d`
+- [ ] 已對開發用 DB 跑過 migration 並用 `\d` 驗證
 - [ ] 後端查詢／寫入已對齊新欄位
 - [ ] `database_spec.md` 若表結構有變，是否需同步更新 ERD／欄位表（可另開 PR）
 
@@ -284,8 +315,9 @@ UPDATE chats SET title = '測試標題' WHERE id = '...';
 
 | 現象 | 可能原因 | 處理 |
 |------|----------|------|
-| 改了 `init_db.sql` 重啟後表沒變 | volume 已存在，init 只跑一次 | 手動跑 migration 或 §5.3 清 volume |
-| `exec db psql` 失敗 | `db` 未啟動 | `docker compose ... up -d db` |
+| 改了 `init_db.sql` 重啟後表沒變 | 連的是 RDS，或 volume 已存在（init 只跑一次） | 手動跑 migration（§3.3）或 §5.3 |
+| `exec db psql` 回 `no such service: db` | **`db` 服務預設是註解掉的**（見 §2） | 改用 §3.1 本機 psql 直連，或取消註解 compose 的 `db:` 段 |
+| `psql` 連 RDS 報 SSL 錯 | RDS 強制 TLS | 連線字串加 `?sslmode=require`；後端則設 `DATABASE_SSL=require` |
 | `ALTER TABLE ... ADD CONSTRAINT` 失敗 | 舊資料不符合新約束 | 先 `SELECT` 找出異常列並修補或刪除 |
 | API 仍照 `created_at` 排序 | 只改了 DB，沒改 Python | 檢查 `app/backend/api/*.py` 的 SQL |
 | 後端啟動報 `column "updated_at" does not exist` | migration 未套用到目前連線的 DB | 對 **同一個** `Insight` 執行 §4.3 |

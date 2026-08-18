@@ -13,18 +13,21 @@
     - [x] 使用者登入 (`/api/auth/login`) - 含 Cookie 寫入。
     - [x] 使用者登出 (`/api/auth/logout`) - 含資料庫 Token 撤銷。
 - [x] **自動化測試**: 建立 `test_auth_api.py` 整合測試腳本。
-- [ ] **環境修復**: 解決主機 Port 5432 衝突問題 (Local Postgres vs Docker)。
-- [ ] **權杖刷新**: 實作接口，使用 RT 換取新 AT。
-- [ ] **權限保護**: 將現有的 API 加上 JWT 驗證裝飾器。
+- [x] **環境修復**: 主機 Port 5432 衝突已不適用 —— 本機 `db` 容器預設停用，改連 AWS RDS。
+- [x] **權杖刷新**: `POST /api/user/refresh`，含 RT Rotation 與 Token Reuse 偵測。
+- [x] **權限保護**: 所有需登入的端點皆以 `Depends(get_current_user)` 驗證 AT。
 
 ## 📈 核心功能擴充
-- [ ] **會員資料**: 實作 `/api/user/profile` 與 `/api/user/usage` 接口。
-- [ ] **歷史紀錄**: 實作對話分頁查詢功能。
+- [x] **會員資料**: `GET /api/user`（profile）與 `GET /api/user/usage`（用量統計）皆已實作。
+- [x] **歷史紀錄**: Cursor-based 分頁（`idx_messages_chat_id_created_at_desc` 複合索引支撐）。
 - [x] **Google SSO**: 串接 Google OAuth2 登入（已成為唯一登入方式）。
+- [ ] **檔案檢索**: `/api/files/*` 目前為 stub，S3 上傳與文件問答尚未完成。
+- [ ] **深度研究 (Deep Search)**: 見 [`deep_search.md`](./deep_search.md)，尚未開工。
+- [ ] **專案改名**: 目前只有建立／刪除，無 `PATCH /api/project`。
 
 ## 🎨 前端開發 (Frontend)
-- [ ] **權杖管理**: 實作前端自動刷新 Token 的攔截器 (Interceptor)。
-- [ ] **配額顯示**: 顯示剩餘 Token 用量頁面。
+- [x] **權杖管理**: `auth.js` 的 `tryRefreshToken()` + `authFetch` 封裝，AT 僅存記憶體、401 時自動以 RT 換發。
+- [x] **配額顯示**: sidebar 讀 `GET /api/user/usage` 顯示等級與剩餘 Token。
 - [x] **Parked staging 防呆**: 並行對話離開視圖時封存 DOM 上限 `MAX_PARKED_STAGING_CHATS`（依 Map 插入序 FIFO 剔除最舊、並 `abort` 對應 fetch）；刪專案成功後對該專案底下 chat id 呼叫 `evictParkedPane`，避免 CASCADE 後殘留 parked。
 
 ## 多對話 SSE／Parked 行為備忘（前端）
