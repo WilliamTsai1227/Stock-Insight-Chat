@@ -2309,6 +2309,7 @@ async function submitCreateProject() {
  */
 function showProjectView(project, options = {}) {
     hideExploreView();
+    if (typeof hideDeepResearchView === 'function') hideDeepResearchView();
     const main = document.querySelector('.main-content');
     if (main) main.classList.add('project-view-mode');
     document.getElementById('chat-messages').style.display  = 'none';
@@ -2517,6 +2518,7 @@ function setActivePvTab(tab) {
 /** 切回聊天視圖 */
 function showChatView() {
     hideExploreView();
+    if (typeof hideDeepResearchView === 'function') hideDeepResearchView();
     document.getElementById('project-view').style.display   = 'none';
     const main = document.querySelector('.main-content');
     if (main) main.classList.remove('project-view-mode');
@@ -2541,6 +2543,7 @@ function showExploreView() {
     if (main) main.classList.remove('project-view-mode');
     document.querySelector('.chat-input-area').style.display = 'none';
     document.getElementById('explore-view').style.display    = 'flex';
+    if (typeof hideDeepResearchView === 'function') hideDeepResearchView();
 
     document.getElementById('explore-btn').classList.add('active');
     setMainChatTitle('探索');

@@ -176,8 +176,12 @@ async function authFetch(url, options = {}) {
         }
     }
 
+    // FormData 必須讓瀏覽器自己帶 multipart boundary，硬塞 application/json 會讓後端解不出檔案
+    const isFormData =
+        typeof FormData !== 'undefined' && options.body instanceof FormData;
+
     const headers = {
-        'Content-Type': 'application/json',
+        ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
         'Authorization': `Bearer ${token}`,
         ...(options.headers || {})
     };

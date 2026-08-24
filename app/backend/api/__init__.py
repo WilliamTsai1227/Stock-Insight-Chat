@@ -5,6 +5,7 @@ from .auth import router as auth_router
 from .user import router as user_router
 from .project import router as project_router
 from .explore import router as explore_router
+from .deep_research import router as deep_research_router
 
 
 api_router = APIRouter()
@@ -26,5 +27,8 @@ api_router.include_router(project_router)
 
 # 5. 探索（Kinetic Charts 反向代理，KINETIC_UPSTREAM 未設定時回 404）
 api_router.include_router(explore_router)
+
+# 6. 深度研究（OpenAI Agents SDK：Web Search / File Search）
+api_router.include_router(deep_research_router)
 
 __all__ = ["api_router"]

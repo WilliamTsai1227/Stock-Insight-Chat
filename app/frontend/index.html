@@ -17,6 +17,7 @@
         })();
     </script>
     <link rel="stylesheet" href="/css/index.css">
+    <link rel="stylesheet" href="/css/deep-research.css">
     <!-- Google Fonts: Outfit & Inter -->
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
     <!-- Lucide Icons -->
@@ -51,6 +52,12 @@
             <button id="explore-btn" class="new-chat-btn explore-btn">
                 <i data-lucide="compass"></i>
                 <span>探索</span>
+            </button>
+
+            <!-- 深度研究：OpenAI Agents SDK（Web Search / File Search） -->
+            <button id="deep-research-btn" class="new-chat-btn explore-btn">
+                <i data-lucide="telescope"></i>
+                <span>深度研究</span>
             </button>
 
             <!-- 可捲動列表區 -->
@@ -183,6 +190,79 @@
                  首次點擊「探索」才設定 src；切換視圖只隱藏不卸載，保留圖表狀態。 -->
             <div id="explore-view" class="explore-view">
                 <iframe id="explore-frame" title="探索 — Kinetic Charts 技術分析"></iframe>
+            </div>
+
+
+            <!-- 深度研究視圖：上傳檔案 → Agent 研究 → 產出報告／簡報 -->
+            <div id="deep-research-view" class="dr-view">
+                <div class="dr-scroll">
+
+                    <!-- 起始狀態：輸入研究題目與附件 -->
+                    <section id="dr-composer" class="dr-composer">
+                        <div class="dr-hero">
+                            <span class="dr-hero-badge"><i data-lucide="telescope"></i> 深度研究</span>
+                            <h1>把一個問題查到底</h1>
+                            <p>附上你的文件、試算表或圖片，寫下想弄清楚的事。Agent 會用網路搜尋與文件檢索交叉查證，再把結果整理成研究報告或簡報。</p>
+                        </div>
+
+                        <div class="dr-card">
+                            <div id="dr-dropzone" class="dr-dropzone" tabindex="0" role="button" aria-label="選擇或拖曳要研究的檔案">
+                                <input type="file" id="dr-file-input" multiple hidden>
+                                <i data-lucide="paperclip" class="dr-dz-icon"></i>
+                                <div class="dr-dz-text">
+                                    <p class="dr-dz-title">拖曳檔案到這裡，或<span class="dr-dz-link">點擊選擇</span></p>
+                                    <p class="dr-dz-hint" id="dr-accept-hint">支援 PDF、Word、Excel、CSV 與圖片</p>
+                                </div>
+                            </div>
+                            <ul id="dr-file-list" class="dr-file-list"></ul>
+
+                            <textarea id="dr-query" class="dr-query" rows="4"
+                                      placeholder="想研究什麼？例如：比較附件兩家供應商近三年的財務體質，指出最大的三個風險，並附上外部佐證。"></textarea>
+
+                            <div class="dr-composer-foot">
+                                <div class="dr-model-wrap">
+                                    <button type="button" id="dr-model-btn" class="dr-model-btn"
+                                            aria-haspopup="listbox" aria-expanded="false" title="選擇研究模型">
+                                        <i data-lucide="cpu"></i>
+                                        <span id="dr-model-label">載入中…</span>
+                                        <i data-lucide="chevron-down" class="dr-chevron"></i>
+                                    </button>
+                                    <ul id="dr-model-menu" class="dr-model-menu hidden" role="listbox"></ul>
+                                </div>
+                                <div class="dr-foot-right">
+                                    <span id="dr-query-count" class="dr-query-count"></span>
+                                    <button type="button" id="dr-submit-btn" class="dr-submit-btn" disabled>
+                                        <i data-lucide="sparkles"></i><span>開始研究</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- 執行中／結果 -->
+                    <section id="dr-run" class="dr-run hidden">
+                        <div class="dr-run-head">
+                            <div class="dr-run-head-text">
+                                <h2 id="dr-run-title"></h2>
+                                <p id="dr-run-meta" class="dr-run-meta"></p>
+                            </div>
+                            <button type="button" id="dr-reset-btn" class="dr-ghost-btn">
+                                <i data-lucide="rotate-ccw"></i><span>新的研究</span>
+                            </button>
+                        </div>
+
+                        <ul id="dr-progress" class="dr-progress"></ul>
+                        <div id="dr-error" class="dr-error hidden"></div>
+                        <article id="dr-result" class="dr-result"></article>
+                        <div id="dr-citations" class="dr-citations hidden"></div>
+
+                        <div id="dr-skills" class="dr-skills hidden">
+                            <p class="dr-skills-q">要用這份研究產生什麼？</p>
+                            <div id="dr-skill-cards" class="dr-skill-cards"></div>
+                        </div>
+                    </section>
+
+                </div>
             </div>
 
             <!-- 輸入區塊 -->
@@ -486,10 +566,18 @@
     </div>
 
     <!-- 腳本 -->
-    <script>window.STOCK_INSIGHT_API_BASE = 'https://api.insight-chat.xyz/api';</script>
+    <script>
+        // 正式站（Cloudflare，一定是 https）：API 在另一個子網域，必須明寫。
+        // 本機 dev（http）：不設定，交給 api-config.js 推導成 http://<hostname>:8000/api，
+        // 免得在本機測試卻打到正式站的 API。
+        if (location.protocol === 'https:') {
+            window.STOCK_INSIGHT_API_BASE = 'https://api.insight-chat.xyz/api';
+        }
+    </script>
     <script src="/js/api-config.js"></script>
     <script src="/js/auth.js"></script>
     <script src="/js/index.js"></script>
+    <script src="/js/deep-research.js"></script>
     <script>lucide.createIcons();</script>
 </body>
 </html>

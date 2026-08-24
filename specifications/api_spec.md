@@ -35,6 +35,11 @@
 | **檔案** | 上傳檔案 | `/api/files/upload` | `POST` | 是 |
 | | 刪除檔案 | `/api/files/{file_id}` | `DELETE` | 是 |
 | **探索** | Kinetic Charts 反向代理 | `/explore/{path}` | `GET`/`POST`/`DELETE` | 是（RT Cookie） |
+| **深度研究** | 取得可選模型與上限 | `/api/deep-research/config` | `GET` | 是 |
+| | 執行研究（multipart → SSE） | `/api/deep-research/runs` | `POST` | 是 |
+| | 產生報告／簡報（SSE） | `/api/deep-research/runs/{sid}/artifacts` | `POST` | 是 |
+| | 下載產出 | `/api/deep-research/runs/{sid}/artifacts/{kind}` | `GET` | 是 |
+| | 釋放 session | `/api/deep-research/runs/{sid}` | `DELETE` | 是 |
 
 > **沒有 `PATCH /api/project`。** 專案目前不支援改名；[`project.py`](../app/backend/api/project.py) 只實作 POST / GET all / GET / DELETE。
 >
@@ -399,7 +404,96 @@ backend 內建的反向代理（[`explore.py`](../app/backend/api/explore.py)）
 
 ---
 
-## 8. 環境變數參考
+## 8. 深度研究模組（Deep Research）
+
+[`deep_research.py`](../app/backend/api/deep_research.py)：以 **OpenAI Agents SDK** 的 hosted tools
+（`WebSearchTool` / `FileSearchTool`）執行一次性研究，再交給報告／簡報 skill 產出可下載的 HTML。
+
+**MVP 不落地任何資料**：session 只放在 backend 記憶體（`SessionStore`，TTL 由
+`DEEP_SEARCH_SESSION_TTL_MINUTES` 控制，預設 120 分鐘），前端重新整理即失去 `session_id`；
+上傳的文件只在研究期間存在於 OpenAI 的臨時 vector store，研究結束（含失敗）立刻刪除。
+完整設計見 [`deep_search.md`](./deep_search.md) §21。
+
+### `GET /api/deep-research/config`
+
+回傳前端初始化所需的設定。
+
+```json
+{ "status": "success",
+  "data": { "default_model": "gpt-5.6-luna",
+            "models": [{"id": "gpt-5.6-luna", "label": "GPT-5.6 Luna", "description": "…"}],
+            "themes": [{"id": "consulting", "label": "顧問簡報", "description": "…",
+                        "swatch": "#1b4fd8", "surface": "#ffffff", "ink": "#0d1b33"}],
+            "default_theme": "consulting",
+            "max_files": 10, "max_file_mb": 20, "max_images": 4,
+            "query_max_chars": 4000, "accepted_extensions": [".csv", ".docx", "…"] } }
+```
+
+`default_model` 來自環境變數 **`DEEP_SEARCH_MODEL`**；`models` 可用 `DEEP_SEARCH_MODELS` 覆寫。
+`DEEP_SEARCH_MODEL` 指定的模型一定會出現在 `models` 裡（即使不在程式內清單），
+否則設了新模型卻被悄悄換掉，會是很難查的問題。
+
+### `POST /api/deep-research/runs`
+
+`multipart/form-data`：`query`（必填）、`model`（選填，不在清單內一律退回預設）、`files`（可多個）。
+回應為 `text/event-stream`。
+
+| 事件 | payload | 說明 |
+|------|---------|------|
+| `session` | `{session_id, model, sources}` | 第一個事件，前端據此記住 `session_id` |
+| `status` | `{stage, text}` | 階段變更（`ingest` / `research`） |
+| `warning` | `{messages[]}` | 個別檔案解析失敗，不中斷研究 |
+| `sources_ready` | `{sources: [{name, channel}]}` | 每個檔案實際走哪條路（見下表） |
+| `tool_start` / `tool_done` | `{tool}` | hosted tool 呼叫，`tool` 已是中文標籤 |
+| `thinking` | `{text}` | 模型推理中 |
+| `writing` | `{text}` | 開始輸出正文 |
+| `delta` | `{text}` | 正文 token |
+| `done` | `{session_id, markdown, citations, tools_used, elapsed_ms, skills}` | 完成 |
+| `error` | `{message}` | 失敗 |
+
+沉默超過 15 秒會送出 `: keepalive` 註解行，避免 ALB / nginx 判定連線閒置而中斷。
+
+**檔案依副檔名分三條路**（OpenAI File Search 不支援試算表，圖片也不該進向量庫）：
+
+| channel | 副檔名 | 處理方式 |
+|---------|--------|----------|
+| `file_search` | `.pdf` `.docx` `.pptx` `.txt` `.md` `.json` `.html` | 上傳臨時 vector store，交給 `FileSearchTool` |
+| `spreadsheet` | `.xlsx` `.xlsm` `.csv` | 本地轉 Markdown 表格，直接放進 prompt |
+| `image` | `.png` `.jpg` `.jpeg` `.webp` `.gif` | 轉 base64 data URL，以 `input_image` 傳給模型 |
+
+`.doc` / `.xls` / `.ppt` 會回 400 並提示改存新格式。
+
+**錯誤**：`400` 題目為空／超長／檔案格式或大小不符；`409` 同一使用者已有研究在跑；
+`502` vector store 建立失敗；`503` 未設定 `OPENAI_API_KEY`。
+
+### `POST /api/deep-research/runs/{session_id}/artifacts`
+
+Body `{"kind": "report" | "deck", "theme": "consulting"}`（`theme` 選填，不認得的值退回預設）。
+同樣回 SSE（`status` → `done` / `error`），`done` 帶
+`{kind, label, filename, size, theme, download_path}`。
+
+**視覺主題**由 [`templates/themes.py`](../app/backend/deep_research/templates/themes.py) 定義，
+一個主題 = 色票 + 字體配對 + 幾個排版取向（`kicker` 樣式、分隔線樣式、標題字重）。
+目前五組：`editorial`（編輯部）、`consulting`（顧問簡報，預設）、`midnight`（暗夜）、
+`minimal`（極簡）、`warm`（暖刊）。報告與簡報可各自選不同主題。
+字體只用系統堆疊 —— 產出的檔案會被下載到本機離線開啟，不能依賴 webfont。
+
+模型只產生**結構化 JSON**（`ReportDoc` / `DeckDoc`），HTML 由
+[`templates/`](../app/backend/deep_research/templates/) 的樣板決定性地組出來 ——
+模型漏一個結束標籤就會毀掉整份檔案，改成填 JSON 之後最差只是內容平庸而非版面破碎。
+
+### `GET /api/deep-research/runs/{session_id}/artifacts/{kind}`
+
+回傳 `text/html`，`Content-Disposition: attachment` 並以 RFC 5987 的 `filename*` 編中文檔名。
+需要 Bearer AT，因此前端以 `authFetch` 取 Blob 後再觸發下載，而非直接開連結。
+
+### `DELETE /api/deep-research/runs/{session_id}`
+
+主動釋放記憶體 session；不呼叫也會由 TTL 清掉。
+
+---
+
+## 9. 環境變數參考
 
 完整清單見 [`env.md`](./env.md)，以下僅列與本文件端點直接相關者：
 

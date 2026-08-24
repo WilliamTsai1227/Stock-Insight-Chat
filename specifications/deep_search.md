@@ -1,9 +1,14 @@
 # 深度研究（Deep Search）功能規格
 
-> **⚠️ 此為計畫開發**
+> **⚠️ §1–20 為計畫開發，§21 才是目前線上的實作**
 >
-> 本文件彙整深度研究功能的完整規劃與設計決策，**尚未實作或僅部分實作**。  
-> 實作時請以本文件為準，並同步更新 [`database_spec.md`](./database_spec.md)、[`api_spec.md`](./api_spec.md)、[`feature_mapping.md`](./feature_mapping.md)。
+> §1–20 描述的是 **NotebookLM 式的持久化知識庫**（`research_workspaces` + Qdrant + S3），
+> 這部分**尚未實作**；實作時請以該段為準，並同步更新
+> [`database_spec.md`](./database_spec.md)、[`api_spec.md`](./api_spec.md)、[`feature_mapping.md`](./feature_mapping.md)。
+>
+> 目前**已經上線的是另一條路線**：[§21 現況實作](#21-現況實作openai-agents-sdk-mvp) ——
+> 以 OpenAI Agents SDK 的 hosted tools 做一次性研究，**完全不落地**。
+> 兩者共用「深度研究」這個名字與側邊欄入口，但架構、儲存與範圍都不同。
 
 ---
 
@@ -29,6 +34,7 @@
 18. [Migration SQL（既有 DB）](#18-migration-sql既有-db)
 19. [模組結構建議](#19-模組結構建議)
 20. [與現有系統的關係](#20-與現有系統的關係)
+21. [現況實作（OpenAI Agents SDK MVP）](#21-現況實作openai-agents-sdk-mvp) ← **目前線上的版本**
 
 ---
 
@@ -1273,6 +1279,112 @@ pymupdf>=1.24.0
 
 ---
 
+## 21. 現況實作（OpenAI Agents SDK MVP）
+
+> 這一段描述的是**目前線上跑的東西**，與上面 §1–20 的知識庫規劃是兩條獨立路線。
+> 本段的定位是**功能驗證**：先把「上傳 → 研究 → 產出報告／簡報 → 下載」整條路走通，
+> 確認體驗與成本可接受之後，再決定要不要接上 §1–20 的持久化架構。
+
+### 21.1 與 §1–20 規劃的差異
+
+| 面向 | §1–20 規劃（未實作） | §21 現況（已實作） |
+|------|---------------------|-------------------|
+| 檢索 | 自建 Qdrant + BM25 + RRF | OpenAI 托管的 `FileSearchTool` |
+| 網路 | 未涵蓋 | OpenAI 托管的 `WebSearchTool` |
+| 原始檔 | S3 永久保存 | 只在研究期間存在於 OpenAI 臨時 vector store，結束即刪 |
+| 中繼資料 | PostgreSQL `research_workspaces` 等表 | **完全不寫 DB**，記憶體 session |
+| 生命週期 | 使用者手動刪除 | TTL 120 分鐘 / 後端重啟 / 前端重新整理即消失 |
+| 產出 | Phase 2 才做 | 已有「研究報告」與「簡報」兩個 skill |
+
+### 21.2 模組結構
+
+```
+app/backend/deep_research/
+├── config.py            # 模型清單、DEEP_SEARCH_* 上限、supports_reasoning_effort()
+├── session.py           # 記憶體 SessionStore（TTL + 每人上限）
+├── sources.py           # 上傳檔案前處理：vector store / 試算表轉文字 / 圖片轉 data URL
+├── researcher.py        # Agents SDK 研究流程，把 SDK 事件轉成 SSE 事件
+├── skills.py            # 報告 / 簡報 skill：prompt + 結構化 schema + renderer 註冊表
+└── templates/           # 決定性的 HTML 樣板（report.py / deck.py / common.py）
+app/backend/api/deep_research.py   # 路由（SSE）
+app/frontend/js/deep-research.js   # 前端
+app/frontend/css/deep-research.css
+```
+
+### 21.3 流程
+
+```
+前端                          backend                         OpenAI
+ │ multipart(query,model,files)  │                               │
+ ├─────────────────────────────►│ read_uploads() 驗證格式/大小    │
+ │                              ├── 文件 ─────────────────────►  vector store（臨時）
+ │                              ├── 試算表 → Markdown → prompt   │
+ │                              ├── 圖片 → base64 → input_image  │
+ │◄── SSE: session/status ──────┤                               │
+ │                              ├── Runner.run_streamed() ────►  Agent（web_search + file_search）
+ │◄── SSE: tool_start/done ─────┤◄──────────────────────────────┤
+ │◄── SSE: delta ───────────────┤                               │
+ │◄── SSE: done(markdown) ──────┤ cleanup(): 刪 vector store + files
+ │                              │
+ │ POST artifacts {kind}         │
+ ├─────────────────────────────►│ Runner.run(output_type=ReportDoc/DeckDoc) ─► 結構化 JSON
+ │◄── SSE: done(download_path) ─┤ templates/ 組出 HTML，存進記憶體 session
+ │ GET .../artifacts/{kind}      │
+ ├─────────────────────────────►│ Response(attachment)
+```
+
+### 21.4 幾個設計決定
+
+**排版不交給模型。** 兩個 skill 的模型輸出都是 `output_type` 綁定的結構化 JSON
+（`ReportDoc` / `DeckDoc`），HTML 由 `templates/` 決定性地組出來。理由很實際：
+模型只要漏一個結束標籤，整份下載檔就毀了；改成填 JSON 之後，最差情況只是內容平庸而非版面破碎。
+
+**版面不交給模型，主題交給使用者。** 產出的視覺風格收斂成五個具名主題
+（色票 + 字體配對 + 排版取向），由前端在產生前選擇，報告與簡報各自獨立。
+作法參考 [Anthropic theme-factory](https://github.com/anthropics/skills/tree/main/skills/theme-factory)：
+與其讓模型每次自由發揮（結果是每份檔案長得都不一樣，而且通常都不好看），
+不如提供少數經過設計的預設。
+
+**用內容預算取代 render QA 迴圈。**
+[OpenAI slides skill](https://github.com/openai/skills) 的作法是
+產生 → 用 LibreOffice rasterize 成 PNG → 程式化偵測溢位／重疊 → 修正。
+那套是為 PptxGenJS 而生的：盲畫座標，不跑一次根本不知道有沒有爆版。
+我們輸出 HTML，排版由瀏覽器決定且樣板完全自控，唯一變因是內容長度，
+因此改在 `deck._density()` 依字數與條目數換算 d1/d2/d3 三級，
+字級與間距整組跟著降。省下在後端塞 Chromium（+400MB、每次多十幾秒）的代價。
+真要做視覺 QA 迴圈，之後再加不遲。
+
+**試算表不進向量庫。** OpenAI File Search 的支援格式**不含 `.xlsx` / `.csv`**，
+而且切塊語意檢索本來就不適合表格。改成本地用 openpyxl 轉成 Markdown 表格直接放進 prompt，
+以 `DEEP_SEARCH_SPREADSHEET_*` 控制字數預算。
+
+**上傳檔案不留在 OpenAI。** 研究結束（含失敗與前端斷線）一律 `cleanup()` 刪掉 vector store
+與底層 file 物件；另外掛 `expires_after` 當保險絲，避免後端沒清乾淨時檔案留在帳號裡。
+
+**預設模型是 `gpt-5.6-luna`。** 已用 Agents SDK 實測：`WebSearchTool` 與 `FileSearchTool` 都正常
+（附一份只有檔案內才有的代號，模型答得出來即證明 file search 生效），`reasoning.effort=medium`
+與 structured outputs 亦可用。注意 `reasoning_effort=minimal` **不被** 5.4 之後的模型接受，
+但深度研究只用 `medium` / `low`，不受影響；聊天那條路的 `ROUTER_REASONING_EFFORT=minimal` 則要留意。
+
+**非推理模型不帶 `reasoning.effort`。** Responses API 對 `gpt-4.1` 系列帶 reasoning 會直接回 400，
+判斷在 `config.supports_reasoning_effort()`。
+
+**依賴限制：`openai-agents==0.3.3`。** 這是最後一個相容 `openai` 1.x 的版本；
+更新的版本要求 `openai>=2`，會與本專案的 `langchain-openai==0.1.1`（`openai<2`）衝突。
+一併把 `openai` 升到 `1.109.1`、`pydantic` 升到 `2.13.4`（openai-agents 的下限），
+`langchain` 系列版本不動。
+
+### 21.5 已知限制（要進 Phase 2 前必須處理）
+
+- **不計費**：目前不寫 `token_usage_logs`、不檢查月配額，只用「每位使用者同時一個研究」節流。
+  hosted web search 的成本不低，開放前要接上 [`usage_quota`](../app/backend/module/usage_quota.py)。
+- **單 process**：session 在記憶體，多 worker 或多台機器會拿不到彼此的 session，得換 Redis。
+- **前端斷線即中止**：SSE generator 被 cancel 時會連帶取消研究任務（沒有持久化，續跑沒有意義）。
+- **無歷史**：重新整理就沒了，這是刻意的取捨。
+
+
+---
+
 ## 附錄 A：完整願景功能對照（NotebookLM）
 
 | 能力 | 現況 | 本功能目標 |
@@ -1295,3 +1407,5 @@ pymupdf>=1.24.0
 | 日期 | 說明 |
 |------|------|
 | 2026-06-05 | 初版：彙整多輪討論（完整願景 → MVP 限縮 → S3 儲存決策） |
+| 2026-08-24 | 新增 §21：以 OpenAI Agents SDK 實作不落地的功能驗證版；§1–20 維持為未實作的規劃 |
+| 2026-08-25 | 預設模型改 `gpt-5.6-luna`（實測通過 web/file search）；新增五組視覺主題與內容預算排版；簡報新增 `section` / `compare` 版面 |

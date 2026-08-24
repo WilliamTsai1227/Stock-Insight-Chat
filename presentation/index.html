@@ -1,0 +1,590 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stock Insight Chat — 關鍵技術面試簡報</title>
+<style>
+  :root{
+    --bg:#ffffff;
+    --bg-soft:#f6f7f9;
+    --ink:#14171c;         /* headings */
+    --ink2:#2b303a;
+    --body:#565f6d;        /* body text */
+    --muted:#8a93a1;
+    --line:#e7e9ee;
+    --line2:#d5d9e0;
+    --accent:#2f6bff;      /* blue */
+    --accent-soft:#eef3ff;
+    --green:#12924f;
+    --green-soft:#f0f9f3;
+    --green-line:#c7e8d3;
+    --red:#d64550;
+    --red-soft:#fdf4f4;
+    --red-line:#f2ccd0;
+    --amber:#b0730e;
+    --amber-soft:#fdf7ec;
+    --amber-line:#efdcb4;
+    --mono:"SFMono-Regular",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif;
+    --shadow:0 1px 2px rgba(16,24,40,.05),0 8px 26px rgba(16,24,40,.06);
+    --shadow-sm:0 1px 2px rgba(16,24,40,.05),0 3px 10px rgba(16,24,40,.04);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{background:#e9ebf0;color:var(--body);font-family:var(--sans);overflow:hidden;-webkit-font-smoothing:antialiased}
+  #stage{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
+  #deck{position:relative;width:1280px;height:720px;transform-origin:center center;
+    background:var(--bg);border-radius:8px;box-shadow:0 30px 80px rgba(16,24,40,.28);overflow:hidden}
+  .slide{position:absolute;inset:0;padding:66px 76px;display:none;flex-direction:column;animation:fade .3s ease}
+  .slide.active{display:flex}
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+  /* decorative soft blob for cover / dividers */
+  .blob{position:absolute;border-radius:50%;filter:blur(60px);opacity:.5;pointer-events:none}
+
+  .kicker{display:inline-flex;align-items:center;gap:8px;color:var(--accent);font-weight:700;
+    letter-spacing:.12em;text-transform:uppercase;font-size:12.5px;
+    background:var(--accent-soft);border:1px solid #dbe6ff;border-radius:999px;padding:6px 13px}
+  h1{font-size:66px;line-height:1.03;letter-spacing:-.025em;font-weight:800;color:var(--ink)}
+  h2{font-size:40px;line-height:1.12;letter-spacing:-.02em;font-weight:800;color:var(--ink)}
+  h3{font-size:19px;font-weight:750;color:var(--ink2)}
+  p{font-size:18px;line-height:1.55;color:var(--body)}
+  .lead{font-size:22px;line-height:1.5;color:var(--ink2);font-weight:450}
+  strong{color:var(--ink);font-weight:750}
+  .accent{color:var(--accent)} .green{color:var(--green)} .red{color:var(--red)} .amber{color:var(--amber)}
+  small{font-size:14px;color:var(--muted)}
+  code{font-family:var(--mono);font-size:.92em;background:var(--bg-soft);border:1px solid var(--line);
+    border-radius:5px;padding:1px 6px;color:var(--ink2)}
+
+  .slide-head{margin-bottom:26px}
+  .slide-head .kicker{margin-bottom:16px}
+
+  .grid{display:grid;gap:18px}
+  .g2{grid-template-columns:1fr 1fr}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .fill{flex:1;min-height:0}
+  .vstack{display:flex;flex-direction:column}
+
+  .card{background:var(--bg);border:1px solid var(--line);border-radius:16px;padding:22px 24px;box-shadow:var(--shadow-sm)}
+  .card h3{margin-bottom:9px;display:flex;align-items:center;gap:10px}
+  .card p{font-size:16px;line-height:1.5}
+  .soft{background:var(--bg-soft);box-shadow:none}
+  .card.bad{background:var(--red-soft);border-color:var(--red-line)} .card.bad h3{color:var(--red)}
+  .card.good{background:var(--green-soft);border-color:var(--green-line)} .card.good h3{color:var(--green)}
+  .card.warn{background:var(--amber-soft);border-color:var(--amber-line)} .card.warn h3{color:var(--amber)}
+
+  .chip{width:38px;height:38px;border-radius:11px;background:var(--accent-soft);border:1px solid #dbe6ff;
+    display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+  .chip svg{width:20px;height:20px;stroke:var(--accent);fill:none;stroke-width:1.8}
+  .numbadge{font-family:var(--mono);font-weight:700;color:var(--accent);font-size:15px;
+    background:var(--accent-soft);border:1px solid #dbe6ff;border-radius:9px;padding:3px 9px;flex:0 0 auto}
+
+  .tag{font-family:var(--mono);font-size:12px;color:var(--accent);background:var(--accent-soft);
+    border:1px solid #dbe6ff;border-radius:6px;padding:3px 8px;font-weight:600}
+
+  ul{list-style:none;display:flex;flex-direction:column;gap:12px}
+  li{position:relative;padding-left:24px;font-size:18px;line-height:1.5;color:var(--body)}
+  li:before{content:"";position:absolute;left:1px;top:9px;width:7px;height:7px;border-radius:2px;background:var(--accent)}
+  li.green:before{background:var(--green)} li.amber:before{background:var(--amber)} li.red:before{background:var(--red)}
+  li b{color:var(--ink);font-weight:700}
+  ul.tight li{font-size:16px;gap:8px;padding-left:22px}
+  ul.tight li:before{top:8px}
+
+  pre{background:var(--bg-soft);border:1px solid var(--line);border-radius:12px;padding:16px 18px;
+    font-family:var(--mono);font-size:13.5px;line-height:1.6;color:#24292f;overflow:auto;white-space:pre}
+  pre .c{color:#6e7781}
+  pre .k{color:#cf222e}
+  pre .s{color:#0a3069}
+  pre .f{color:#8250df}
+  pre .n{color:#0550ae}
+
+  .pill{display:inline-flex;align-items:center;gap:7px;font-size:14px;color:var(--ink2);
+    background:var(--bg);border:1px solid var(--line);border-radius:999px;padding:7px 14px;box-shadow:var(--shadow-sm)}
+  .pillrow{display:flex;flex-wrap:wrap;gap:9px}
+
+  table{width:100%;border-collapse:collapse;font-size:16px}
+  th,td{text-align:left;padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--accent);font-size:12px;letter-spacing:.05em;text-transform:uppercase;font-weight:700}
+  td{color:var(--body)} td b{color:var(--ink)}
+  tr:last-child td{border-bottom:none}
+
+  .flow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .node{background:var(--bg);border:1px solid var(--line2);border-radius:12px;padding:12px 16px;
+    font-size:15px;color:var(--ink2);text-align:center;min-width:96px;box-shadow:var(--shadow-sm);font-weight:600}
+  .node .t{font-size:11.5px;color:var(--muted);font-family:var(--mono);font-weight:500;margin-top:2px}
+  .node.hi{border-color:var(--accent);background:var(--accent-soft)}
+  .node.gr{border-color:var(--green-line);background:var(--green-soft)}
+  .arrow{color:var(--muted);font-size:20px}
+
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:18px;height:100%}
+  .metric{font-family:var(--mono);font-size:.94em}
+  .metric .from{color:var(--red)} .metric .to{color:var(--green)}
+
+  .statement{display:flex;flex-direction:column;justify-content:center;gap:20px;height:100%}
+  .center{align-items:center;justify-content:center;text-align:center}
+  .footerline{position:absolute;left:76px;right:76px;bottom:32px;display:flex;justify-content:space-between;
+    align-items:center;color:var(--muted);font-size:14px}
+
+  #bar{position:absolute;top:0;left:0;height:3px;background:var(--accent);width:0;z-index:5;transition:width .3s ease;border-radius:0 3px 3px 0}
+  #counter{position:fixed;bottom:16px;right:22px;font-family:var(--mono);font-size:13px;color:#5a6472;z-index:50}
+  #hint{position:fixed;bottom:16px;left:22px;font-size:12px;color:#6a7280;z-index:50}
+  kbd{font-family:var(--mono);background:#fff;border:1px solid var(--line2);border-radius:5px;padding:1px 6px;color:#5a6472;font-size:11px}
+
+  #notes{position:fixed;left:0;right:0;bottom:0;max-height:44vh;overflow:auto;z-index:60;
+    background:#ffffff;border-top:3px solid var(--accent);padding:22px 34px;box-shadow:0 -12px 40px rgba(16,24,40,.15);
+    transform:translateY(101%);transition:transform .26s ease}
+  #notes.open{transform:none}
+  #notes h4{color:var(--accent);font-size:12.5px;letter-spacing:.09em;text-transform:uppercase;margin-bottom:10px;font-weight:700}
+  #notes .body{font-size:16px;line-height:1.65;color:var(--ink2);white-space:pre-wrap}
+  #notes .time{float:right;color:var(--amber);font-family:var(--mono);font-size:13px}
+</style>
+</head>
+<body>
+<div id="stage"><div id="deck">
+<div id="bar"></div>
+
+<!-- 0 COVER -->
+<section class="slide active" data-time="0:30" data-notes="開場：自我介紹一句話，然後點題。&#10;『這是我做的一個 AI 股市對話平台，今天想用大約 15 分鐘，帶大家看四個我最花心思的後端與 LLM 系統設計，剩下時間歡迎針對任何一點深入追問。』&#10;強調：這四個都是我能完整 defend 的取捨題。">
+  <div class="blob" style="width:520px;height:520px;background:#cfe0ff;top:-160px;right:-120px"></div>
+  <div class="blob" style="width:360px;height:360px;background:#e6ecff;bottom:-140px;left:-80px;opacity:.6"></div>
+  <div class="fill vstack" style="justify-content:center;position:relative;z-index:1">
+    <span class="kicker" style="align-self:flex-start">後端 · LLM 應用 · 系統設計</span>
+    <h1 style="margin:22px 0 18px">Stock Insight Chat</h1>
+    <p class="lead" style="max-width:720px">AI 股市洞察對話平台 —— 關鍵技術解析。以 Agent + RAG 為核心，涵蓋 SSE 串流、檢索工程、認證與配額計量。</p>
+    <div class="pillrow" style="margin-top:34px">
+      <span class="pill">FastAPI 全非同步</span>
+      <span class="pill">LangGraph Agent</span>
+      <span class="pill">Qdrant Hybrid RAG</span>
+      <span class="pill">Google SSO + JWT</span>
+      <span class="pill">AWS</span>
+    </div>
+  </div>
+  <div class="footerline"><span>WilliamTsai</span><span>方向鍵 / 空白鍵翻頁　·　按 <kbd>N</kbd> 顯示講稿</span></div>
+</section>
+
+<!-- 1 WHAT -->
+<section class="slide" data-time="1:00" data-notes="定位：一句話講清楚產品。&#10;三種模式是產品的骨架，也對應到不同的技術路徑：&#10;- general：直打 LLM，小模型先判斷要不要即時搜尋(Tavily)&#10;- thinking：完整 LangGraph 多輪 Router+Analyst&#10;- flash：略過 Router，單輪檢索 + 輕量 Analyst，追求速度&#10;不用細講模式，帶過即可，重點在後面四段。">
+  <div class="slide-head">
+    <span class="kicker">01 · 專案定位</span>
+    <h2>一個以 Agent + RAG 為核心的股市對話平台</h2>
+  </div>
+  <p class="lead" style="margin-bottom:26px;max-width:940px">使用者用自然語言問股市，系統自動檢索<strong>新聞、AI 產業分析、標的推薦</strong>，產出附來源的投資分析報告。</p>
+  <div class="grid g3 fill">
+    <div class="card"><h3><span class="tag">general</span></h3><p>一般對話，直連 LLM；小模型判斷「需不需要即時資訊」，必要時才呼叫 Tavily 搜尋。</p></div>
+    <div class="card"><h3><span class="tag">agent · thinking</span></h3><p>LangGraph Router（gpt-5-mini）多輪 ReAct 調用工具，再由 Analyst（gpt-5）產報告。</p></div>
+    <div class="card"><h3><span class="tag">agent · flash</span></h3><p>略過 Router，單輪向量檢索 + 輕量 Analyst，追求低延遲。</p></div>
+  </div>
+  <div class="pillrow" style="margin-top:24px">
+    <span class="pill">Python 3.11 · FastAPI</span>
+    <span class="pill">LangGraph</span>
+    <span class="pill">Qdrant（dense + BM25）</span>
+    <span class="pill">PostgreSQL · MongoDB</span>
+    <span class="pill">GPT-5 / GPT-5 mini</span>
+  </div>
+</section>
+
+<!-- 2 ARCHITECTURE -->
+<section class="slide" data-time="1:30" data-notes="架構圖講三件事：&#10;1. 前端純靜態放 S3 + Cloudflare，後端不扛前端流量。&#10;2. EC2 上用 Docker Compose 跑 backend + Qdrant；PostgreSQL 用 RDS，新聞原文在 MongoDB Atlas。&#10;3. 資料同步是 Serverless：EventBridge 定時觸發 Lambda 做增量向量化。&#10;一句收斂：交易性資料、原文、向量三種儲存各司其職，這是很標準的 AI-native 分工。&#10;如果被問為什麼 Qdrant 自架不用雲：成本 + 資料掌控，且 EC2 已在跑。">
+  <div class="slide-head"><span class="kicker">02 · 系統架構</span><h2>三種儲存各司其職，同步走 Serverless</h2></div>
+  <div class="fill vstack" style="gap:20px;justify-content:center">
+    <div class="flow">
+      <div class="node gr">前端<div class="t">S3 + Cloudflare</div></div>
+      <span class="arrow">→</span>
+      <div class="node hi">FastAPI Backend<div class="t">SSE 串流 · EC2</div></div>
+      <span class="arrow">→</span>
+      <div class="node">Qdrant<div class="t">向量庫</div></div>
+    </div>
+    <div class="flow" style="padding-left:262px">
+      <div class="node">PostgreSQL / RDS<div class="t">用戶 · 對話 · 配額</div></div>
+      <div class="node">MongoDB Atlas<div class="t">新聞 · 分析原文</div></div>
+      <div class="node">OpenAI<div class="t">GPT-5 / embedding</div></div>
+    </div>
+    <div class="flow">
+      <div class="node">EventBridge<div class="t">排程</div></div>
+      <span class="arrow">→</span>
+      <div class="node gr">Lambda<div class="t">增量向量化</div></div>
+      <span class="arrow">→</span>
+      <div class="node">Qdrant<div class="t">upsert</div></div>
+    </div>
+  </div>
+  <p><small>前端 S3 靜態部署，EC2 僅跑 backend + Qdrant；交易性資料在 PostgreSQL、原文在 MongoDB、語意向量在 Qdrant。</small></p>
+</section>
+
+<!-- 3 AGENDA -->
+<section class="slide" data-time="0:30" data-notes="Agenda：坦白說『15 分鐘講不完全部，我挑四個最能展開的』。&#10;暗示面試官：這四個都歡迎追問，我準備好了。">
+  <div class="slide-head"><span class="kicker">今天的四個重點</span><h2>我最花心思、也最能展開討論的四個設計</h2></div>
+  <div class="grid g2 fill">
+    <div class="card"><h3><span class="numbadge">01</span>SSE 生產者–消費者解耦</h3><p style="margin-top:6px">使用者關頁面，後端仍跑完並持久化。async 與連線生命週期的解耦。</p></div>
+    <div class="card"><h3><span class="numbadge">02</span>LangGraph 雙模型 Agent</h3><p style="margin-top:6px">Router / Analyst 成本驅動分工，ReAct 多輪檢索。</p></div>
+    <div class="card"><h3><span class="numbadge">03</span>Hybrid RAG（Qdrant）</h3><p style="margin-top:6px">dense + BM25 融合、分組去重、冪等資料管線。</p></div>
+    <div class="card"><h3><span class="numbadge">04</span>Context 工程 + 認證 / 配額</h3><p style="margin-top:6px">壓縮 Router 上下文、RT Rotation 重放偵測、配額最終一致。</p></div>
+  </div>
+</section>
+
+<!-- ===== TOPIC 1 : SSE ===== -->
+<!-- 4 -->
+<section class="slide" data-time="1:00" data-notes="先講痛點，讓面試官感受到問題的真實性。&#10;關鍵句：『LLM 回應要 10–30 秒。如果我把 LLM 直接寫在 SSE generator 裡，使用者一關頁面，asyncio 會丟 CancelledError 把整個協程砍掉。』&#10;三個後果要講清楚：分析白做、DB 沒紀錄、但 OpenAI 的錢照樣付了。&#10;這是很多人 SSE 串流會踩的雷。">
+  <div class="slide-head"><span class="kicker">01 · SSE 串流</span><h2>問題：使用者關頁面，整個回合就沒了</h2></div>
+  <p class="lead" style="margin-bottom:26px">LLM 回應需要 <strong>10–30 秒</strong>。若直接在 SSE generator 內跑 LLM——</p>
+  <div class="grid g3 fill">
+    <div class="card bad"><h3>觸發</h3><p>使用者關頁面 / 斷線，SSE 連線中止，協程收到 <code>asyncio.CancelledError</code>。</p></div>
+    <div class="card bad"><h3>後果</h3><p>整個 LangGraph 回合被 cancel，多輪檢索與分析<strong>全部作廢</strong>。</p></div>
+    <div class="card bad"><h3>代價</h3><p>DB 沒有任何 assistant 紀錄，但 OpenAI 的 <strong>token 費用照樣發生</strong>。</p></div>
+  </div>
+  <p style="margin-top:22px"><small>本質：把 LLM 綁在 HTTP 連線生命週期上，是一個隱性的耦合。</small></p>
+</section>
+
+<!-- 5 -->
+<section class="slide" data-time="1:15" data-notes="解法：生產者–消費者。&#10;每個請求開一個 asyncio.Queue。LLM 回合用 create_task 丟到背景當生產者，SSE generator 只當消費者 queue.get() → yield。&#10;關鍵：前端斷線只會 cancel『消費者』；生產者是獨立 task，不受影響，會跑完整個 LangGraph、把 assistant 訊息寫進 PostgreSQL，最後在 finally 裡 put(None) 當結束哨兵，保證消費者收得到收尾。&#10;程式指到 chat.py 的 background_agent_runner / event_generator。">
+  <div class="slide-head"><span class="kicker">01 · SSE 串流</span><h2>解法：Queue 解耦，生產者在背景跑完</h2></div>
+  <div class="split">
+    <div class="vstack" style="justify-content:center">
+      <ul>
+        <li>每個請求建一個 <b>asyncio.Queue</b></li>
+        <li class="green">LLM 回合用 <b>create_task</b> 當<b>生產者</b>在背景執行</li>
+        <li class="green">SSE generator 當<b>消費者</b>，只 <b>queue.get() → yield</b></li>
+        <li class="amber">斷線只 cancel 消費者；生產者跑完整個 LangGraph、寫入 PostgreSQL</li>
+        <li class="amber"><b>put(None)</b> 哨兵置於 <b>finally</b>，保證收尾送達</li>
+      </ul>
+    </div>
+    <pre><span class="k">async def</span> <span class="f">background_agent_runner</span>():
+    <span class="k">try</span>:
+        <span class="k">async for</span> ev <span class="k">in</span> agent_app.<span class="f">astream_events</span>(...):
+            <span class="k">await</span> q.<span class="f">put</span>(<span class="f">_sse</span>(...))   <span class="c"># 生產者</span>
+        <span class="k">await</span> q.<span class="f">put</span>(<span class="f">_sse</span>(<span class="s">"done"</span>, {...}))
+        <span class="k">await</span> <span class="f">_insert_assistant_message</span>(...) <span class="c"># 落 DB</span>
+    <span class="k">finally</span>:
+        <span class="k">await</span> q.<span class="f">put</span>(<span class="n">None</span>)         <span class="c"># 收尾哨兵</span>
+
+<span class="f">asyncio</span>.<span class="f">create_task</span>(<span class="f">background_agent_runner</span>())
+
+<span class="k">async def</span> <span class="f">event_generator</span>():        <span class="c"># 消費者</span>
+    <span class="k">while</span> <span class="n">True</span>:
+        msg = <span class="k">await</span> q.<span class="f">get</span>()
+        <span class="k">if</span> msg <span class="k">is</span> <span class="n">None</span>: <span class="k">break</span>
+        <span class="k">yield</span> msg</pre>
+  </div>
+</section>
+
+<!-- 6 -->
+<section class="slide" data-time="0:30" data-notes="收斂成一句設計哲學（這句最好背起來）：&#10;『我把「對話要不要繼續產生」——業務邏輯，跟「使用者有沒有在看」——連線狀態，這兩件事解耦了。』&#10;延伸價值：這個結構天然支援『斷線後重整，從 DB 拿回已定稿的回答』，也是未來拆成獨立 job queue / 多 worker 的基礎。&#10;如果被問可靠性：目前同 process，背景 task；要更強可上佇列 worker，我 spec 裡有寫方向 C。">
+  <div class="slide-head"><span class="kicker">01 · SSE 串流</span><h2>本質：業務邏輯與連線狀態解耦</h2></div>
+  <div class="card fill statement">
+    <p class="lead" style="font-size:26px">把「<strong class="accent">對話要不要繼續產生</strong>」（業務邏輯）與<br>「<strong class="green">使用者有沒有在看</strong>」（連線狀態）兩件事切開。</p>
+    <ul>
+      <li class="green">斷線後重整，能從 DB 拿回<b>已定稿的回答</b>，不靠「運氣接上串流」</li>
+      <li>可延伸為獨立 <b>job queue / 多 worker</b>——SSE 只是最佳努力的即時進度</li>
+      <li class="amber">要補的護欄：每使用者併發上限、逾時、取消語意（已列在設計文件）</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ===== TOPIC 2 : LangGraph ===== -->
+<!-- 7 -->
+<section class="slide" data-time="1:15" data-notes="切入點：這不是為了炫技用兩個模型，是成本結構逼出來的分工。&#10;Router 用便宜的 gpt-5-mini，只做兩件事：判斷意圖、決定叫哪個工具。我在 system prompt 明文禁止它寫總結——因為便宜模型如果開始寫長文，token 就浪費了，它只要輸出一句『資料備齊，交給 Analyst』。&#10;Analyst 用 gpt-5，拿到完整檢索資料後一次產出報告。&#10;一句話：讓貴的模型只在最關鍵的一步出手。">
+  <div class="slide-head"><span class="kicker">02 · LangGraph Agent</span><h2>成本結構驅動的角色拆分</h2></div>
+  <div class="grid g2 fill">
+    <div class="card"><h3><span class="tag">Router</span>gpt-5-mini（便宜）</h3>
+      <ul class="tight" style="margin-top:14px">
+        <li>只做<b>意圖辨識</b>與<b>工具決策</b></li>
+        <li>支援 <b>ReAct 多輪</b>：搜尋 → 看結果 → 再精確搜尋</li>
+        <li class="amber">system prompt <b>明文禁止產出總結</b>，避免便宜模型浪費 token 寫長文</li>
+      </ul>
+    </div>
+    <div class="card"><h3><span class="tag" style="color:var(--green);background:var(--green-soft);border-color:var(--green-line)">Analyst</span>gpt-5（貴）</h3>
+      <ul class="tight" style="margin-top:14px">
+        <li class="green">拿到<b>完整檢索資料</b>後<b>一次性</b>產出投資分析報告</li>
+        <li>事實與數據以【完整參考資料】為準</li>
+        <li>讓貴的模型只在<b>最關鍵那一步</b>出手</li>
+      </ul>
+    </div>
+  </div>
+  <p style="margin-top:22px"><small>同一份 LangGraph 狀態圖，依角色綁不同模型——這是可量化的成本設計，不是為了用兩個模型。</small></p>
+</section>
+
+<!-- 8 -->
+<section class="slide" data-time="1:15" data-notes="狀態圖：Router → Retry Check → Tools → 回 Router →（達成再）→ Analyst。&#10;Tools 節點用 asyncio.gather 並行跑同一輪的多個工具呼叫，縮 wall-clock。&#10;Retry Check 是安全閥：工具空結果且沒達重試上限（ROUTER_MAX_CYCLES=3），就注入提示叫 Router 換策略（擴大時間、換關鍵字、放寬過濾）。&#10;動態工具綁定：只把『前端允許 && 系統已實作』的工具 bind_tools 給 Router——這是防幻覺、也防 LLM 亂呼叫。">
+  <div class="slide-head"><span class="kicker">02 · LangGraph Agent</span><h2>狀態圖 + ReAct 多輪</h2></div>
+  <div class="flow" style="margin:16px 0 28px">
+    <div class="node hi">Router<div class="t">gpt-5-mini</div></div>
+    <span class="arrow">→</span>
+    <div class="node">Retry Check<div class="t">安全閥</div></div>
+    <span class="arrow">→</span>
+    <div class="node gr">Tools<div class="t">asyncio.gather</div></div>
+    <span class="arrow">↩</span>
+    <div class="node hi">Router<div class="t">下一輪</div></div>
+    <span class="arrow">→</span>
+    <div class="node">Analyst<div class="t">gpt-5</div></div>
+  </div>
+  <div class="grid g3 fill">
+    <div class="card warn"><h3>重試上限</h3><p><b>ROUTER_MAX_CYCLES = 3</b>。空結果時注入提示：擴大時間範圍、換關鍵字、放寬過濾。</p></div>
+    <div class="card good"><h3>並行工具</h3><p>同一輪多個 tool call 以 <b>asyncio.gather</b> 並行，縮短 wall-clock。</p></div>
+    <div class="card"><h3 class="accent">動態工具綁定</h3><p>只 bind「前端允許 <b>且</b> 系統已實作」的工具，防止 LLM 幻覺呼叫。</p></div>
+  </div>
+</section>
+
+<!-- 9 -->
+<section class="slide" data-time="0:45" data-notes="三個 RAG 工具，各對應一種檢索意圖：&#10;- search_stock_news：新聞向量檢索&#10;- search_market_ai_analysis：AI 產業分析檢索&#10;- get_market_recommendations：鎖定 chunk_type=stock_insight 的結構化推薦（hardcoded，LLM 不能改）&#10;關鍵設計：三個工具共用同一組 start_date / end_date。因為如果新聞取最近一週、分析取最近一個月，結論會在時間維度上打架。統一時間窗口 = 結論一致。">
+  <div class="slide-head"><span class="kicker">02 · LangGraph Agent</span><h2>三個 RAG 工具，共用同一時間窗口</h2></div>
+  <div class="grid g3" style="margin-bottom:24px">
+    <div class="card soft"><h3>search_stock_news</h3><p style="margin-top:6px">新聞向量檢索</p></div>
+    <div class="card soft"><h3>search_market_ai_analysis</h3><p style="margin-top:6px">AI 產業分析檢索</p></div>
+    <div class="card soft"><h3>get_market_recommendations</h3><p style="margin-top:6px">鎖定 <code>chunk_type=stock_insight</code> 的結構化推薦（hardcoded）</p></div>
+  </div>
+  <div class="card good fill" style="display:flex;align-items:center">
+    <p class="lead">三工具共用同一組 <strong class="green">start_date / end_date</strong> 時間窗口<br>
+    <span style="font-size:18px;color:var(--body)">→ 避免「新聞看一週、分析看一個月」導致結論在時間維度上打架。</span></p>
+  </div>
+</section>
+
+<!-- ===== TOPIC 3 : Hybrid RAG ===== -->
+<!-- 10 -->
+<section class="slide" data-time="1:15" data-notes="Chunking 是 RAG 品質的第一關，我針對兩種資料用不同策略：&#10;新聞：RecursiveCharacterTextSplitter，chunk_size=800、overlap=150，優先在段落/句號斷；短文不切(full)、長文才切(partial)；每個片段前面加 [標題] 前綴，這樣片段脫離上下文也能被正確檢索到。&#10;AI 分析：不做字元切割，而是按『欄位語意角色』拆成最多 3 個向量——summary(產業近況)、key_news(具體事件)、stock_insight(個股推薦)。這樣不同查詢意圖會命中不同角色的向量。&#10;重點：切法是跟著資料的語意結構走，不是一刀切。">
+  <div class="slide-head"><span class="kicker">03 · Hybrid RAG</span><h2>Chunking：不同資料用不同策略</h2></div>
+  <div class="split">
+    <div class="card"><h3 class="accent">新聞 · 語意段落切分</h3>
+      <ul class="tight" style="margin-top:14px">
+        <li>RecursiveCharacterTextSplitter　<b>800 / overlap 150</b></li>
+        <li>優先在<b>段落 / 句號</b>斷開</li>
+        <li>短文不切（<b>full</b>）；長文才切（<b>partial</b>）</li>
+        <li class="green">每段前綴 <b>[標題]</b> → 脫離上下文仍可被正確檢索</li>
+      </ul>
+    </div>
+    <div class="card"><h3 class="green">AI 分析 · 按欄位語意角色</h3>
+      <ul class="tight" style="margin-top:14px">
+        <li>不做二次字元切割，按角色拆<b>最多 3 個向量</b></li>
+        <li><b>summary</b>　產業近況</li>
+        <li><b>key_news</b>　具體事件</li>
+        <li><b>stock_insight</b>　個股推薦</li>
+        <li class="amber">不同查詢意圖 → 命中不同角色向量</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 11 -->
+<section class="slide" data-time="1:30" data-notes="Hybrid 檢索是這段的核心。&#10;為什麼要 Hybrid：dense 向量抓語意，但對『2330』這種精確詞、股票代碼很弱；BM25 sparse 剛好補這塊。兩路互補。&#10;融合用 RRF（Reciprocal Rank Fusion）——是對兩路的『排名』做融合，不是把兩個分數硬加，因為 dense cosine 和 BM25 的分數尺度根本不同。&#10;再來三個工程細節：&#10;- 分組去重：search_groups(group_by=mongo_id, group_size=2)，防止同一篇長文的多個 chunk 洗版 top-k。&#10;- metadata 過濾：時間(Datetime index)、股票代碼、類型、情緒、產業(Keyword index)。&#10;- 相似度門檻過濾低相關，必要時用 mongo_id 回 MongoDB 拿全文。&#10;如果被追問 RRF：可以解釋 1/(k+rank) 的概念。">
+  <div class="slide-head"><span class="kicker">03 · Hybrid RAG</span><h2>Hybrid 檢索：dense + BM25，用 RRF 融合</h2></div>
+  <div class="split">
+    <div class="vstack" style="gap:16px">
+      <div class="card"><h3 class="accent">為什麼 Hybrid</h3>
+        <ul class="tight" style="margin-top:10px">
+          <li><b>dense</b>（1536 維 cosine）抓語意</li>
+          <li class="green"><b>BM25 sparse</b> 抓精確詞（如股票代碼「<b>2330</b>」）</li>
+          <li class="amber"><b>RRF</b> 融合<b>排名</b>，非分數相加——兩者分數尺度不同</li>
+        </ul>
+      </div>
+      <div class="card"><h3 class="green">分組去重</h3>
+        <p style="margin-top:6px"><code>search_groups(group_by="mongo_id", group_size=2)</code>：同一篇長文的多個 chunk 不會洗版 top-k。</p>
+      </div>
+    </div>
+    <div class="card"><h3 class="accent">Metadata 過濾</h3>
+      <ul class="tight" style="margin-top:14px">
+        <li>時間區間　<small>Datetime index</small></li>
+        <li>股票代碼 / 名稱　<small>Keyword</small></li>
+        <li>新聞類型　<small>Keyword</small></li>
+        <li>情緒標籤　<small>Keyword</small></li>
+        <li>產業　<small>Keyword</small></li>
+      </ul>
+      <p style="margin-top:16px"><small>相似度門檻過濾低相關；必要時由 <b>mongo_id</b> 回 MongoDB 提領全文。</small></p>
+    </div>
+  </div>
+</section>
+
+<!-- 12 -->
+<section class="slide" data-time="1:00" data-notes="資料管線的冪等性——這是可靠性的關鍵。&#10;Point ID 用 uuid5(mongo_id + chunk_type + chunk_idx) 產生確定性 ID。所以同一段內容不管跑幾次，ID 都一樣，Qdrant 就是 upsert 覆寫，永遠不會重複寫入。這讓遷移腳本可以隨便重跑。&#10;搭配 Serverless 增量同步：EventBridge 定時觸發 Lambda，用 MongoDB ObjectId 內含的時間戳過濾『最近 N 小時』的新文件——不需要額外存 checkpoint。&#10;還有一個刻意的選擇：fail loud。Embedding 重試用盡就直接 raise 讓 Lambda 失敗、觸發告警、重跑補齊；我不做『填零向量』那種靜默降級，因為零向量會污染檢索結果卻不報錯。">
+  <div class="slide-head"><span class="kicker">03 · Hybrid RAG</span><h2>冪等資料管線 + Serverless 增量同步</h2></div>
+  <div class="grid g3 fill">
+    <div class="card"><h3 class="accent">確定性 ID</h3>
+      <pre style="font-size:12.5px;margin-top:10px">uuid5(
+  mongo_id +
+  chunk_type +
+  chunk_idx
+)</pre>
+      <p style="margin-top:12px">重跑遷移等同 <b>upsert</b>，永不重複寫入。</p>
+    </div>
+    <div class="card good"><h3>無狀態增量</h3><p style="margin-top:6px">EventBridge → Lambda。用 <b>ObjectId 時間戳</b>過濾「最近 N 小時」新文件，<b>不需 checkpoint</b> 存儲。</p></div>
+    <div class="card warn"><h3>Fail loud</h3><p style="margin-top:6px">Embedding 重試耗盡直接 <b>raise</b> 觸發告警、重跑補齊——<b>不填零向量</b>做靜默降級污染檢索。</p></div>
+  </div>
+  <p style="margin-top:22px"><small>冪等 + 增量 + fail loud，讓每日排程同步可以安全地重跑與告警。</small></p>
+</section>
+
+<!-- ===== TOPIC 4 : Context / Auth / Quota ===== -->
+<!-- 13 -->
+<section class="slide" data-time="1:00" data-notes="這段是我最想被問的一段，因為它是『用數據驅動的優化』。&#10;問題根因有兩層：&#10;① 歷史層：Router 每次呼叫都收到完整的 DB 對話歷史，歷史一長 prompt 就肥。&#10;② 同輪累積層：同一個問題內，Router 如果重試多輪(Router→Tools→Router→Tools)，每一輪的 ToolMessage 會疊加進 state；到第 3 次進 Router，prompt 裡已經含了前兩批所有工具結果——token 暴增。&#10;讓面試官先感受到問題的機制，再講解法。">
+  <div class="slide-head"><span class="kicker">04 · Context 工程</span><h2>問題：Router 上下文爆炸（兩層根因）</h2></div>
+  <div class="grid g2 fill">
+    <div class="card bad"><h3>① 歷史層</h3><p>Router 每次呼叫都收到<b>完整 DB 對話歷史</b>；歷史一長，prompt 就肥。</p></div>
+    <div class="card bad"><h3>② 同輪累積層</h3><p>同一問題內 Router 多輪重試，每輪 <b>ToolMessage 疊加</b>進 state；<b>第 3 次</b>進 Router 已含前兩批全部工具結果 → token 暴增。</p></div>
+  </div>
+  <pre style="margin-top:20px;font-size:13px">Router 第 3 次： Human | AI(calls A) | <span class="k">Tool_A1 Tool_A2</span> | AI(calls B) | <span class="k">Tool_B1</span>
+                                    ↑ 前兩批工具結果全都還在 prompt 裡</pre>
+</section>
+
+<!-- 14 -->
+<section class="slide" data-time="1:20" data-notes="解法的核心洞察：Router 的工作只是判斷『叫哪個工具、有沒有找到資料』，它不需要讀完整內容；只有 Analyst 需要完整資料來寫報告。&#10;所以我做雙軌保護架構：&#10;- 截斷後(500字)的 ToolMessage 進 state[messages] → 給 Router 做決策(slim context)&#10;- 原始完整資料進 state[retrieved_data] → 給 Analyst 分析（品質完全不受影響）&#10;幾個具體手段：Router 只看最近 2 輪、同輪 ToolMessage 只留最新一批、DB 舊報告截斷 800 字、檢索 top-k 15→5。&#10;最重要的一句——怎麼驗證：每一輪 Router/Analyst 的 prompt、completion token 都逐輪寫進 token_usage_logs，所以我能拿『同類型對話』在優化前後直接比對 token，是量化驗證，不是憑感覺。這句一定要講。">
+  <div class="slide-head"><span class="kicker">04 · Context 工程</span><h2>雙軌保護 + 用 token log 量化驗證</h2></div>
+  <div class="split">
+    <div class="vstack" style="gap:14px">
+      <div class="card soft"><h3 class="accent">核心洞察</h3><p style="margin-top:6px">Router 只需知道「叫哪個工具、有沒有找到」；<b>只有 Analyst 需要完整內容</b>。</p></div>
+      <pre style="font-size:12.5px">Tool（<span class="k">截斷 500 字</span>） → messages     <span class="c"># Router 決策</span>
+原始完整資料        → retrieved_data <span class="c"># Analyst 分析</span></pre>
+      <ul class="tight">
+        <li>Router 只看<b>最近 2 輪</b>歷史（ROUTER_HISTORY_TURNS）</li>
+        <li>同輪 ToolMessage <b>只留最新一批</b></li>
+        <li>DB 舊 Analyst 報告截斷 <b>800 字</b>；檢索 <b>top-k 15→5</b></li>
+      </ul>
+    </div>
+    <div class="card good" style="display:flex;flex-direction:column;justify-content:center">
+      <h3>如何驗證？逐輪 token log</h3>
+      <p style="margin:12px 0 18px">每輪 Router / Analyst 的 prompt、completion tokens 都寫入 <b>token_usage_logs</b>。</p>
+      <ul class="tight">
+        <li class="green">Router 首輪 prompt tokens　<span class="metric"><span class="from">高</span> → <span class="to">明顯下降</span></span></li>
+        <li class="green">同輪重試累積　<span class="metric"><span class="from">爆炸</span> → <span class="to">下降</span></span></li>
+        <li class="green">Analyst 品質　<span class="metric"><span class="to">不變</span></span>（雙軌保護）</li>
+      </ul>
+      <p style="margin-top:16px"><small>優化前後拿「同類型對話」直接比對——量化驗證，不憑感覺。</small></p>
+    </div>
+  </div>
+</section>
+
+<!-- 15 -->
+<section class="slide" data-time="1:00" data-notes="切到認證。Token 儲存策略：&#10;- AT 15 分鐘，放 JS 記憶體變數，不落 localStorage → 防 XSS 竊取；驗證純 stateless，不查 DB。&#10;- RT 7 天，放 HttpOnly Cookie + SameSite=Lax → JS 讀不到防 XSS、SameSite 防 CSRF。&#10;RT Rotation 的重點在這行 SQL：DELETE ... WHERE token=$1 AND expires_at>NOW() RETURNING user_id。這是原子消費——併發下只有一個請求能刪到那一列。&#10;如果 DELETE 到 0 列、但 RT 簽名還有效，代表這個 RT 已經被別人用過了 → 判定 Token Reuse Attack → 立刻撤銷該用戶所有 session。因為我無法區分是駭客先用還是本人先用，全撤最安全。">
+  <div class="slide-head"><span class="kicker">04 · 認證安全</span><h2>JWT RT Rotation + 重放攻擊偵測</h2></div>
+  <div class="split">
+    <div class="vstack" style="justify-content:center">
+      <table>
+        <tr><th>Token</th><th>存放</th><th>防護</th></tr>
+        <tr><td><b>AT</b><br><small>15 分鐘</small></td><td>JS 記憶體變數<br><small>不落 localStorage</small></td><td>防 XSS；<br>stateless 不查 DB</td></tr>
+        <tr><td><b>RT</b><br><small>7 天</small></td><td>HttpOnly Cookie<br><small>SameSite=Lax</small></td><td>JS 不可讀防 XSS；<br>SameSite 防 CSRF</td></tr>
+      </table>
+    </div>
+    <div class="vstack" style="gap:14px;justify-content:center">
+      <pre style="font-size:12.5px"><span class="k">DELETE FROM</span> refresh_tokens
+<span class="k">WHERE</span> token = $1 <span class="k">AND</span> expires_at &gt; <span class="f">NOW()</span>
+<span class="k">RETURNING</span> user_id;   <span class="c">-- 原子消費</span></pre>
+      <div class="card bad"><h3>DELETE = 0 列，但簽名仍有效</h3><p style="margin-top:6px">→ 判定 <b>Token Reuse Attack</b> → 立即撤銷該用戶<b>所有 session</b>。無法區分駭客與本人誰先用，全撤最安全。</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- 16 -->
+<section class="slide" data-time="0:55" data-notes="這頁是『魔鬼在細節』——我特別想講的一個坑。&#10;前端有三個換發機制：A. AT 到期前 60 秒背景靜默 refresh；B. 每次請求前檢查剩餘效期 + 收到 401 自動重試；C. 並發鎖。&#10;為什麼一定要並發鎖：如果兩個請求同時 401，會同時觸發兩次 refresh。第一次 rotation 成功、舊 RT 被刪；第二次拿著『已經被消費的舊 RT』去 refresh——就會被後端判定成 Token Reuse Attack，結果使用者自己被踢下線、所有裝置登出。&#10;解法：三個機制共用同一個 refresh Promise，同時間的請求都等這一個 Promise 的結果。&#10;這題很能展現我對併發競態的敏感度。">
+  <div class="slide-head"><span class="kicker">04 · 認證安全</span><h2>前端並發鎖：沒有它會被自己誤判成攻擊</h2></div>
+  <div class="split">
+    <div class="card bad"><h3>沒有並發鎖的競態</h3>
+      <ul class="tight red" style="margin-top:14px">
+        <li class="red">兩個並發 401 → 同時觸發<b>兩次</b> refresh</li>
+        <li class="red">第一次：rotation 成功，舊 RT 被刪</li>
+        <li class="red">第二次：持<b>已消費的舊 RT</b> → 被判 Reuse Attack</li>
+        <li class="red"><b>使用者被自己踢下線、全裝置登出</b></li>
+      </ul>
+    </div>
+    <div class="card good"><h3>三機制（auth.js）</h3>
+      <ul class="tight" style="margin-top:14px">
+        <li>A　AT 到期前 <b>60s</b> 背景靜默 refresh</li>
+        <li>B　請求前檢查效期 + <b>401 自動重試</b>（兜底）</li>
+        <li class="green">C　<b>並發鎖</b>：共用同一個 refresh Promise，併發請求都等同一結果</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 17 -->
+<section class="slide" data-time="1:10" data-notes="配額計量，兩道防線：&#10;1. Pre-flight：進 LangGraph 前先檢查 used_tokens >= monthly_limit，超了直接 429，連串流都不開。&#10;2. 原子遞增 + 最終一致：每輪 LLM 結束，用單一 UPDATE ... SET used_tokens = used_tokens + delta 原子累加實際用量，跟寫 token_usage_logs 放在同一個 transaction。計數器(quotas)和流水(logs)分表，兼顧高頻更新效能與逐輪對帳。&#10;最重要是這個『刻意的取捨』：我不在超限的當下中斷回合，而是無條件累加、由下一輪的 pre-flight 擋。屬於『允許略超、最終一致』。&#10;為什麼？使用者體驗——如果在還有剩餘額度時，因為預估本輪會超就砍掉半篇回應，體驗很差。所以讓進行中的回合跑完，下一輪再擋。&#10;然後補一句：如果改以成本嚴格為優先，可以改成條件式 UPDATE ... WHERE used_tokens+delta<=limit（原子強制不超扣），代價是可能中斷正在串流的回合。&#10;這題的價值：我知道 tradeoff，而且能說清楚為什麼選 A 不選 B。">
+  <div class="slide-head"><span class="kicker">04 · 配額計量</span><h2>兩道防線，與一個刻意的取捨</h2></div>
+  <div class="grid g2" style="margin-bottom:18px">
+    <div class="card"><h3 class="accent">① Pre-flight（入口攔截）</h3><p style="margin-top:6px">進 LangGraph 前檢查 <b>used_tokens ≥ monthly_limit</b> → 直接 <b>429</b>，不開串流。</p></div>
+    <div class="card"><h3 class="green">② 原子遞增 + 最終一致</h3><p style="margin-top:6px">每輪 LLM 結束 <code>UPDATE … used_tokens += delta</code>，與寫 <b>token_usage_logs</b> 同一 transaction。計數器與流水分表。</p></div>
+  </div>
+  <div class="card warn fill" style="display:flex;flex-direction:column;justify-content:center">
+    <h3>刻意允許單輪略超（最終一致）</h3>
+    <p style="margin:10px 0">不在超限當下中斷回合（避免「還有額度卻被砍半篇回應」），由<b>下一輪 pre-flight</b> 攔截。</p>
+    <p><small>若改以成本嚴格為優先 → 條件式 <code>UPDATE … WHERE used_tokens + delta ≤ limit</code>（原子強制不超扣），代價是可能中斷正在串流的回合。我選前者，因為使用者體驗優先。</small></p>
+  </div>
+</section>
+
+<!-- 18 CLOSING -->
+<section class="slide" data-time="1:00" data-notes="收尾：把四段收斂成一個共同主題——我做的每個關鍵設計，背後都是一個有意識的取捨，而且我能量化或說理支撐它。&#10;點出三個我最想被追問的取捨。&#10;然後把球丟給面試官：歡迎針對任何一點深入。">
+  <div class="slide-head"><span class="kicker">總結</span><h2>每個設計背後，都是一個能說清楚的取捨</h2></div>
+  <div class="grid g3 fill">
+    <div class="card"><h3 class="accent">斷線仍持久化</h3><p style="margin-top:6px">vs 省成本中止背景任務。<br>我選<b>持久化</b>：對話結果是「真相來源」。</p></div>
+    <div class="card"><h3 class="green">允許單輪略超配額</h3><p style="margin-top:6px">vs 嚴格不超扣。<br>我選<b>最終一致</b>：使用者體驗優先。</p></div>
+    <div class="card"><h3 class="amber">截斷給 Router</h3><p style="margin-top:6px">vs 完整給 Analyst。<br>雙軌兼顧<b>成本 / 延遲 / 品質</b>。</p></div>
+  </div>
+  <p class="lead" style="margin-top:24px">共同點：<strong>有意識地選，並且用 token log / 競態分析支撐——不是憑感覺。</strong></p>
+</section>
+
+<!-- 19 Q&A -->
+<section class="slide center" data-time="—" data-notes="Q&A 引導。可以主動拋幾個延伸點，讓面試官順著問：&#10;- RRF 的分數尺度與 k 參數&#10;- Lambda 冷啟動 / 逾時&#10;- Parent DAG：重新生成的版本切換 <1/2>、Recursive CTE 回溯&#10;- Redis 預留模式（規劃中，尚未接線）&#10;- Flash 模式的雙軌 query 改寫&#10;準備好被追問任何一頁的細節。">
+  <div class="blob" style="width:460px;height:460px;background:#d7e3ff;top:-150px;left:-90px;opacity:.55"></div>
+  <div class="blob" style="width:380px;height:380px;background:#e6ecff;bottom:-150px;right:-90px;opacity:.5"></div>
+  <div style="position:relative;z-index:1;display:flex;flex-direction:column;align-items:center">
+    <span class="kicker">Q &amp; A</span>
+    <h1 style="margin:18px 0 20px;font-size:56px">謝謝，歡迎深入追問</h1>
+    <p class="lead" style="max-width:820px">以上任何一點都可以展開；下面幾個延伸主題我也準備好了：</p>
+    <div class="pillrow" style="justify-content:center;margin-top:28px;max-width:900px">
+      <span class="pill">RRF 分數尺度與 k 值</span>
+      <span class="pill">Lambda 冷啟動 / 逾時</span>
+      <span class="pill">Parent DAG 重新生成版本切換</span>
+      <span class="pill">Recursive CTE 上下文回溯</span>
+      <span class="pill">Redis 預留模式（規劃中）</span>
+      <span class="pill">Flash 雙軌 query 改寫</span>
+    </div>
+  </div>
+</section>
+
+</div></div>
+
+<div id="counter">01 / 20</div>
+<div id="hint">← → 翻頁　·　<kbd>N</kbd> 講稿　·　<kbd>F</kbd> 全螢幕</div>
+
+<div id="notes"><span class="time" id="notesTime"></span><h4>講稿 / Speaker Notes</h4><div class="body" id="notesBody"></div></div>
+
+<script>
+(function(){
+  const slides=[...document.querySelectorAll('.slide')];
+  const deck=document.getElementById('deck');
+  const bar=document.getElementById('bar');
+  const counter=document.getElementById('counter');
+  const notes=document.getElementById('notes');
+  const notesBody=document.getElementById('notesBody');
+  const notesTime=document.getElementById('notesTime');
+  let i=0, notesOpen=false;
+
+  function scale(){
+    const s=Math.min(window.innerWidth/1280, window.innerHeight/720);
+    deck.style.transform='scale('+s+')';
+  }
+  function fillNotes(){
+    const s=slides[i];
+    notesBody.textContent=(s.dataset.notes||'（本頁無講稿）');
+    notesTime.textContent=s.dataset.time&&s.dataset.time!=='—'?('約 '+s.dataset.time):'';
+  }
+  function render(){
+    slides.forEach((s,n)=>s.classList.toggle('active',n===i));
+    bar.style.width=(slides.length>1?(i/(slides.length-1))*100:100)+'%';
+    counter.textContent=String(i+1).padStart(2,'0')+' / '+String(slides.length).padStart(2,'0');
+    if(notesOpen) fillNotes();
+  }
+  function go(n){ i=Math.max(0,Math.min(slides.length-1,n)); render(); }
+
+  window.addEventListener('resize',scale);
+  document.addEventListener('keydown',e=>{
+    if(['ArrowRight',' ','PageDown'].includes(e.key)){e.preventDefault();go(i+1);}
+    else if(['ArrowLeft','PageUp'].includes(e.key)){e.preventDefault();go(i-1);}
+    else if(e.key==='Home'){go(0);}
+    else if(e.key==='End'){go(slides.length-1);}
+    else if(e.key==='n'||e.key==='N'){notesOpen=!notesOpen;notes.classList.toggle('open',notesOpen);if(notesOpen)fillNotes();}
+    else if(e.key==='f'||e.key==='F'){if(!document.fullscreenElement)document.documentElement.requestFullscreen();else document.exitFullscreen();}
+  });
+  document.getElementById('stage').addEventListener('click',e=>{
+    if(e.target.closest('#notes'))return;
+    if(e.clientX>window.innerWidth*0.5)go(i+1);else go(i-1);
+  });
+  scale(); render();
+})();
+</script>
+</body>
+</html>

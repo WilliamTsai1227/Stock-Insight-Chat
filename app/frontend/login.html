@@ -114,7 +114,14 @@
         </div>
     </div>
 
-    <script>window.STOCK_INSIGHT_API_BASE = 'https://api.insight-chat.xyz/api';</script>
+    <script>
+        // 正式站（Cloudflare，一定是 https）：API 在另一個子網域，必須明寫。
+        // 本機 dev（http）：不設定，交給 api-config.js 推導成 http://<hostname>:8000/api，
+        // 免得在本機測試卻打到正式站的 API。
+        if (location.protocol === 'https:') {
+            window.STOCK_INSIGHT_API_BASE = 'https://api.insight-chat.xyz/api';
+        }
+    </script>
     <script src="/js/api-config.js"></script>
     <script src="/js/legal-content.js"></script>
     <script src="/js/login.js"></script>

@@ -194,7 +194,37 @@ docker compose ... exec backend env | grep <變數名>               # 驗證讀
 
 ---
 
-## 十一、建議回饋 API（`POST /api/user/feedback`）
+## 十一、深度研究（Deep Research）
+
+以 OpenAI Agents SDK 執行的獨立功能，與聊天／Flash 完全分開。只有 `DEEP_SEARCH_MODEL` 是必填。
+
+| 變數 | 預設 | 說明 |
+| :--- | :--- | :--- |
+| `DEEP_SEARCH_MODEL` | `gpt-5.6-luna` | **前端未選模型時的預設模型**（本功能唯一必填）。設什麼就送什麼，即使不在下面的清單裡也會自動併入 |
+| `DEEP_SEARCH_MODELS` | 程式內清單 | 逗號分隔，覆寫前端可選的模型；**前端送來**的清單外 id 會被退回預設值 |
+| `DEEP_SEARCH_MAX_FILES` | `10` | 單次研究可上傳的檔案數 |
+| `DEEP_SEARCH_MAX_FILE_MB` | `20` | 單一檔案大小上限 |
+| `DEEP_SEARCH_MAX_IMAGES` | `4` | 單次研究可附的圖片數 |
+| `DEEP_SEARCH_QUERY_MAX_CHARS` | `4000` | 研究題目字數上限 |
+| `DEEP_SEARCH_MAX_TURNS` | `24` | Agent 迴圈上限（一次 web search 會用掉數輪） |
+| `DEEP_SEARCH_SPREADSHEET_MAX_CHARS` | `12000` | 單張試算表轉 Markdown 後的字數上限 |
+| `DEEP_SEARCH_SPREADSHEET_TOTAL_MAX_CHARS` | `30000` | 所有試算表合計進 prompt 的字數上限 |
+| `DEEP_SEARCH_SESSION_TTL_MINUTES` | `120` | 記憶體 session 存活時間 |
+| `DEEP_SEARCH_MAX_SESSIONS_PER_USER` | `5` | 每位使用者保留的 session 數，超過淘汰最舊的 |
+| `DEEP_SEARCH_VECTOR_STORE_EXPIRES_DAYS` | `1` | OpenAI vector store 的 `expires_after` 保險絲 |
+
+> `DEEP_SEARCH_MODELS` 內只該放 **Responses API 支援 hosted tools**（`web_search` / `file_search`）的模型。
+> `gpt-5.6-luna` / `sol` / `terra` 已實測通過（web search、file search、`reasoning.effort=medium`、structured outputs 皆可）。
+> 換新模型前建議先跑一次驗證：附一份只有檔案裡才有的事實，看模型答不答得出來，即可確認 file search 真的生效。
+> 非推理模型（`gpt-4.1` 系列）不會被帶上 `reasoning.effort` —— 帶了 Responses API 會直接回 400，
+> 判斷邏輯在 [`config.py`](../app/backend/deep_research/config.py) 的 `supports_reasoning_effort()`。
+>
+> 本功能沿用既有的 `OPENAI_API_KEY`；未設定時 `/api/deep-research/runs` 回 **503**。
+> 目前**不計入 `token_usage_logs` 與月配額**（MVP 取捨），改以「每位使用者同時只能跑一個研究」節流。
+
+---
+
+## 十二、建議回饋 API（`POST /api/user/feedback`）
 
 | 變數 | 預設 | 說明 |
 | :--- | :--- | :--- |
@@ -216,7 +246,7 @@ docker compose ... exec backend env | grep <變數名>               # 驗證讀
 
 ---
 
-## 十二、除錯
+## 十三、除錯
 
 | 變數 | 預設 | 說明 |
 | :--- | :--- | :--- |
@@ -226,7 +256,7 @@ docker compose ... exec backend env | grep <變數名>               # 驗證讀
 
 ---
 
-## 十三、正式環境 `.env` 範本
+## 十四、正式環境 `.env` 範本
 
 ```env
 # ── Docker Hub 映像（compose 變數替換用）────────────────
@@ -259,6 +289,9 @@ MONGO_DB=stock_insight
 OPENAI_API_KEY=sk-...
 TAVILY_API_KEY=tvly-...
 
+# ── 深度研究 ──────────────────────────────────────────
+DEEP_SEARCH_MODEL=gpt-5.6-luna
+
 # ── 延遲調校（可選；不設則用程式預設）────────────────
 ROUTER_REASONING_EFFORT=minimal
 ANALYST_REASONING_EFFORT=low
@@ -269,7 +302,7 @@ ANALYST_TARGET_MAX_WORDS=1800
 
 ---
 
-## 十四、本機開發最小設定
+## 十五、本機開發最小設定
 
 ```env
 OPENAI_API_KEY=sk-...
@@ -279,13 +312,14 @@ MONGODB_URL=mongodb+srv://.../stock_insight
 GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
 GOOGLE_OAUTH_REDIRECT_URI=http://localhost:8000/api/user/auth/google/callback
+DEEP_SEARCH_MODEL=gpt-5.6-luna       # 深度研究預設模型
 ```
 
 `QDRANT_HOST=qdrant` 已由 `docker-compose.yml` 的 `environment` 設定，不需重複填。其餘變數都有堪用的預設值。
 
 ---
 
-## 十五、安全性核查清單（上線前）
+## 十六、安全性核查清單（上線前）
 
 - [ ] `SECRET_KEY` 已換成 `openssl rand -hex 32` 產生的隨機值
 - [ ] `COOKIE_SECURE=true`（HTTPS 環境）
