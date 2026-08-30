@@ -399,6 +399,26 @@ Then Rewrite → Destination port → 8000
 export IMAGE_TAG=1.0.1
 # build & push（見 §4.3，記得 --platform linux/arm64）
 ```
+要記得清理空間
+建議清完這次之後，順手做兩件事（前一則訊息已給指令，這邊濃縮重點）：
+
+設定 Docker log 自動輪替（避免長期log 累積吃空間）：
+```
+sudo tee /etc/docker/daemon.json > /dev/null <<'EOF'
+{
+  "log-driver": "json-file",
+  "log-opts": { "max-size": "10m", "max-file": "3" }
+}
+EOF
+sudo systemctl restart docker
+```
+之後每次部署完，養成清舊 image 的習慣：
+
+```
+docker compose -f docker-compose.prod.yml pull backend
+docker compose -f docker-compose.prod.yml up -d backend
+docker image prune -f
+```
 
 **EC2：**
 
@@ -407,6 +427,7 @@ cd /opt/stock-insight
 # 編輯 .env：IMAGE_TAG=1.0.1
 docker compose -f docker-compose.prod.yml pull backend
 docker compose -f docker-compose.prod.yml up -d backend
+docker image prune -f
 ```
 
 Compose 會依新 tag 重建 container；qdrant volume 不受影響。
