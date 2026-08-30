@@ -1345,6 +1345,19 @@ app/frontend/css/deep-research.css
 與其讓模型每次自由發揮（結果是每份檔案長得都不一樣，而且通常都不好看），
 不如提供少數經過設計的預設。
 
+**篇幅交給使用者，但只寫進 prompt。** 簡報頁數（5–20，預設 12）與報告小節數
+（3–10，預設 6）由前端的數字欄位指定，經 `config.resolve_length()` clamp 後
+接在 skill instructions 後面（`skills._length_rule()`）。上下限存在的理由是成本：
+這個值直接來自瀏覽器且等同模型的輸出量，沒 clamp 一個 `length: 500` 就能燒掉整包額度。
+因此上限做成三層：前端 `<input>` 的 `min`/`max`（體感，可繞過）、API 的絕對上限
+`LENGTH_HARD_MAX = 20`（越界回 400，正常前端送不出這種值）、以及 `resolve_length()`
+把區間內的偏差 clamp 掉。`LENGTH_SPECS` 的 `max` 與環境變數給的 `default` 在啟動時
+一併校正 —— `default` 是唯一繞得過 `resolve_length()` 的路徑（`length` 沒送時直接回傳），
+沒校正的話 `DEEP_SEARCH_DECK_SLIDES=999` 會讓每次產出都跑 999 頁且從 API 看不出異常。
+**後端不對產出做裁切** —— 硬砍會刪掉有內容的頁，而結構化輸出對「剛好 N 個」的
+命中率夠好，偶爾偏一頁遠比破壞內容划算。頁數同時會影響簡報的節奏規則：
+八頁以上才要求 section 分隔頁與 stats／quote 頁，更短時以論點優先。
+
 **用內容預算取代 render QA 迴圈。**
 [OpenAI slides skill](https://github.com/openai/skills) 的作法是
 產生 → 用 LibreOffice rasterize 成 PNG → 程式化偵測溢位／重疊 → 修正。

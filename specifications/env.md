@@ -207,6 +207,8 @@ docker compose ... exec backend env | grep <變數名>               # 驗證讀
 | `DEEP_SEARCH_MAX_IMAGES` | `4` | 單次研究可附的圖片數 |
 | `DEEP_SEARCH_QUERY_MAX_CHARS` | `4000` | 研究題目字數上限 |
 | `DEEP_SEARCH_MAX_TURNS` | `24` | Agent 迴圈上限（一次 web search 會用掉數輪） |
+| `DEEP_SEARCH_DECK_SLIDES` | `12` | 簡報頁數的**預設值**；使用者可在前端改成 5–20。設在區間外會被壓回區間內，不會放大上限 |
+| `DEEP_SEARCH_REPORT_SECTIONS` | `6` | 報告小節數的**預設值**；使用者可在前端改成 3–10。同樣會被壓回區間內 |
 | `DEEP_SEARCH_SPREADSHEET_MAX_CHARS` | `12000` | 單張試算表轉 Markdown 後的字數上限 |
 | `DEEP_SEARCH_SPREADSHEET_TOTAL_MAX_CHARS` | `30000` | 所有試算表合計進 prompt 的字數上限 |
 | `DEEP_SEARCH_SESSION_TTL_MINUTES` | `120` | 記憶體 session 存活時間 |

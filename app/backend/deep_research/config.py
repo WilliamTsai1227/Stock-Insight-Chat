@@ -144,6 +144,90 @@ SPREADSHEET_TOTAL_MAX_CHARS = _env_int(
 # Agent 迴圈上限（一輪 = 一次模型呼叫；web search 會用掉數輪）
 RESEARCH_MAX_TURNS = _env_int("DEEP_SEARCH_MAX_TURNS", 24)
 
+# ─────────────────────────────────────────────────────────────
+# 產出篇幅（簡報頁數 / 報告小節數）
+# ─────────────────────────────────────────────────────────────
+# 由使用者在前端指定，後端 clamp 進範圍後寫進 skill 的 instructions。
+# 範圍不是排版限制（樣板本身不限頁數），而是成本與品質的煞車：
+# 開太大時模型會開始灌水，一次產出也會從數十秒拉到數分鐘。
+#
+# 這裡有兩道限制，職責不同：
+#   LENGTH_HARD_MAX  絕對上限，任何來源（前端、API、環境變數）都不得超過
+#   spec["min/max"]  各 skill 的合理區間，超出會被靜靜 clamp 進來
+LENGTH_HARD_MAX = 20
+
+_LENGTH_SPECS: Dict[str, Dict[str, Any]] = {
+    "report": {
+        "label": "小節數",
+        "unit": "節",
+        "hint": "不含摘要、尚待釐清與參考來源等固定區塊",
+        "min": 3,
+        "max": 10,
+        "default": _env_int("DEEP_SEARCH_REPORT_SECTIONS", 6),
+    },
+    "deck": {
+        "label": "頁數",
+        "unit": "頁",
+        "hint": "含封面與結語頁",
+        "min": 5,
+        "max": 20,
+        "default": _env_int("DEEP_SEARCH_DECK_SLIDES", 12),
+    },
+}
+
+
+def _sanitized_length_specs() -> Dict[str, Dict[str, Any]]:
+    """
+    把 spec 自身校正到可信狀態，程式啟動時做一次。
+
+    `default` 來自環境變數，是唯一能繞過 clamp 的路徑 —— `resolve_length(kind, None)`
+    直接回傳它。少了這裡的校正，`DEEP_SEARCH_DECK_SLIDES=999` 會讓每一次沒指定頁數的
+    產出都跑 999 頁，而且從 API 完全看不出異常。
+    """
+    for spec in _LENGTH_SPECS.values():
+        spec["max"] = min(spec["max"], LENGTH_HARD_MAX)
+        spec["min"] = min(spec["min"], spec["max"])
+        spec["default"] = max(spec["min"], min(spec["max"], spec["default"]))
+    return _LENGTH_SPECS
+
+
+LENGTH_SPECS: Dict[str, Dict[str, Any]] = _sanitized_length_specs()
+
+
+def exceeds_hard_max(requested: Optional[int]) -> bool:
+    """
+    這個值是否越過絕對上限，該直接回 400 而非默默 clamp。
+
+    區間內的偏差（例如簡報填 25）clamp 掉就好，使用者拿到 20 頁不會有損失；
+    但 `length: 500` 這種只會來自繞過前端的直打，回一個明確的錯誤比悄悄改成
+    20 頁誠實，也讓濫用在 log 裡看得見。
+    """
+    if requested is None:
+        return False
+    try:
+        return not (1 <= int(requested) <= LENGTH_HARD_MAX)
+    except (TypeError, ValueError):
+        return True
+
+
+def resolve_length(kind: str, requested: Optional[int]) -> int:
+    """
+    將前端送來的篇幅收斂成實際要寫進 prompt 的數字。
+
+    這個值直接來自瀏覽器，且會變成模型的輸出量 —— 沒 clamp 的話
+    一個 `length: 500` 就能讓單次產出燒掉整包 token 額度。
+    超過 `LENGTH_HARD_MAX` 的請求在 API 層就被擋掉了，這裡是最後一道保險。
+    """
+    spec = LENGTH_SPECS.get(kind)
+    if spec is None:
+        raise KeyError(kind)
+    try:
+        value = spec["default"] if requested is None else int(requested)
+    except (TypeError, ValueError):
+        value = spec["default"]
+    return max(spec["min"], min(spec["max"], value))
+
+
 # session 存活時間；逾時後連同研究結果與已產生的檔案一起清掉
 SESSION_TTL_MINUTES = _env_int("DEEP_SEARCH_SESSION_TTL_MINUTES", 120)
 # 每位使用者最多同時保留幾個 session（超過時淘汰最舊的）
@@ -191,4 +275,5 @@ def public_config() -> Dict[str, Any]:
         "max_images": MAX_IMAGES,
         "query_max_chars": QUERY_MAX_CHARS,
         "accepted_extensions": sorted(ACCEPTED_EXTENSIONS),
+        "length_specs": LENGTH_SPECS,
     }

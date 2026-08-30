@@ -246,9 +246,15 @@
                                 <h2 id="dr-run-title"></h2>
                                 <p id="dr-run-meta" class="dr-run-meta"></p>
                             </div>
-                            <button type="button" id="dr-reset-btn" class="dr-ghost-btn">
-                                <i data-lucide="rotate-ccw"></i><span>新的研究</span>
-                            </button>
+                            <div class="dr-run-head-actions">
+                                <button type="button" id="dr-copy-btn" class="dr-ghost-btn hidden"
+                                        title="複製整份研究結果（Markdown 原文）">
+                                    <i data-lucide="copy"></i><span>複製全文</span>
+                                </button>
+                                <button type="button" id="dr-reset-btn" class="dr-ghost-btn">
+                                    <i data-lucide="rotate-ccw"></i><span>新的研究</span>
+                                </button>
+                            </div>
                         </div>
 
                         <ul id="dr-progress" class="dr-progress"></ul>
@@ -474,6 +480,30 @@
     </div>
 
     <!-- 刪除專案 Modal（簡潔風格，視覺上不過度警告）-->
+    <!-- 深度研究：報告／簡報預覽（iframe 直接載入產出的 HTML） -->
+    <div class="modal-overlay dr-preview-overlay" id="dr-preview-modal">
+        <div class="dr-preview-card">
+            <div class="dr-preview-head">
+                <div class="dr-preview-name">
+                    <i data-lucide="file-text"></i>
+                    <span id="dr-preview-title">預覽</span>
+                </div>
+                <div class="dr-preview-actions">
+                    <button type="button" id="dr-preview-download" class="dr-ghost-btn">
+                        <i data-lucide="download"></i><span>下載</span>
+                    </button>
+                    <button type="button" id="dr-preview-newtab" class="dr-ghost-btn">
+                        <i data-lucide="external-link"></i><span>新分頁</span>
+                    </button>
+                    <button type="button" class="modal-close" id="dr-preview-close" aria-label="關閉預覽">
+                        <i data-lucide="x"></i>
+                    </button>
+                </div>
+            </div>
+            <iframe id="dr-preview-frame" class="dr-preview-frame" title="產出預覽"></iframe>
+        </div>
+    </div>
+
     <div class="modal-overlay" id="delete-project-modal">
         <div class="modal-card delete-project-card">
             <div class="modal-body">

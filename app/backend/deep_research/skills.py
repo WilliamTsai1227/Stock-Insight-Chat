@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Literal, Tuple
 from agents import Agent, ModelSettings, Runner
 from pydantic import BaseModel, Field
 
-from .config import supports_reasoning_effort
+from .config import resolve_length, supports_reasoning_effort
 from .templates import Theme, render_deck, render_report, resolve_theme
 
 MAX_SKILL_TURNS = 4
@@ -60,7 +60,9 @@ class ReportDoc(BaseModel):
     subtitle: str = Field(description="副標，一句話說明這份報告回答了什麼")
     executive_summary: List[str] = Field(description="三到五條摘要，每條一句話講結論")
     key_figures: List[KeyFigure] = Field(description="二到四個關鍵數字；沒有就給空陣列")
-    sections: List[ReportSection] = Field(description="四到七個小節")
+    sections: List[ReportSection] = Field(
+        description="報告小節；數量以 instructions 指定的為準"
+    )
     open_questions: List[str] = Field(description="尚待釐清的問題；沒有就給空陣列")
     references: List[Reference] = Field(description="所有引用來源")
 
@@ -129,7 +131,9 @@ class Slide(BaseModel):
 class DeckDoc(BaseModel):
     title: str = Field(description="簡報標題")
     subtitle: str = Field(description="副標，一句話")
-    slides: List[Slide] = Field(description="十到十四頁，含封面與結語")
+    slides: List[Slide] = Field(
+        description="投影片；頁數以 instructions 指定的為準，含封面與結語"
+    )
 
 
 DECK_SKILL_PROMPT = """你是一位替高階簡報設計內容的顧問。輸入是一份研究筆記，
@@ -142,8 +146,10 @@ DECK_SKILL_PROMPT = """你是一位替高階簡報設計內容的顧問。輸入
 - 有數字的地方優先用 stats 版面，讓數字自己說話。
 - 要比較兩個對象（公司、方案、時期）時用 compare，把兩邊各自的重點放進 columns，
   不要擠在同一份條列裡。
-- 內容超過八頁時，用 section 分隔頁把簡報切成二到三個段落，讓聽眾知道走到哪了。
-- 整份至少要有一頁 stats、一頁 quote，讓節奏有變化。
+- 超過八頁時，用 section 分隔頁把簡報切成二到三個段落，讓聽眾知道走到哪了；
+  八頁以內不需要分隔頁，把版位留給論點。
+- 八頁以上的簡報至少要有一頁 stats、一頁 quote，讓節奏有變化；
+  頁數更少時以論點優先，這兩種節奏頁可以省略。
 - 每頁條列**最多五條**，每條 15–30 字。超過就拆頁 —— 塞太多字版面會擠。
 - 講稿（note）寫投影片上「沒有寫」的東西：脈絡、佐證、可能被追問的點。
 - 只使用研究筆記裡出現過的事實與數字。
@@ -172,6 +178,26 @@ SKILLS: Dict[str, Dict[str, Any]] = {
         "extension": "html",
     },
 }
+
+
+def _length_rule(kind: str, length: int) -> str:
+    """
+    把使用者指定的篇幅寫成一條 instructions 規則，接在 skill prompt 後面。
+
+    只用 prompt 要求、不在後端裁切：截斷會砍掉有內容的頁，而結構化輸出對
+    「剛好 N 個」的命中率夠好，偏一頁的成本遠低於硬砍一頁。
+    """
+    if kind == "deck":
+        return (
+            f"\n- 整份簡報**剛好 {length} 頁**，含封面與結語頁，不多也不少。"
+            "\n  素材不夠時寧可把單頁講深，也不要為了湊頁數拆出只有一條重點的頁；"
+            "\n  素材太多時砍掉次要論點，不要把兩個論點擠進同一頁。"
+        )
+    return (
+        f"\n- 正文**剛好 {length} 個小節**，不多也不少"
+        "（摘要、關鍵數字、尚待釐清、參考來源是固定區塊，不算在內）。"
+        "\n  素材不夠時寧可把小節寫深，也不要拆出只有兩三句的空節。"
+    )
 
 
 def _safe_filename(kind: str, title: str, extension: str) -> str:
@@ -206,17 +232,20 @@ async def generate_artifact(
     research_markdown: str,
     citations: List[Dict[str, str]],
     theme: str | Theme | None = None,
+    length: int | None = None,
 ) -> Tuple[str, str, str]:
     """
     跑一個 skill，回傳 `(filename, media_type, html)`。
 
-    模型只產生結構化 JSON，HTML 一律由樣板組出來；`theme` 決定色票與字體配對。
+    模型只產生結構化 JSON，HTML 一律由樣板組出來；`theme` 決定色票與字體配對，
+    `length` 決定簡報頁數／報告小節數（`None` 用預設值，超出範圍會被 clamp）。
     """
     skill = SKILLS[kind]
+    size = resolve_length(kind, length)
 
     agent = Agent(
         name=skill["agent_name"],
-        instructions=skill["prompt"],
+        instructions=skill["prompt"] + _length_rule(kind, size),
         model=model,
         output_type=skill["output_type"],
         model_settings=(

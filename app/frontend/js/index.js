@@ -3718,6 +3718,36 @@ function scrollToBottom(targetChatId = null, force = false) {
 // ============================================================
 
 /**
+ * 寫入剪貼簿，非安全內容（http / 舊瀏覽器）退回 execCommand。
+ * 深度研究的「複製全文」也共用這支，別再各寫一份 fallback。
+ * @param   {string} text
+ * @returns {Promise<void>}
+ */
+function copyTextToClipboard(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text);
+    }
+    return new Promise((resolve, reject) => {
+        try {
+            const textArea = document.createElement('textarea');
+            textArea.value = text;
+            textArea.style.position = 'fixed';   // 避免畫面捲動
+            textArea.style.left = '-999999px';
+            textArea.style.top = '-999999px';
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+            const successful = document.execCommand('copy');
+            textArea.remove();
+            if (successful) resolve();
+            else reject(new Error('Fallback copy failed'));
+        } catch (err) {
+            reject(err);
+        }
+    });
+}
+
+/**
  * 在訊息底部附加複製按鈕列。
  * @param {HTMLElement} msgDiv   訊息容器
  * @param {string}      rawText  原始文字（AI 為 Markdown；user 為純文字）
@@ -3777,32 +3807,7 @@ function appendCopyBar(msgDiv, rawText, sources, options) {
 
         const fullText = plainText + sourcesText;
 
-        const copyToClipboard = (text) => {
-            if (navigator.clipboard && window.isSecureContext) {
-                return navigator.clipboard.writeText(text);
-            } else {
-                return new Promise((resolve, reject) => {
-                    try {
-                        const textArea = document.createElement("textarea");
-                        textArea.value = text;
-                        textArea.style.position = "fixed"; // 避免畫面捲動
-                        textArea.style.left = "-999999px";
-                        textArea.style.top = "-999999px";
-                        document.body.appendChild(textArea);
-                        textArea.focus();
-                        textArea.select();
-                        const successful = document.execCommand('copy');
-                        textArea.remove();
-                        if (successful) resolve();
-                        else reject(new Error('Fallback copy failed'));
-                    } catch (err) {
-                        reject(err);
-                    }
-                });
-            }
-        };
-
-        copyToClipboard(fullText).then(() => {
+        copyTextToClipboard(fullText).then(() => {
             // 短暫顯示「已複製」勾勾確認
             btn.classList.add('copied');
             while (btn.firstChild) btn.removeChild(btn.firstChild);

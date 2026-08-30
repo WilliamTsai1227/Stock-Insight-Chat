@@ -46,6 +46,10 @@ const drState = {
     generating: {},
     /** kind → 選定的視覺風格 id（報告與簡報可以各選各的） */
     themeByKind: {},
+    /** kind → 指定的篇幅（簡報頁數 / 報告小節數） */
+    lengthByKind: {},
+    /** 預覽視窗目前顯示的 kind；null 表示關閉中 */
+    previewKind: null,
     initialized: false,
 };
 
@@ -112,6 +116,8 @@ async function loadDrConfig() {
         drState.model = json.data.default_model;
         Object.keys(DR_SKILL_META).forEach((kind) => {
             drState.themeByKind[kind] = json.data.default_theme;
+            const spec = drLengthSpec(kind);
+            if (spec) drState.lengthByKind[kind] = spec.default;
         });
 
         renderDrModelMenu();
@@ -458,6 +464,7 @@ async function startDeepResearch() {
     drEl('dr-result').textContent = '';
     drEl('dr-citations').classList.add('hidden');
     drEl('dr-skills').classList.add('hidden');
+    drEl('dr-copy-btn').classList.add('hidden');
     drClearProgress();
     updateDrSubmitState();
 
@@ -560,6 +567,7 @@ async function startDeepResearch() {
                     applyMarkdown(drEl('dr-result'), drState.resultMarkdown);
                     drRenderCitations();
                     drRenderSkillCards();
+                    drEl('dr-copy-btn').classList.remove('hidden');
                     drEl('dr-run-meta').textContent =
                         `${drState.model}　·　` +
                         `耗時 ${Math.round((payload.elapsed_ms || 0) / 1000)} 秒　·　` +
@@ -741,7 +749,7 @@ function drBuildSkillCard(kind, meta) {
     const actions = document.createElement('div');
     actions.className = 'dr-skill-actions';
 
-    card.append(head, desc, drBuildThemePicker(kind), actions);
+    card.append(head, desc, drBuildThemePicker(kind), drBuildLengthPicker(kind), actions);
     drPaintSkillActions(kind, card);   // 按鈕內容由狀態決定，統一在這裡畫
     return card;
 }
@@ -799,6 +807,59 @@ function drBuildThemePicker(kind) {
     return wrap;
 }
 
+function drLengthSpec(kind) {
+    const specs = (drState.config && drState.config.length_specs) || {};
+    return specs[kind] || null;
+}
+
+/**
+ * 篇幅輸入：簡報填頁數、報告填小節數。
+ * 數字只會寫進 skill 的 prompt，後端不裁切產出 —— 模型偶爾會差一頁，
+ * 那比硬砍掉一頁有內容的投影片好，因此產生中的狀態文字寫的是「約 N 頁」。
+ */
+function drBuildLengthPicker(kind) {
+    const spec = drLengthSpec(kind);
+    const wrap = document.createElement('div');
+    wrap.className = 'dr-length-picker';
+    wrap.dataset.kind = kind;
+    if (!spec) return wrap;   // 後端沒給這個 skill 的範圍就整列不顯示
+
+    const label = document.createElement('label');
+    label.className = 'dr-theme-label';
+    label.textContent = spec.label;
+    label.htmlFor = `dr-length-${kind}`;
+
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.id = `dr-length-${kind}`;
+    input.className = 'dr-length-input';
+    input.min = String(spec.min);
+    input.max = String(spec.max);
+    input.step = '1';
+    input.value = String(drState.lengthByKind[kind] ?? spec.default);
+
+    const hint = document.createElement('span');
+    hint.className = 'dr-length-hint';
+    hint.textContent = `${spec.min}–${spec.max}${spec.unit}${spec.hint ? `，${spec.hint}` : ''}`;
+
+    // clamp 在 change（失焦／按上下鍵）而非 input，否則打「1」要接著打「2」
+    // 湊成 12 時，第一個字元就被彈成下限了。
+    const commit = () => {
+        const raw = parseInt(input.value, 10);
+        const value = Number.isNaN(raw)
+            ? spec.default
+            : Math.max(spec.min, Math.min(spec.max, raw));
+        drState.lengthByKind[kind] = value;
+        input.value = String(value);
+    };
+    input.addEventListener('change', commit);
+    input.addEventListener('blur', commit);
+
+    label.appendChild(input);
+    wrap.append(label, hint);
+    return wrap;
+}
+
 /**
  * 依 drState 重繪某張 skill 卡片的按鈕區（idle / 產生中 / 已完成）。
  * 建立卡片時尚未掛進 DOM，因此允許把卡片元素直接傳進來。
@@ -820,9 +881,13 @@ function drPaintSkillActions(kind, cardEl) {
         spinner.classList.add('dr-spinner');
         const themes = (drState.config && drState.config.themes) || [];
         const picked = themes.find((t) => t.id === drState.themeByKind[kind]);
+        const spec = drLengthSpec(kind);
+        const size = spec
+            ? `、約 ${drState.lengthByKind[kind] ?? spec.default}${spec.unit}`
+            : '';
         const text = document.createElement('span');
         text.textContent =
-            `${meta.label}產生中（${picked ? picked.label : '預設'}風格），約需 30–90 秒…`;
+            `${meta.label}產生中（${picked ? picked.label : '預設'}風格${size}），約需 30–90 秒…`;
         status.append(spinner, text);
         actions.appendChild(status);
         return;
@@ -841,7 +906,7 @@ function drPaintSkillActions(kind, cardEl) {
             )
         );
         actions.appendChild(
-            drMakeButton('refresh-cw', '換風格重產', 'dr-ghost-btn', () =>
+            drMakeButton('refresh-cw', '換設定重產', 'dr-ghost-btn', () =>
                 drGenerateArtifact(kind)
             )
         );
@@ -880,7 +945,11 @@ async function drGenerateArtifact(kind) {
             `${drApiBase()}/deep-research/runs/${drState.sessionId}/artifacts`,
             {
                 method: 'POST',
-                body: JSON.stringify({ kind, theme: drState.themeByKind[kind] }),
+                body: JSON.stringify({
+                    kind,
+                    theme: drState.themeByKind[kind],
+                    length: drState.lengthByKind[kind],
+                }),
             }
         );
 
@@ -946,16 +1015,111 @@ async function drDownloadArtifact(kind) {
     }
 }
 
+// ============================================================
+// 產出預覽（頁面最上層的 iframe 視窗）
+// ============================================================
+
+/**
+ * 預覽視窗只綁一次事件。
+ *
+ * iframe 不加 sandbox 是刻意的：簡報的翻頁、講稿切換都靠產出檔自己的
+ * inline script，加了 sandbox 就全部失效，預覽會退化成一張靜態封面。
+ * 安全性靠後端把關 —— `templates/common.scrub_html()` 已經把 LLM 產出裡的
+ * script / iframe / on* / javascript: 全部拔掉，其餘欄位一律 esc()。
+ * 這與「用新分頁開啟同一個檔案」的信任模型完全相同。
+ */
+function initDrPreviewModal() {
+    const modal = drEl('dr-preview-modal');
+    if (!modal || modal.dataset.bound) return;
+    modal.dataset.bound = '1';
+
+    const close = drEl('dr-preview-close');
+    if (close) close.addEventListener('click', drClosePreview);
+
+    // 點背景關閉；點到卡片內部不關
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) drClosePreview();
+    });
+
+    const download = drEl('dr-preview-download');
+    if (download) {
+        download.addEventListener('click', () => {
+            if (drState.previewKind) drDownloadArtifact(drState.previewKind);
+        });
+    }
+
+    const newtab = drEl('dr-preview-newtab');
+    if (newtab) {
+        newtab.addEventListener('click', () => {
+            const artifact = drState.artifacts[drState.previewKind];
+            if (artifact && artifact.blobUrl) {
+                window.open(artifact.blobUrl, '_blank', 'noopener');
+            }
+        });
+    }
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && drState.previewKind) drClosePreview();
+    });
+}
+
 async function drPreviewArtifact(kind) {
+    const modal = drEl('dr-preview-modal');
+    const frame = drEl('dr-preview-frame');
+    if (!modal || !frame) return;
+
     try {
         const url = await drFetchArtifactBlobUrl(kind);
-        if (url) window.open(url, '_blank', 'noopener');
+        if (!url) return;
+
+        const artifact = drState.artifacts[kind];
+        drState.previewKind = kind;
+        drEl('dr-preview-title').textContent =
+            (artifact && artifact.filename) || DR_SKILL_META[kind].label;
+
+        frame.src = url;
+        modal.classList.add('show');
+        document.body.style.overflow = 'hidden';
+
+        // 焦點交給 iframe，簡報才收得到方向鍵；順便讓 Esc 在裡面也能關。
+        // blob: 繼承本頁 origin，所以拿得到 contentDocument。
+        frame.addEventListener(
+            'load',
+            () => {
+                try {
+                    frame.contentWindow.focus();
+                    frame.contentDocument.addEventListener('keydown', (e) => {
+                        if (e.key === 'Escape') drClosePreview();
+                    });
+                } catch {
+                    /* 取不到就算了，右上角還有關閉鈕 */
+                }
+            },
+            { once: true }
+        );
+
+        if (window.lucide) lucide.createIcons({ el: modal });
     } catch (err) {
         showToast(`預覽失敗：${err && err.message ? err.message : err}`, 'error');
     }
 }
 
+function drClosePreview() {
+    const modal = drEl('dr-preview-modal');
+    const frame = drEl('dr-preview-frame');
+    if (!modal) return;
+
+    modal.classList.remove('show');
+    document.body.style.overflow = '';
+    drState.previewKind = null;
+    // 清掉 src，否則簡報的 rAF／事件監聽會在關閉後繼續跑
+    if (frame) frame.removeAttribute('src');
+}
+
 function drReleaseArtifact(kind) {
+    // 正在預覽這份就先關窗：blobUrl 一 revoke，iframe 只會剩下一片空白
+    if (drState.previewKind === kind) drClosePreview();
+
     const artifact = drState.artifacts[kind];
     if (artifact && artifact.blobUrl) {
         URL.revokeObjectURL(artifact.blobUrl);
@@ -978,6 +1142,65 @@ function initDrActions() {
 
     const reset = drEl('dr-reset-btn');
     if (reset) reset.addEventListener('click', resetDeepResearch);
+
+    const copy = drEl('dr-copy-btn');
+    if (copy && !copy.dataset.bound) {
+        copy.dataset.bound = '1';       // 每次進入深度研究頁都會呼叫，別重複綁
+        copy.addEventListener('click', drCopyResult);
+    }
+
+    initDrPreviewModal();
+}
+
+
+// ============================================================
+// 複製全文
+// ============================================================
+
+/**
+ * 複製整份研究結果。
+ *
+ * 複製的是 **Markdown 原文**而非畫面上的純文字：研究結果的價值有一半在
+ * 那些行內引用連結，轉成純文字會把 [標題](網址) 的網址整個丟掉。
+ * 貼到 Notion／HackMD／Word 也都吃 Markdown。
+ */
+function drCopyResult() {
+    const text = (drState.resultMarkdown || '').trim();
+    if (!text) return;
+
+    const btn = drEl('dr-copy-btn');
+    copyTextToClipboard(text)
+        .then(() => {
+            drFlashCopyButton(btn);
+            showToast('已複製整份研究結果（Markdown）', 'success');
+        })
+        .catch((err) => {
+            console.error('[DeepResearch] 複製失敗：', err);
+            showToast('複製失敗，請改用手動選取。', 'error');
+        });
+}
+
+/** 按鈕短暫切成「已複製」，兩秒後復原（與聊天訊息的複製鈕一致） */
+function drFlashCopyButton(btn) {
+    if (!btn) return;
+    const label = btn.querySelector('span');
+    const icon = btn.querySelector('i');
+    if (!label || !icon) return;
+
+    btn.classList.add('copied');
+    label.textContent = '已複製';
+    icon.setAttribute('data-lucide', 'check');
+    if (window.lucide) lucide.createIcons({ el: btn });
+
+    clearTimeout(btn._copyTimer);
+    btn._copyTimer = setTimeout(() => {
+        btn.classList.remove('copied');
+        const back = btn.querySelector('span');
+        const backIcon = btn.querySelector('i');
+        if (back) back.textContent = '複製全文';
+        if (backIcon) backIcon.setAttribute('data-lucide', 'copy');
+        if (window.lucide) lucide.createIcons({ el: btn });
+    }, 2000);
 }
 
 function resetDeepResearch() {
@@ -1008,6 +1231,7 @@ function resetDeepResearch() {
     drEl('dr-error').classList.add('hidden');
     drEl('dr-citations').classList.add('hidden');
     drEl('dr-skills').classList.add('hidden');
+    drEl('dr-copy-btn').classList.add('hidden');
     drEl('dr-run').classList.add('hidden');
     drEl('dr-composer').classList.remove('hidden');
     updateDrSubmitState();

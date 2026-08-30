@@ -426,7 +426,12 @@ backend 內建的反向代理（[`explore.py`](../app/backend/api/explore.py)）
                         "swatch": "#1b4fd8", "surface": "#ffffff", "ink": "#0d1b33"}],
             "default_theme": "consulting",
             "max_files": 10, "max_file_mb": 20, "max_images": 4,
-            "query_max_chars": 4000, "accepted_extensions": [".csv", ".docx", "…"] } }
+            "query_max_chars": 4000, "accepted_extensions": [".csv", ".docx", "…"],
+            "length_specs": {
+              "report": {"label": "小節數", "unit": "節", "hint": "…",
+                         "min": 3, "max": 10, "default": 6},
+              "deck":   {"label": "頁數", "unit": "頁", "hint": "…",
+                         "min": 5, "max": 20, "default": 12} } } }
 ```
 
 `default_model` 來自環境變數 **`DEEP_SEARCH_MODEL`**；`models` 可用 `DEEP_SEARCH_MODELS` 覆寫。
@@ -468,9 +473,31 @@ backend 內建的反向代理（[`explore.py`](../app/backend/api/explore.py)）
 
 ### `POST /api/deep-research/runs/{session_id}/artifacts`
 
-Body `{"kind": "report" | "deck", "theme": "consulting"}`（`theme` 選填，不認得的值退回預設）。
+Body `{"kind": "report" | "deck", "theme": "consulting", "length": 12}`
+（`theme` 與 `length`皆選填；不認得的 `theme` 退回預設，`length` 會被 clamp 進範圍）。
 同樣回 SSE（`status` → `done` / `error`），`done` 帶
-`{kind, label, filename, size, theme, download_path}`。
+`{kind, label, filename, size, theme, length, download_path}`。
+
+**篇幅**（簡報頁數／報告小節數）由 `length` 指定，範圍與預設值見 `GET /config` 的
+`length_specs`（簡報 5–20 頁預設 12、報告 3–10 節預設 6，可用 `DEEP_SEARCH_DECK_SLIDES`
+／`DEEP_SEARCH_REPORT_SECTIONS` 改預設）。範圍不是排版限制（樣板本身不限頁數），
+而是成本與品質的煞車 —— 這個值直接來自瀏覽器且會變成模型的輸出量。
+
+**上限有三道，職責不同：**
+
+| 層 | 做什麼 | 越界時 |
+|----|--------|--------|
+| 前端 `<input>` 的 `min`/`max` + change 時 clamp | 體感層，直打 API 可繞過 | 靜靜修正 |
+| API `exceeds_hard_max()`，絕對上限 `LENGTH_HARD_MAX = 20` | 擋掉只可能來自直打的值（`500`、`-1`、非整數） | `400 篇幅請介於 1 到 20 之間。` |
+| `resolve_length()` clamp 進各 skill 區間 | 區間內的偏差（如簡報填 25） | 靜靜 clamp，`done` 事件回報實際採用值 |
+
+`LENGTH_SPECS` 的 `max` 與環境變數給的 `default` 在程式啟動時都會被壓進
+`LENGTH_HARD_MAX` 與區間內 —— `default` 是唯一能繞過 `resolve_length()` 的路徑
+（`length` 沒送時直接回傳），沒有這層校正，`DEEP_SEARCH_DECK_SLIDES=999`
+會讓每一次產出都跑 999 頁而且從 API 看不出異常。
+
+數字只寫進 skill 的 instructions，後端**不裁切**產出：截斷會砍掉有內容的頁，
+而結構化輸出對「剛好 N 個」的命中率夠好，偶爾偏一頁的成本低於硬砍一頁。
 
 **視覺主題**由 [`templates/themes.py`](../app/backend/deep_research/templates/themes.py) 定義，
 一個主題 = 色票 + 字體配對 + 幾個排版取向（`kicker` 樣式、分隔線樣式、標題字重）。

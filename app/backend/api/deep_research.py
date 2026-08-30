@@ -40,7 +40,15 @@ from fastapi import (
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.backend.deep_research.config import QUERY_MAX_CHARS, public_config, resolve_model
+from app.backend.deep_research.config import (
+    LENGTH_HARD_MAX,
+    LENGTH_SPECS,
+    QUERY_MAX_CHARS,
+    exceeds_hard_max,
+    public_config,
+    resolve_length,
+    resolve_model,
+)
 from app.backend.deep_research.researcher import stream_research
 from app.backend.deep_research.session import Artifact, session_store
 from app.backend.deep_research.skills import SKILLS, generate_artifact
@@ -268,6 +276,7 @@ async def create_research_run(
 class ArtifactRequest(BaseModel):
     kind: str                      # "report" | "deck"
     theme: Optional[str] = None    # 視覺風格；不認得的值會退回預設主題
+    length: Optional[int] = None   # 簡報頁數／報告小節數；超出範圍會被 clamp
 
 
 @router.post("/runs/{session_id}/artifacts")
@@ -300,11 +309,24 @@ async def create_artifact(
             detail="這次研究尚未完成，無法產生檔案。",
         )
 
+    # 越過絕對上限的一律拒絕：正常前端送不出這種值，會出現只可能是直打 API。
+    # 區間內的偏差交給 resolve_length() clamp，不必為了 25 頁回一個錯誤。
+    if exceeds_hard_max(payload.length):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"篇幅請介於 1 到 {LENGTH_HARD_MAX} 之間。",
+        )
+
     label = SKILLS[kind]["label"]
+    # clamp 在這裡做，好讓 done 事件回報「實際採用的數字」而非使用者送來的值
+    length = resolve_length(kind, payload.length)
+    unit = LENGTH_SPECS[kind]["unit"]
 
     async def produce(queue: asyncio.Queue) -> None:
         try:
-            await queue.put(_sse("status", {"text": f"{label}撰寫中…"}))
+            await queue.put(
+                _sse("status", {"text": f"{label}撰寫中（{length}{unit}）…"})
+            )
 
             filename, media_type, content = await generate_artifact(
                 kind=kind,
@@ -313,6 +335,7 @@ async def create_artifact(
                 research_markdown=session.markdown,
                 citations=session.citations,
                 theme=payload.theme,
+                length=length,
             )
 
             artifact = Artifact(
@@ -332,6 +355,7 @@ async def create_artifact(
                         "filename": artifact.filename,
                         "size": artifact.size,
                         "theme": resolve_theme(payload.theme).id,
+                        "length": length,
                         "download_path": (
                             f"/api/deep-research/runs/{session.id}/artifacts/{kind}"
                         ),
