@@ -18,13 +18,15 @@ const DR_SKILL_META = {
     report: {
         label: '研究報告',
         icon: 'file-text',
-        desc: '結構化長文：摘要、關鍵數字、分節論述與來源清單。可直接列印成 PDF。',
+        desc: '結構化長文：摘要、關鍵數字、分節論述與來源清單。'
+            + '產出 Word 檔（可直接編輯）與 HTML 檔（可預覽、列印成 PDF）。',
         cta: '產生研究報告',
     },
     deck: {
         label: '簡報',
         icon: 'presentation',
-        desc: '可放映的投影片，一頁一個論點，附講稿（放映時按 N 顯示）。',
+        desc: '一頁一個論點，附講稿。產出 PowerPoint 檔（講稿在備忘稿裡）'
+            + '與 HTML 檔（瀏覽器直接放映，按 N 顯示講稿）。',
         cta: '產生簡報',
     },
 };
@@ -88,6 +90,16 @@ function hideDeepResearchView() {
     if (view) view.style.display = 'none';
     const btn = drEl('deep-research-btn');
     if (btn) btn.classList.remove('active');
+
+    // 預覽視窗掛在 <body> 下（不在 #deep-research-view 裡），隱藏視圖不會連帶關掉它 ——
+    // 開著預覽切回聊天，整個畫面會被那層 overlay 蓋住，而且 body 的捲動還是鎖著的。
+    if (drState.previewKind) drClosePreview();
+
+    // 模型選單同理：它靠 document click 收合，切換視圖時可能維持展開狀態
+    const menu = drEl('dr-model-menu');
+    if (menu) menu.classList.add('hidden');
+    const modelBtn = drEl('dr-model-btn');
+    if (modelBtn) modelBtn.setAttribute('aria-expanded', 'false');
 }
 
 
@@ -113,7 +125,7 @@ async function loadDrConfig() {
 
         const json = await res.json();
         drState.config = json.data;
-        drState.model = json.data.default_model;
+        drState.model = drPickAllowedModel(json.data.default_model);
         Object.keys(DR_SKILL_META).forEach((kind) => {
             drState.themeByKind[kind] = json.data.default_theme;
             const spec = drLengthSpec(kind);
@@ -316,6 +328,28 @@ function updateDrSubmitState() {
 // 模型選單
 // ============================================================
 
+/**
+ * 目前可選的模型是後端白名單（`GET /config` 的 models）。
+ * 深度研究只開放 GPT-5.6 Luna —— 換模型等於換一組費率，而配額扣點與
+ * 成本估算都綁在那個 id 上，因此清單由後端決定，前端不自己補選項。
+ */
+function drAllowedModels() {
+    return (drState.config && drState.config.models) || [];
+}
+
+/** 把想用的模型收斂成清單內的 id；清單只有一個時就是那一個。 */
+function drPickAllowedModel(preferred) {
+    const models = drAllowedModels();
+    if (!models.length) return null;
+    const wanted = preferred || (drState.config && drState.config.default_model);
+    return models.some((m) => m.id === wanted) ? wanted : models[0].id;
+}
+
+/** 只有一個模型可選時，選單就不該長得像選單（點開只有一列很怪）。 */
+function drModelLocked() {
+    return drAllowedModels().length <= 1;
+}
+
 function initDrModelMenu() {
     const btn = drEl('dr-model-btn');
     const menu = drEl('dr-model-menu');
@@ -323,6 +357,7 @@ function initDrModelMenu() {
 
     btn.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (drModelLocked()) return;
         const open = menu.classList.toggle('hidden') === false;
         btn.setAttribute('aria-expanded', String(open));
     });
@@ -345,10 +380,26 @@ function initDrModelMenu() {
 
 function renderDrModelMenu() {
     const menu = drEl('dr-model-menu');
+    const btn = drEl('dr-model-btn');
     if (!menu || !drState.config) return;
 
     menu.textContent = '';
-    drState.config.models.forEach((model) => {
+
+    if (drModelLocked()) {
+        menu.classList.add('hidden');
+        if (btn) {
+            btn.classList.add('locked');
+            btn.setAttribute('aria-disabled', 'true');
+            btn.setAttribute('aria-expanded', 'false');
+            btn.removeAttribute('aria-haspopup');
+            btn.title = '深度研究固定使用這個模型';
+            const chevron = btn.querySelector('.dr-chevron');
+            if (chevron) chevron.remove();
+        }
+        return;
+    }
+
+    drAllowedModels().forEach((model) => {
         const li = document.createElement('li');
         li.className = 'dr-model-option';
         li.setAttribute('role', 'option');
@@ -379,7 +430,7 @@ function syncDrModelSelection() {
 function applyDrModelLabel() {
     const label = drEl('dr-model-label');
     if (!label || !drState.config) return;
-    const found = drState.config.models.find((m) => m.id === drState.model);
+    const found = drAllowedModels().find((m) => m.id === drState.model);
     label.textContent = found ? found.label : drState.model;
 }
 
@@ -445,6 +496,10 @@ async function startDeepResearch() {
     const query = (textarea.value || '').trim();
     if (!query || !drState.config) return;
 
+    // 後端會把不在白名單內的 model 靜靜換成預設值。前端這裡先對一次，
+    // 免得畫面上（與下面 meta 列）的模型名稱跟實際跑的不一樣。
+    drState.model = drPickAllowedModel(drState.model);
+
     // 進入執行畫面
     drState.running = true;
     drState.sessionId = null;
@@ -460,6 +515,7 @@ async function startDeepResearch() {
     drEl('dr-run-meta').textContent =
         `${drState.model}　·　${drState.files.length ? `${drState.files.length} 個附件` : '未附檔案'}`;
     drEl('dr-error').classList.add('hidden');
+    drEl('dr-error').classList.remove('quota');
     drEl('dr-error').textContent = '';
     drEl('dr-result').textContent = '';
     drEl('dr-citations').classList.add('hidden');
@@ -470,7 +526,7 @@ async function startDeepResearch() {
 
     const form = new FormData();
     form.append('query', query);
-    form.append('model', drState.model);
+    if (drState.model) form.append('model', drState.model);
     drState.files.forEach((file) => form.append('files', file, file.name));
 
     const controller = new AbortController();
@@ -503,9 +559,7 @@ async function startDeepResearch() {
         });
 
         if (!res) return;                       // authFetch 已導向 /login
-        if (!res.ok) {
-            throw new Error(await drParseError(res));
-        }
+        if (!res.ok) throw await drErrorFromResponse(res);
         if (!res.body) throw new Error('瀏覽器不支援 Streaming');
 
         drFinishStep(uploadStep);
@@ -571,7 +625,10 @@ async function startDeepResearch() {
                     drEl('dr-run-meta').textContent =
                         `${drState.model}　·　` +
                         `耗時 ${Math.round((payload.elapsed_ms || 0) / 1000)} 秒　·　` +
-                        `${(payload.tools_used || []).join('、') || '未使用工具'}`;
+                        `${(payload.tools_used || []).join('、') || '未使用工具'}` +
+                        drUsageSuffix(payload.usage);
+                    // 這次研究已扣進配額，側欄的用量條要跟著動
+                    drRefreshQuotaBar();
                     break;
 
                 case 'error':
@@ -584,7 +641,11 @@ async function startDeepResearch() {
     } catch (err) {
         if (err && err.name === 'AbortError') return;
         drFinishAllSteps();
-        drShowError(err && err.message ? err.message : String(err));
+        if (err && err.isQuota) {
+            drShowQuotaError(err.quota, err.message);
+        } else {
+            drShowError(err && err.message ? err.message : String(err));
+        }
     } finally {
         drState.running = false;
         drState.abort = null;
@@ -629,6 +690,50 @@ async function drConsumeSse(response, onEvent) {
     }
 }
 
+/**
+ * 把失敗的回應轉成要 throw 的 Error。
+ *
+ * 429 一律當「配額用盡」處理，且沿用 index.js 那組解析／渲染函式 ——
+ * 聊天與深度研究吃的是同一份月配額，兩邊的提示長得不一樣只會讓人以為
+ * 是兩件事。`isQuota` / `quota` 由 catch 端決定要畫卡片還是純文字。
+ */
+async function drErrorFromResponse(res) {
+    if (res.status === 429) {
+        let detail = null;
+        try {
+            const body = await res.json();
+            detail = body && body.detail !== undefined ? body.detail : body;
+        } catch {
+            /* 非 JSON 錯誤內容，交給下面的 fallback */
+        }
+        const quota = typeof resolveQuotaForHttp429 === 'function'
+            ? resolveQuotaForHttp429(detail)
+            : null;
+        const message = quota && typeof formatQuotaToastMessage === 'function'
+            ? formatQuotaToastMessage(quota.used, quota.limit)
+            : '本月 Token 配額已用盡';
+        const err = new Error(message);
+        err.isQuota = true;
+        err.quota = quota;
+        return err;
+    }
+    return new Error(await drParseError(res));
+}
+
+/** `usage` 事件轉成 meta 列尾巴；沒有用量資料時回空字串。 */
+function drUsageSuffix(usage) {
+    const total = usage && Number(usage.total_tokens);
+    if (!Number.isFinite(total) || total <= 0) return '';
+    return `　·　用量 ${total.toLocaleString('zh-TW')} tokens`;
+}
+
+/** 深度研究也吃同一份月配額，用完後要讓側欄的用量條立刻反映。 */
+function drRefreshQuotaBar() {
+    if (typeof refreshUserQuotaFromServer === 'function') {
+        refreshUserQuotaFromServer();
+    }
+}
+
 async function drParseError(res) {
     try {
         const body = await res.json();
@@ -643,8 +748,35 @@ async function drParseError(res) {
 function drShowError(message) {
     const box = drEl('dr-error');
     if (!box) return;
+    box.classList.remove('quota');
     box.textContent = message;
     box.classList.remove('hidden');
+}
+
+/**
+ * 配額用盡：直接把聊天那張配額卡片畫進錯誤區塊。
+ *
+ * 卡片本身帶標題與顏色，因此要拿掉 `.dr-error` 的紅框底色（`.quota` class），
+ * 否則會變成紅框裡再包一張卡。拿不到用量數字時退回純文字訊息。
+ */
+function drShowQuotaError(quota, message) {
+    const box = drEl('dr-error');
+    const text = message || '本月 Token 配額已用盡';
+    showToast(text, 'error', 7000);
+    drRefreshQuotaBar();
+    if (!box) return;
+
+    box.textContent = '';
+    box.classList.remove('hidden');
+    if (quota && typeof renderQuotaExceededInBubble === 'function') {
+        box.classList.add('quota');
+        renderQuotaExceededInBubble(
+            box, quota.used, quota.limit, quota.quota_resets_at
+        );
+    } else {
+        box.classList.remove('quota');
+        box.textContent = text;
+    }
 }
 
 const DR_CHANNEL_LABEL = {
@@ -895,16 +1027,25 @@ function drPaintSkillActions(kind, cardEl) {
 
     const artifact = drState.artifacts[kind];
     if (artifact) {
-        actions.appendChild(
-            drMakeButton('download', `下載${meta.label}`, 'dr-submit-btn', () =>
-                drDownloadArtifact(kind)
-            )
-        );
-        actions.appendChild(
-            drMakeButton('external-link', '預覽', 'dr-ghost-btn', () =>
-                drPreviewArtifact(kind)
-            )
-        );
+        // 主要格式（Word / PowerPoint）用主要按鈕，HTML 退到次要按鈕：
+        // 使用者要帶走、要改的是 Office 檔，HTML 是預覽與離線放映用的。
+        artifact.formats.forEach((format, index) => {
+            actions.appendChild(
+                drMakeButton(
+                    'download',
+                    `下載 ${format.label}`,
+                    index === 0 ? 'dr-submit-btn' : 'dr-ghost-btn',
+                    () => drDownloadArtifact(kind, format.fmt)
+                )
+            );
+        });
+        if (drArtifactFormat(kind, 'html')) {
+            actions.appendChild(
+                drMakeButton('external-link', '預覽', 'dr-ghost-btn', () =>
+                    drPreviewArtifact(kind)
+                )
+            );
+        }
         actions.appendChild(
             drMakeButton('refresh-cw', '換設定重產', 'dr-ghost-btn', () =>
                 drGenerateArtifact(kind)
@@ -954,7 +1095,7 @@ async function drGenerateArtifact(kind) {
         );
 
         if (!res) return;
-        if (!res.ok) throw new Error(await drParseError(res));
+        if (!res.ok) throw await drErrorFromResponse(res);
         if (!res.body) throw new Error('瀏覽器不支援 Streaming');
 
         let done = false;
@@ -962,12 +1103,20 @@ async function drGenerateArtifact(kind) {
             if (event === 'done') {
                 done = true;
                 drReleaseArtifact(kind);
+                // 後端保證 formats 的第一個是主要格式（報告 docx、簡報 pptx）
+                const formats = (payload.formats || []).map((f) => ({
+                    fmt: f.fmt,
+                    label: f.label,
+                    filename: f.filename,
+                    downloadPath: f.download_path,
+                    blobUrl: null,
+                }));
                 drState.artifacts[kind] = {
                     filename: payload.filename,
-                    downloadPath: payload.download_path,
-                    blobUrl: null,
+                    formats,
                 };
                 showToast(`${DR_SKILL_META[kind].label}已產生：${payload.filename}`, 'success');
+                drRefreshQuotaBar();   // 產檔是另一次模型呼叫，一樣要扣配額
             } else if (event === 'error') {
                 throw new Error(payload.message || '產生失敗');
             }
@@ -977,36 +1126,49 @@ async function drGenerateArtifact(kind) {
             throw new Error('產生過程中連線中斷，請再試一次。');
         }
     } catch (err) {
-        showToast(err && err.message ? err.message : String(err), 'error', 7000);
+        if (err && err.isQuota) {
+            drShowQuotaError(err.quota, err.message);
+        } else {
+            showToast(err && err.message ? err.message : String(err), 'error', 7000);
+        }
     } finally {
         drState.generating[kind] = false;
         drPaintSkillActions(kind);
     }
 }
 
-/** 下載需帶 JWT，因此先 authFetch 取回 Blob，再用 object URL 觸發瀏覽器下載。 */
-async function drFetchArtifactBlobUrl(kind) {
+/** 取出某個產出的指定格式；`fmt` 省略時取主要格式。 */
+function drArtifactFormat(kind, fmt) {
     const artifact = drState.artifacts[kind];
-    if (!artifact) return null;
-    if (artifact.blobUrl) return artifact.blobUrl;
+    if (!artifact || !artifact.formats.length) return null;
+    if (!fmt) return artifact.formats[0];
+    return artifact.formats.find((f) => f.fmt === fmt) || null;
+}
+
+/** 下載需帶 JWT，因此先 authFetch 取回 Blob，再用 object URL 觸發瀏覽器下載。 */
+async function drFetchArtifactBlobUrl(kind, fmt) {
+    const format = drArtifactFormat(kind, fmt);
+    if (!format) return null;
+    if (format.blobUrl) return format.blobUrl;
 
     const origin = drApiBase().replace(/\/api$/, '');
-    const res = await authFetch(`${origin}${artifact.downloadPath}`);
+    const res = await authFetch(`${origin}${format.downloadPath}`);
     if (!res) return null;
     if (!res.ok) throw new Error(await drParseError(res));
 
-    artifact.blobUrl = URL.createObjectURL(await res.blob());
-    return artifact.blobUrl;
+    format.blobUrl = URL.createObjectURL(await res.blob());
+    return format.blobUrl;
 }
 
-async function drDownloadArtifact(kind) {
+async function drDownloadArtifact(kind, fmt) {
     try {
-        const url = await drFetchArtifactBlobUrl(kind);
+        const format = drArtifactFormat(kind, fmt);
+        const url = await drFetchArtifactBlobUrl(kind, fmt);
         if (!url) return;
 
         const link = document.createElement('a');
         link.href = url;
-        link.download = drState.artifacts[kind].filename;
+        link.download = format.filename;
         document.body.appendChild(link);
         link.click();
         link.remove();
@@ -1051,9 +1213,10 @@ function initDrPreviewModal() {
     const newtab = drEl('dr-preview-newtab');
     if (newtab) {
         newtab.addEventListener('click', () => {
-            const artifact = drState.artifacts[drState.previewKind];
-            if (artifact && artifact.blobUrl) {
-                window.open(artifact.blobUrl, '_blank', 'noopener');
+            // 預覽視窗裡開的一定是 HTML，新分頁自然也開同一份
+            const format = drArtifactFormat(drState.previewKind, 'html');
+            if (format && format.blobUrl) {
+                window.open(format.blobUrl, '_blank', 'noopener');
             }
         });
     }
@@ -1069,13 +1232,24 @@ async function drPreviewArtifact(kind) {
     if (!modal || !frame) return;
 
     try {
-        const url = await drFetchArtifactBlobUrl(kind);
+        // 預覽只能開 HTML —— iframe 沒辦法渲染 docx / pptx
+        const format = drArtifactFormat(kind, 'html');
+        if (!format) return;
+        const url = await drFetchArtifactBlobUrl(kind, 'html');
         if (!url) return;
 
-        const artifact = drState.artifacts[kind];
         drState.previewKind = kind;
         drEl('dr-preview-title').textContent =
-            (artifact && artifact.filename) || DR_SKILL_META[kind].label;
+            format.filename || DR_SKILL_META[kind].label;
+
+        // 預覽視窗的下載鍵給的是主要格式（Word / PowerPoint）——
+        // 使用者在這裡看完 HTML 後要帶走的是能編輯的那一份，所以把它寫在按鈕上
+        const primary = drArtifactFormat(kind);
+        const downloadLabel = drEl('dr-preview-download');
+        if (primary && downloadLabel) {
+            const span = downloadLabel.querySelector('span');
+            if (span) span.textContent = `下載 ${primary.label}`;
+        }
 
         frame.src = url;
         modal.classList.add('show');
@@ -1121,10 +1295,13 @@ function drReleaseArtifact(kind) {
     if (drState.previewKind === kind) drClosePreview();
 
     const artifact = drState.artifacts[kind];
-    if (artifact && artifact.blobUrl) {
-        URL.revokeObjectURL(artifact.blobUrl);
-        artifact.blobUrl = null;
-    }
+    if (!artifact) return;
+    artifact.formats.forEach((format) => {
+        if (format.blobUrl) {
+            URL.revokeObjectURL(format.blobUrl);
+            format.blobUrl = null;
+        }
+    });
 }
 
 function drReleaseArtifacts() {
@@ -1229,6 +1406,7 @@ function resetDeepResearch() {
     drClearProgress();
     drEl('dr-result').textContent = '';
     drEl('dr-error').classList.add('hidden');
+    drEl('dr-error').classList.remove('quota');
     drEl('dr-citations').classList.add('hidden');
     drEl('dr-skills').classList.add('hidden');
     drEl('dr-copy-btn').classList.add('hidden');

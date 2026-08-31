@@ -72,7 +72,14 @@ pytest==9.0.3
 pytest-asyncio==1.3.0
 python-dotenv==1.0.1
 python-jose==3.5.0
+# 深度研究：研究報告的 .docx 產出。與 HTML 樣板吃同一份結構化物件，
+# 不做 HTML 轉檔 —— pandoc / LibreOffice 那類方案要 1GB+ 記憶體，
+# backend 的 mem_limit 只有 640m，裝不下。
+python-docx==1.1.2
 python-multipart==0.0.9
+# 深度研究：簡報的 .pptx 產出（會連帶安裝 lxml / Pillow / XlsxWriter）。
+# 兩個 Office 套件都在 renderer 函式內才 import，避免常駐佔記憶體。
+python-pptx==1.0.2
 pytz==2024.1
 PyYAML==6.0.3
 qdrant-client==1.12.2

@@ -19,6 +19,7 @@ from agents import Agent, FileSearchTool, ModelSettings, Runner, WebSearchTool
 
 from .config import RESEARCH_MAX_TURNS, supports_reasoning_effort
 from .sources import PreparedSources
+from .usage import AgentUsage
 
 # 工具的中文顯示名稱（前端直接顯示這串）
 TOOL_LABELS = {
@@ -166,12 +167,17 @@ async def stream_research(
     query: str,
     model: str,
     prepared: PreparedSources,
+    usage: Optional[AgentUsage] = None,
 ) -> AsyncIterator[Dict[str, Any]]:
     """
     執行研究並逐步 yield 事件字典。
 
     yield 的每個 dict 都有 `event` 鍵，路由層再包成 SSE。
     最後一個事件必為 `complete`（成功）或由呼叫端捕捉例外轉成 error。
+
+    傳入 `usage` 時會把 token 用量寫回那個物件（呼叫端據此扣配額）。
+    更新放在 finally：研究中途失敗或使用者關掉頁面時，已經打出去的那幾輪
+    OpenAI 照樣計費，不記帳等於讓這些成本從配額裡消失。
     """
     started = time.monotonic()
     agent = _build_agent(model, prepared)
@@ -183,47 +189,53 @@ async def stream_research(
 
     result = Runner.run_streamed(agent, input=agent_input, max_turns=RESEARCH_MAX_TURNS)
 
-    async for event in result.stream_events():
-        if event.type == "raw_response_event":
-            raw_type = getattr(event.data, "type", "")
+    try:
+        async for event in result.stream_events():
+            if event.type == "raw_response_event":
+                raw_type = getattr(event.data, "type", "")
 
-            if raw_type == "response.output_text.delta":
-                delta = getattr(event.data, "delta", None)
-                if not delta:
+                if raw_type == "response.output_text.delta":
+                    delta = getattr(event.data, "delta", None)
+                    if not delta:
+                        continue
+                    if not text_started:
+                        text_started = True
+                        yield {"event": "writing", "text": "整理研究結果中…"}
+                    yield {"event": "delta", "text": delta}
                     continue
-                if not text_started:
-                    text_started = True
-                    yield {"event": "writing", "text": "整理研究結果中…"}
-                yield {"event": "delta", "text": delta}
+
+                hosted = _HOSTED_TOOL_EVENTS.get(raw_type)
+                if hosted is None:
+                    continue
+
+                label, phase = hosted
+                item_id = getattr(event.data, "item_id", "") or raw_type
+                if phase == "start":
+                    open_tools[item_id] = label
+                    if label not in outcome.tools_used:
+                        outcome.tools_used.append(label)
+                    yield {"event": "tool_start", "tool": label, "id": item_id}
+                elif open_tools.pop(item_id, None):
+                    yield {"event": "tool_done", "tool": label, "id": item_id}
                 continue
 
-            hosted = _HOSTED_TOOL_EVENTS.get(raw_type)
-            if hosted is None:
+            if event.type != "run_item_stream_event":
                 continue
 
-            label, phase = hosted
-            item_id = getattr(event.data, "item_id", "") or raw_type
-            if phase == "start":
-                open_tools[item_id] = label
+            # run item 只用來補記工具名稱（raw 事件沒吐時的保險），不再驅動進度
+            item = event.item
+            item_type = getattr(item, "type", "")
+            if item_type == "tool_call_item":
+                label = _tool_name_of(item.raw_item)
                 if label not in outcome.tools_used:
                     outcome.tools_used.append(label)
-                yield {"event": "tool_start", "tool": label, "id": item_id}
-            elif open_tools.pop(item_id, None):
-                yield {"event": "tool_done", "tool": label, "id": item_id}
-            continue
+            elif item_type == "reasoning_item":
+                yield {"event": "thinking", "text": "推理中…"}
 
-        if event.type != "run_item_stream_event":
-            continue
-
-        # run item 只用來補記工具名稱（raw 事件沒吐時的保險），不再驅動進度
-        item = event.item
-        item_type = getattr(item, "type", "")
-        if item_type == "tool_call_item":
-            label = _tool_name_of(item.raw_item)
-            if label not in outcome.tools_used:
-                outcome.tools_used.append(label)
-        elif item_type == "reasoning_item":
-            yield {"event": "thinking", "text": "推理中…"}
+    finally:
+        # 用量在串流途中就會累加，因此這裡即使是被 cancel 進來的也讀得到已花掉的量
+        if usage is not None:
+            usage.absorb(result)
 
     # 收尾：模型可能沒吐 completed 事件（例如中途切換 turn），別讓前端一直轉圈
     for item_id, label in list(open_tools.items()):

@@ -18,7 +18,7 @@
 | **建議回饋** | 回饋表單 + Turnstile | `/api/user/feedback`、`/api/public/feedback-config` | `user_feedback` | 🟢 已實作（含 Token 獎勵） |
 | **執行追蹤** | ReAct Trace UI (Steps) | Agent（trace state） | `messages.metadata` | 🟢 已實作 |
 | **檔案檢索** | Upload UI | `/api/files/upload`、`/api/files/{id}`（stub） | `files`, `S3` | 🟡 規劃中 |
-| **深度研究（Deep Research）** | 側欄「深度研究」（`deep-research.js`） | `/api/deep-research/*`（OpenAI Agents SDK） | **無**（記憶體 session，TTL 120 分鐘） | 🟢 MVP 已實作（功能驗證版） |
+| **深度研究（Deep Research）** | 側欄「深度研究」（`deep-research.js`） | `/api/deep-research/*`（OpenAI Agents SDK） | 記憶體 session（TTL 120 分鐘）；只有 token 用量寫 `user_usage_quotas` / `token_usage_logs` | 🟢 MVP 已實作（功能驗證版） |
 | **深度研究：知識庫版** | — | — | `research_workspaces`, `Qdrant`, `S3` | ⚪ 未實作，見 [`deep_search.md`](./deep_search.md) §1–20 |
 
 ## 實作重點
@@ -28,5 +28,6 @@
 3.  **確定性數據遷移**: 以 UUID v5 產生確定性 point ID，確保 Qdrant 資料不重複且可溯源。
 4.  **空結果重試**: Router 最多 `ROUTER_MAX_CYCLES`（程式常數，3）輪，空結果時調整搜尋策略（擴大時間範圍、切換關鍵字、放寬過濾）。
 5.  **混合檢索與聚合**: dense + BM25 混合檢索經 RRF 融合，並依 `mongo_id` 分組去重避免同篇重複。
-6.  **深度研究不落地**: MVP 走 Agents SDK 的 hosted tools（`WebSearchTool` / `FileSearchTool`），session 只放記憶體、上傳文件研究完即從 OpenAI 刪除；產出的報告與簡報由後端樣板決定性地組成 HTML，模型只負責填結構化 JSON。與 [`deep_search.md`](./deep_search.md) 規劃的 NotebookLM 式知識庫是兩件事。
-7.  **探索是獨立專案**: `kinetic` 容器來自 **Stock-Analysis** 專案，本專案只負責 `/explore/*` 的登入閘門與反向代理；kinetic 本身無認證，故不可對外開 port。
+6.  **深度研究不落地**: MVP 走 Agents SDK 的 hosted tools（`WebSearchTool` / `FileSearchTool`），session 只放記憶體、上傳文件研究完即從 OpenAI 刪除；產出的報告與簡報由後端樣板決定性地組出檔案（報告 = Word + HTML、簡報 = PowerPoint + HTML，同一份結構化 JSON 渲染多種格式），模型只負責填結構化 JSON。與 [`deep_search.md`](./deep_search.md) 規劃的 NotebookLM 式知識庫是兩件事。
+7.  **深度研究與聊天共用月配額**: 研究與產檔前各做一次 pre-flight（超額回 429），結束後把用量寫進 `token_usage_logs`（`chat_id` 為 NULL，以 `caller` 分辨），中斷也照記。模型鎖成 `gpt-5.6-luna` 白名單、前後端一起擋 —— 換模型等於換費率，而費率表與配額扣點都綁在 model id 上。見 [`deep_search.md`](./deep_search.md) §21.5。
+8.  **探索是獨立專案**: `kinetic` 容器來自 **Stock-Analysis** 專案，本專案只負責 `/explore/*` 的登入閘門與反向代理；kinetic 本身無認證，故不可對外開 port。

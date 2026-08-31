@@ -287,7 +287,14 @@ function initSidebarResize() {
 async function navigateToChat(chatId, options = {}) {
     closeSidebarDrawer();
     const prevId = state.currentChatId;
-    if (prevId === chatId) return;
+    if (prevId === chatId) {
+        // 同一則對話不必重載訊息，但**視圖可能不在聊天區**：
+        // 進深度研究／探索時 currentChatId 不會被清掉，使用者從那裡點回
+        // 目前這則對話時，若在這裡就 return，聊天區永遠切不回來
+        // （畫面會卡在深度研究頁）。showChatView() 是冪等的，直接補一次。
+        showChatView();
+        return;
+    }
 
     if (prevId && prevId !== chatId) {
         maybeParkViewportForLeavingChat(prevId);
@@ -760,6 +767,7 @@ function applyChatModeUI() {
 
     applyChatModeLabel();
     syncChatModeMenuSelection();
+    applyGeneralModelVisibility();   // 模型選擇器只在一般對話出現
     refreshWelcomeHeroIfVisible();
 
     try { localStorage.setItem(CHAT_MODE_STORAGE_KEY, chatMode); } catch (_) {}
@@ -824,6 +832,128 @@ function refreshWelcomeHeroIfVisible() {
     renderWelcomeHero(title);
 }
 
+// ── 一般對話的模型選擇 ────────────────────────────────────────────────────
+// 只在 chat_mode=general 生效：股市 Agent 的 router / analyst 寫死在後端，
+// 不開放切換。可選清單一律由 GET /api/chat/models 決定（後端白名單），
+// 前端不自己補選項 —— model id 直接決定單價。
+
+const GENERAL_MODEL_STORAGE_KEY = 'stock_insight_general_model';
+
+/** @type {{default_model: string, models: {id:string,label:string,description:string}[]}|null} */
+let generalModelCatalog = null;
+let generalModel = null;
+
+function generalModelList() {
+    return (generalModelCatalog && generalModelCatalog.models) || [];
+}
+
+/** 把想用的模型收斂成清單內的 id；清單還沒載到時回 null（送出時就不帶 model）。 */
+function pickAllowedGeneralModel(preferred) {
+    const models = generalModelList();
+    if (!models.length) return null;
+    const wanted = preferred || generalModelCatalog.default_model;
+    return models.some((m) => m.id === wanted) ? wanted : models[0].id;
+}
+
+async function loadGeneralChatModels() {
+    try {
+        const res = await authFetch(`${state.apiBase}/chat/models`);
+        if (!res || !res.ok) return;
+        const json = await res.json();
+        generalModelCatalog = json.data;
+
+        let saved = null;
+        try { saved = localStorage.getItem(GENERAL_MODEL_STORAGE_KEY); } catch (_) {}
+        generalModel = pickAllowedGeneralModel(saved);
+
+        renderGeneralModelMenu();
+        applyGeneralModelLabel();
+        applyGeneralModelVisibility();
+    } catch (err) {
+        // 載不到就讓選擇器維持隱藏，送出時不帶 model，後端用預設模型
+        console.error('[GeneralModel] 模型清單載入失敗：', err);
+    }
+}
+
+function renderGeneralModelMenu() {
+    const menu = document.getElementById('general-model-menu');
+    if (!menu) return;
+
+    menu.textContent = '';
+    generalModelList().forEach((model) => {
+        const li = document.createElement('li');
+        li.className = 'chat-mode-option';
+        li.setAttribute('role', 'option');
+        li.setAttribute('tabindex', '0');
+        li.dataset.value = model.id;
+
+        const title = document.createElement('span');
+        title.className = 'chat-mode-option-title';
+        title.textContent = model.label;
+
+        const desc = document.createElement('span');
+        desc.className = 'chat-mode-option-desc';
+        desc.textContent = model.description;
+
+        li.append(title, desc);
+        li.addEventListener('click', () => {
+            generalModel = model.id;
+            try { localStorage.setItem(GENERAL_MODEL_STORAGE_KEY, generalModel); } catch (_) {}
+            applyGeneralModelLabel();
+            syncGeneralModelMenuSelection();
+            menu.classList.add('hidden');
+            const btn = document.getElementById('general-model-btn');
+            if (btn) btn.setAttribute('aria-expanded', 'false');
+        });
+        menu.appendChild(li);
+    });
+    syncGeneralModelMenuSelection();
+}
+
+function syncGeneralModelMenuSelection() {
+    const menu = document.getElementById('general-model-menu');
+    if (!menu) return;
+    menu.querySelectorAll('.chat-mode-option').forEach((li) => {
+        li.classList.toggle('selected', li.dataset.value === generalModel);
+    });
+}
+
+function applyGeneralModelLabel() {
+    const label = document.getElementById('general-model-label');
+    if (!label) return;
+    const found = generalModelList().find((m) => m.id === generalModel);
+    label.textContent = found ? found.label : '模型';
+}
+
+/** 只有「一般對話」且清單載得到時才顯示這個選擇器。 */
+function applyGeneralModelVisibility() {
+    const wrap = document.getElementById('general-model-wrap');
+    if (!wrap) return;
+    const show = chatMode === 'general' && generalModelList().length > 0;
+    wrap.classList.toggle('hidden', !show);
+    if (!show) {
+        const menu = document.getElementById('general-model-menu');
+        if (menu) menu.classList.add('hidden');
+    }
+}
+
+function initGeneralModelSelector() {
+    const btn = document.getElementById('general-model-btn');
+    const menu = document.getElementById('general-model-menu');
+    if (!btn || !menu) return;
+
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        syncGeneralModelMenuSelection();
+        const willOpen = menu.classList.contains('hidden');
+        menu.classList.toggle('hidden', !willOpen);
+        btn.setAttribute('aria-expanded', String(willOpen));
+    });
+    menu.addEventListener('click', (e) => e.stopPropagation());
+
+    loadGeneralChatModels();
+}
+
 function initChatModeSelector() {
     try {
         const s = localStorage.getItem(CHAT_MODE_STORAGE_KEY);
@@ -858,6 +988,7 @@ function initChatModeSelector() {
     });
 
     applyChatModeUI();
+    initGeneralModelSelector();
 }
 
 /** 快捷模式僅檢索新聞向量庫，與「工具權限」無關；反灰並關閉選單。 */
@@ -1002,6 +1133,11 @@ function initEventListeners() {
         const cb = document.getElementById('chat-mode-btn');
         if (cm) cm.classList.add('hidden');
         if (cb) cb.setAttribute('aria-expanded', 'false');
+        // 一般對話的模型選單同理
+        const gm = document.getElementById('general-model-menu');
+        const gb = document.getElementById('general-model-btn');
+        if (gm) gm.classList.add('hidden');
+        if (gb) gb.setAttribute('aria-expanded', 'false');
     });
     if (toolPopover) {
         toolPopover.onclick = (e) => e.stopPropagation();
@@ -3121,6 +3257,8 @@ async function sendMessage() {
                 agent_config: { enabled_tools },
                 chat_mode: chatMode,
                 response_mode: chatResponseMode === 'flash' ? 'flash' : 'thinking',
+                // 只有一般對話吃這個欄位；清單沒載到時不帶，後端用預設模型
+                ...(chatMode === 'general' && generalModel ? { model: generalModel } : {}),
             })
         });
 

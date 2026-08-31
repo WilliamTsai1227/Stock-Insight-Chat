@@ -38,7 +38,8 @@
 | **深度研究** | 取得可選模型與上限 | `/api/deep-research/config` | `GET` | 是 |
 | | 執行研究（multipart → SSE） | `/api/deep-research/runs` | `POST` | 是 |
 | | 產生報告／簡報（SSE） | `/api/deep-research/runs/{sid}/artifacts` | `POST` | 是 |
-| | 下載產出 | `/api/deep-research/runs/{sid}/artifacts/{kind}` | `GET` | 是 |
+| | 下載產出（主要格式） | `/api/deep-research/runs/{sid}/artifacts/{kind}` | `GET` | 是 |
+| | 下載產出（指定格式） | `/api/deep-research/runs/{sid}/artifacts/{kind}/{fmt}` | `GET` | 是 |
 | | 釋放 session | `/api/deep-research/runs/{sid}` | `DELETE` | 是 |
 
 > **沒有 `PATCH /api/project`。** 專案目前不支援改名；[`project.py`](../app/backend/api/project.py) 只實作 POST / GET all / GET / DELETE。
@@ -298,6 +299,7 @@ RT Rotation：換取新的 Access Token + 新的 Refresh Token。
   "chat_id": "必填，需先呼叫 POST /api/chat 取得",
   "chat_mode": "general | stock_agent",
   "response_mode": "thinking | flash",
+  "model": "gpt-5.6-luna（僅 chat_mode=general 生效）",
   "agent_config": {
     "enabled_tools": [
       "search_stock_news",
@@ -315,7 +317,26 @@ RT Rotation：換取新的 Access Token + 新的 Refresh Token。
 | `chat_id` | UUID | 是 | 由 `POST /api/chat` 取得 |
 | `chat_mode` | string | 否 | `general`（一般對話）或 `stock_agent`（股市 Agent，預設） |
 | `response_mode` | string | 否 | `chat_mode=stock_agent` 時生效：`thinking`（預設）或 `flash` |
+| `model` | string | 否 | `chat_mode=general` 時生效：使用者選的模型 id。只接受 `GET /api/chat/models` 的白名單，其餘退回預設模型（最長 64 字元） |
 | `agent_config` | object | 否 | 含 `enabled_tools`；空則由 Agent 自行判斷 |
+
+### `GET /api/chat/models`
+
+一般對話可選的模型清單（前端輸入框旁的下拉選單用）。
+
+```json
+{ "status": "success",
+  "data": { "default_model": "gpt-5.6-luna",
+            "models": [
+              {"id": "gpt-5.6-luna", "label": "GPT-5.6 Luna", "description": "…"},
+              {"id": "gpt-5.4-mini", "label": "GPT-5.4 mini", "description": "…"}
+            ] } }
+```
+
+清單是後端白名單（`general_chat.GENERAL_CHAT_MODEL_CATALOG`）：model id 直接決定單價，
+而 `token_usage.TOKEN_COST_TABLE` 以 id 對照費率，因此不接受清單外的值。
+`default_model` 來自 `GENERAL_CHAT_MODEL`，同樣只能指到白名單內。
+股市 Agent 的 router / analyst 模型寫死在後端，不在此清單也不開放切換。
 
 **SSE Event 格式**：
 
@@ -414,6 +435,13 @@ backend 內建的反向代理（[`explore.py`](../app/backend/api/explore.py)）
 上傳的文件只在研究期間存在於 OpenAI 的臨時 vector store，研究結束（含失敗）立刻刪除。
 完整設計見 [`deep_search.md`](./deep_search.md) §21。
 
+**唯一的例外是 token 用量**：深度研究與聊天吃同一份月配額。`POST /runs` 與
+`POST /runs/{sid}/artifacts` 都會先做配額 pre-flight（已達上限回 **429**，body 與聊天相同：
+`{"detail": {"code": "quota_exceeded", "used_tokens", "monthly_token_limit", "quota_resets_at"}}`），
+結束後把用量寫進 `user_usage_quotas` 與 `token_usage_logs`（`chat_id` 為 NULL，
+`caller` = `deep_research` / `deep_research_report` / `deep_research_deck`）。
+中途失敗或前端斷線時，已經花掉的 token 一樣入帳 —— 否則中斷就成了免費研究的後門。
+
 ### `GET /api/deep-research/config`
 
 回傳前端初始化所需的設定。
@@ -434,9 +462,10 @@ backend 內建的反向代理（[`explore.py`](../app/backend/api/explore.py)）
                          "min": 5, "max": 20, "default": 12} } } }
 ```
 
-`default_model` 來自環境變數 **`DEEP_SEARCH_MODEL`**；`models` 可用 `DEEP_SEARCH_MODELS` 覆寫。
-`DEEP_SEARCH_MODEL` 指定的模型一定會出現在 `models` 裡（即使不在程式內清單），
-否則設了新模型卻被悄悄換掉，會是很難查的問題。
+`models` 是後端白名單（`config.MODEL_CATALOG`），目前只有 `gpt-5.6-luna`。
+`DEEP_SEARCH_MODEL` / `DEEP_SEARCH_MODELS` 只能在白名單內挑選，設白名單外的值會被忽略
+並在 log 提醒一次 —— 換模型等於換費率，而費率表與配額扣點都以 model id 對照。
+前端在只有一個可選模型時會把模型按鈕鎖成純標示（不再是下拉選單）。
 
 ### `POST /api/deep-research/runs`
 
@@ -453,7 +482,7 @@ backend 內建的反向代理（[`explore.py`](../app/backend/api/explore.py)）
 | `thinking` | `{text}` | 模型推理中 |
 | `writing` | `{text}` | 開始輸出正文 |
 | `delta` | `{text}` | 正文 token |
-| `done` | `{session_id, markdown, citations, tools_used, elapsed_ms, skills}` | 完成 |
+| `done` | `{session_id, markdown, citations, tools_used, elapsed_ms, usage, skills}` | 完成；`usage` = `{prompt_tokens, completion_tokens, total_tokens, requests}` |
 | `error` | `{message}` | 失敗 |
 
 沉默超過 15 秒會送出 `: keepalive` 註解行，避免 ALB / nginx 判定連線閒置而中斷。
@@ -469,14 +498,22 @@ backend 內建的反向代理（[`explore.py`](../app/backend/api/explore.py)）
 `.doc` / `.xls` / `.ppt` 會回 400 並提示改存新格式。
 
 **錯誤**：`400` 題目為空／超長／檔案格式或大小不符；`409` 同一使用者已有研究在跑；
-`502` vector store 建立失敗；`503` 未設定 `OPENAI_API_KEY`。
+`429` 月配額已用盡（pre-flight，尚未讀檔也未打 OpenAI）；`502` vector store 建立失敗；
+`503` 未設定 `OPENAI_API_KEY`。
 
 ### `POST /api/deep-research/runs/{session_id}/artifacts`
 
 Body `{"kind": "report" | "deck", "theme": "consulting", "length": 12}`
 （`theme` 與 `length`皆選填；不認得的 `theme` 退回預設，`length` 會被 clamp 進範圍）。
 同樣回 SSE（`status` → `done` / `error`），`done` 帶
-`{kind, label, filename, size, theme, length, download_path}`。
+`{kind, label, filename, size, theme, length, usage, download_path, formats}`。
+產檔是研究之外的另一次模型呼叫，因此有自己的配額 pre-flight（超額回 **429**）與
+獨立的 `token_usage_logs` 一列。
+
+`formats` 是這次產出的每一種格式（陣列，第一個是主要格式）：
+`{fmt, label, filename, size, download_path}`。報告是 `docx` + `html`、
+簡報是 `pptx` + `html`；不帶格式的 `filename` / `size` / `download_path`
+一律指主要格式（Office 檔）。
 
 **篇幅**（簡報頁數／報告小節數）由 `length` 指定，範圍與預設值見 `GET /config` 的
 `length_specs`（簡報 5–20 頁預設 12、報告 3–10 節預設 6，可用 `DEEP_SEARCH_DECK_SLIDES`
@@ -509,10 +546,21 @@ Body `{"kind": "report" | "deck", "theme": "consulting", "length": 12}`
 [`templates/`](../app/backend/deep_research/templates/) 的樣板決定性地組出來 ——
 模型漏一個結束標籤就會毀掉整份檔案，改成填 JSON 之後最差只是內容平庸而非版面破碎。
 
-### `GET /api/deep-research/runs/{session_id}/artifacts/{kind}`
+### `GET /api/deep-research/runs/{session_id}/artifacts/{kind}[/{fmt}]`
 
-回傳 `text/html`，`Content-Disposition: attachment` 並以 RFC 5987 的 `filename*` 編中文檔名。
-需要 Bearer AT，因此前端以 `authFetch` 取 Blob 後再觸發下載，而非直接開連結。
+下載已產生的檔案。`Content-Disposition: attachment`，中文檔名以 RFC 5987 的
+`filename*` 編碼。需要 Bearer AT，因此前端以 `authFetch` 取 Blob 後再觸發下載，
+而非直接開連結。
+
+| `kind` | `fmt` | 回傳 |
+|--------|-------|------|
+| `report` | `docx`（主要） | `application/vnd.openxmlformats-officedocument.wordprocessingml.document` |
+| `report` | `html` | `text/html; charset=utf-8` |
+| `deck` | `pptx`（主要） | `application/vnd.openxmlformats-officedocument.presentationml.presentation` |
+| `deck` | `html` | `text/html; charset=utf-8` |
+
+省略 `fmt` 會拿到主要格式 —— 這條舊網址保留著，是為了讓 CDN 上還沒換掉的舊版
+前端仍拿得到檔案。要求不存在的格式回 `404`，訊息會列出這份產出實際有哪些格式。
 
 ### `DELETE /api/deep-research/runs/{session_id}`
 

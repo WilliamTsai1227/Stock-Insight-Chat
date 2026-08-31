@@ -21,6 +21,14 @@ from app.backend.module.usage_quota import increment_used_tokens
 # 對照 https://platform.openai.com/pricing ；實際帳單以帳戶為準。
 # 順序重要：`estimate_cost_usd` 以第一個 prefix 命中為準，`gpt-5-mini-*` 須排在 `gpt-5` 之前。
 TOKEN_COST_TABLE: Dict[str, Dict[str, float]] = {
+    # GPT-5.6 系列（深度研究用）：2026-08-21 調價後的標準費率。
+    # 這三列一定要排在 `gpt-5` 之前 —— 少了它們，`gpt-5.6-luna` 會 prefix 命中
+    # `gpt-5` 的 $1.25/$10，把一次深度研究的成本高估六倍以上。
+    # 長上下文請求（super-long prompt）另有較高費率（Luna $0.40/$1.80），
+    # 這裡一律以標準費率估算，對帳仍以 OpenAI 帳單為準。
+    "gpt-5.6-sol": {"prompt": 4.00, "completion": 20.00},
+    "gpt-5.6-terra": {"prompt": 2.00, "completion": 12.00},
+    "gpt-5.6-luna": {"prompt": 0.20, "completion": 1.20},
     "gpt-5.5-pro": {"prompt": 30.00, "completion": 180.00},
     "gpt-5.5": {"prompt": 5.00, "completion": 30.00},
     "gpt-5.4-pro": {"prompt": 30.00, "completion": 180.00},
@@ -399,7 +407,7 @@ async def attach_token_usage_logs_to_message(
 
 async def record_token_usage(
     user_id: UUID,
-    chat_id: UUID,
+    chat_id: Optional[UUID],
     message_id: Optional[UUID],
     model_name: str,
     prompt_tokens: int,
@@ -410,6 +418,9 @@ async def record_token_usage(
     將單次 LLM 結算（一輪）的 token 用量寫入 DB（同一 transaction）：
       1. user_usage_quotas  ── 累加 used_tokens（允許單次略超 monthly_limit）
       2. token_usage_logs   ── INSERT 流水帳
+
+    `chat_id` 可為 None：深度研究不隸屬任何一則對話（欄位本身可為 NULL），
+    這類用量靠 `caller`（deep_research / deep_research_report…）分辨來源。
 
     若 prompt/completion 皆為 0 則跳過。配額已滿時仍寫 log，回傳 log id。
 

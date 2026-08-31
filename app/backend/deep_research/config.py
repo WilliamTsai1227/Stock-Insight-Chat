@@ -1,8 +1,9 @@
 """
 深度研究：環境變數、可選模型清單與各種上限。
 
-唯一必要的環境變數是 `DEEP_SEARCH_MODEL`（前端未指定模型時的預設值）；
-其餘皆有合理預設，未設定也能運作。
+所有環境變數皆有預設值，一個都不設也能運作。`DEEP_SEARCH_MODEL` /
+`DEEP_SEARCH_MODELS` 只能在 `MODEL_CATALOG` 白名單內挑選，不能引入新模型 ——
+理由見下方白名單的註解。
 """
 
 from __future__ import annotations
@@ -13,68 +14,73 @@ from typing import Any, Dict, List, Optional
 # ─────────────────────────────────────────────────────────────
 # 模型
 # ─────────────────────────────────────────────────────────────
-# 僅列出 Responses API 上支援 hosted tools（web_search / file_search）的模型。
-# key 為送給 OpenAI 的 model id，順序即前端下拉選單的順序。
+# 唯一允許的模型。這裡是白名單，不是「建議清單」：
+# 深度研究一次會燒掉數十萬 token（web search 每輪都把搜尋結果塞回 prompt），
+# 換一個模型就是換一組費率，而費率對照表（module/token_usage.py）與配額扣點
+# 都以這裡的 id 為準。開放使用者自選模型 = 開放他們自選單價，
+# 因此只留成本最低、且已實測支援 web_search / file_search 的 gpt-5.6-luna。
+#
+# 要放寬時：先在 TOKEN_COST_TABLE 補上該模型的費率，再把 id 加進這裡；
+# 只改其中一邊會讓那個模型的用量以錯誤單價入帳。
 MODEL_CATALOG: Dict[str, Dict[str, str]] = {
     "gpt-5.6-luna": {
         "label": "GPT-5.6 Luna",
-        "description": "預設模型；已實測支援 web search 與 file search",
-    },
-    "gpt-5.6-sol": {
-        "label": "GPT-5.6 Sol",
-        "description": "同代的另一個變體，可與 Luna 對照品質差異",
-    },
-    "gpt-5.6-terra": {
-        "label": "GPT-5.6 Terra",
-        "description": "同代的另一個變體，可與 Luna 對照品質差異",
-    },
-    "gpt-5": {
-        "label": "GPT-5",
-        "description": "上一代旗艦，長篇論述穩定，速度較慢",
-    },
-    "gpt-5-mini": {
-        "label": "GPT-5 mini",
-        "description": "上一代輕量款，適合先跑一次確認流程通不通",
-    },
-    "gpt-4.1": {
-        "label": "GPT-4.1",
-        "description": "非推理模型，回覆快、長文寫作穩定",
+        "description": "深度研究專用模型；支援 web search 與 file search",
     },
 }
+
+# 白名單本身不吃環境變數 —— 見 `_catalog_from_env()` 的說明
+ALLOWED_MODEL_IDS = frozenset(MODEL_CATALOG)
 
 _FALLBACK_MODEL = "gpt-5.6-luna"
 
 
+# 已提醒過的設定錯誤（source, 被擋掉的 id）；每次 /config 都會重讀環境變數，
+# 沒有這個集合的話同一行警告會跟著每一個請求重印
+_warned_rejections: set = set()
+
+
+def _reject_unlisted(model_ids: List[str], source: str) -> List[str]:
+    """濾掉不在白名單內的 model id，並在 log 留下痕跡（同一組只提醒一次）。"""
+    kept, dropped = [], []
+    for model_id in model_ids:
+        (kept if model_id in ALLOWED_MODEL_IDS else dropped).append(model_id)
+    if dropped:
+        key = (source, tuple(dropped))
+        if key not in _warned_rejections:
+            _warned_rejections.add(key)
+            print(
+                f"[DEEP-SEARCH] 已忽略 {source} 中不在白名單內的模型："
+                f"{'、'.join(dropped)}（可用：{'、'.join(sorted(ALLOWED_MODEL_IDS))}）",
+                flush=True,
+            )
+    return kept
+
+
 def _catalog_from_env() -> Dict[str, Dict[str, str]]:
     """
-    `DEEP_SEARCH_MODELS`（逗號分隔）可覆寫可選清單，例如：
+    `DEEP_SEARCH_MODELS`（逗號分隔）只能**縮減**可選清單，不能擴充：
 
-        DEEP_SEARCH_MODELS=gpt-5.6-luna,gpt-5.6-sol
+        DEEP_SEARCH_MODELS=gpt-5.6-luna
 
-    清單外的 id 仍會被接受（沿用 id 當 label），方便試新模型時不必改程式。
-    `DEEP_SEARCH_MODEL` 指定的預設值一定會被併進清單，見下方註解。
+    清單外的 id 會被忽略並記在啟動 log。以前這裡接受任意 id（方便試新模型），
+    但那條路徑同時繞過了費率對照 —— 設一個沒有費率的模型，它的用量會以
+    `cost_usd = 0` 入帳，看起來像免費的。`DEEP_SEARCH_MODEL` 同樣受此限制。
     """
     raw = os.getenv("DEEP_SEARCH_MODELS", "").strip()
+    picked: Dict[str, Dict[str, str]] = {}
     if raw:
-        picked: Dict[str, Dict[str, str]] = {}
-        for item in raw.split(","):
-            model_id = item.strip()
-            if not model_id:
-                continue
-            picked[model_id] = MODEL_CATALOG.get(
-                model_id, {"label": model_id, "description": ""}
-            )
+        requested = [item.strip() for item in raw.split(",") if item.strip()]
+        for model_id in _reject_unlisted(requested, "DEEP_SEARCH_MODELS"):
+            picked[model_id] = MODEL_CATALOG[model_id]
     else:
         picked = dict(MODEL_CATALOG)
 
-    # DEEP_SEARCH_MODEL 是運維明確指定的預設值，一定要在清單裡。
-    # 少了這段，設一個清單外的模型會被 resolve_model() 悄悄換成清單第一個，
-    # 看起來像設定沒生效卻沒有任何錯誤訊息 —— 最難查的那種。
+    # 運維指定的預設值一定要在清單裡（同樣要先過白名單）
     default = os.getenv("DEEP_SEARCH_MODEL", "").strip()
     if default and default not in picked:
-        picked[default] = MODEL_CATALOG.get(
-            default, {"label": default, "description": "由 DEEP_SEARCH_MODEL 指定"}
-        )
+        for model_id in _reject_unlisted([default], "DEEP_SEARCH_MODEL"):
+            picked[model_id] = MODEL_CATALOG[model_id]
 
     return picked or dict(MODEL_CATALOG)
 
@@ -87,10 +93,16 @@ def available_models() -> List[Dict[str, str]]:
     ]
 
 
-# 預設模型：使用者未在前端選擇時採用（本功能唯一必填的環境變數）
-DEEP_SEARCH_DEFAULT_MODEL = (
-    os.getenv("DEEP_SEARCH_MODEL", "").strip() or _FALLBACK_MODEL
-)
+def _resolve_default_model() -> str:
+    """`DEEP_SEARCH_MODEL` 不在白名單時退回 `_FALLBACK_MODEL`（已於上方記 log）。"""
+    configured = os.getenv("DEEP_SEARCH_MODEL", "").strip()
+    if configured in ALLOWED_MODEL_IDS:
+        return configured
+    return _FALLBACK_MODEL
+
+
+# 預設模型：使用者未在前端選擇時採用
+DEEP_SEARCH_DEFAULT_MODEL = _resolve_default_model()
 
 
 def resolve_model(requested: Optional[str]) -> str:
@@ -98,7 +110,7 @@ def resolve_model(requested: Optional[str]) -> str:
     將前端送來的 model 收斂成實際要用的 model id。
 
     不在清單內的一律退回預設模型 —— 這個參數直接來自瀏覽器，
-    不能讓使用者任意指定字串去打 OpenAI。
+    不能讓使用者任意指定字串去打 OpenAI（也就等於自選單價）。
     """
     catalog = _catalog_from_env()
     if requested and requested.strip() in catalog:

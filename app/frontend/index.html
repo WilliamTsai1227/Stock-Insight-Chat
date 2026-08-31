@@ -314,6 +314,16 @@
                                     </li>
                                 </ul>
                             </div>
+                            <!-- 一般對話的模型選擇（股市 Agent 的模型不開放切換，故僅 general 模式顯示） -->
+                            <div class="chat-mode-wrap general-model-wrap hidden" id="general-model-wrap">
+                                <button type="button" id="general-model-btn" class="chat-mode-btn"
+                                        aria-haspopup="listbox" aria-expanded="false" title="選擇一般對話使用的模型">
+                                    <i data-lucide="cpu" class="general-model-icon"></i>
+                                    <span id="general-model-label">模型</span>
+                                    <i data-lucide="chevron-up" class="chat-mode-chevron"></i>
+                                </button>
+                                <ul id="general-model-menu" class="chat-mode-menu hidden" role="listbox"></ul>
+                            </div>
                         </div>
                         <div class="input-bottom-right">
                             <!-- 回覆模式（思考 / 快捷）：一般對話時反灰 -->

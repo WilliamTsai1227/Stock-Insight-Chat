@@ -20,18 +20,45 @@ from .config import MAX_SESSIONS_PER_USER, SESSION_TTL_MINUTES
 
 
 @dataclass
-class Artifact:
-    """一份可下載的產出（目前是自帶樣式的單一 HTML 檔）。"""
+class ArtifactFile:
+    """
+    一份可下載的檔案。
 
-    kind: str                 # "report" | "deck"
+    內容一律存 bytes：docx / pptx 本來就是二進位，HTML 也統一先編成 UTF-8，
+    下載端點就不必為兩種型別分岔。
+    """
+
+    fmt: str                  # "html" | "docx" | "pptx"
     filename: str
     media_type: str
-    content: str
-    created_at: float = field(default_factory=time.time)
+    content: bytes
 
     @property
     def size(self) -> int:
-        return len(self.content.encode("utf-8"))
+        return len(self.content)
+
+
+@dataclass
+class Artifact:
+    """
+    一次 skill 產出：同一份內容的數種格式。
+
+    報告是 docx + html、簡報是 pptx + html —— 兩種都留著，是因為 Office 檔
+    可以直接改、HTML 檔則能在瀏覽器裡預覽與離線放映，用途不重疊。
+    """
+
+    kind: str                              # "report" | "deck"
+    files: Dict[str, ArtifactFile]         # fmt → 檔案；插入順序的第一個是主要格式
+    created_at: float = field(default_factory=time.time)
+
+    @property
+    def primary(self) -> ArtifactFile:
+        """主要格式（報告是 docx、簡報是 pptx）；前端的主要下載按鈕指向它。"""
+        return next(iter(self.files.values()))
+
+    @property
+    def size(self) -> int:
+        return sum(f.size for f in self.files.values())
 
 
 @dataclass
@@ -49,6 +76,9 @@ class ResearchSession:
     source_names: List[str] = field(default_factory=list)
     tools_used: List[str] = field(default_factory=list)
     elapsed_ms: int = 0
+    # 研究 + 每次產檔的累計 token；實際計費以 token_usage_logs 為準，
+    # 這個欄位只是讓前端與 log 看得到「這個 session 花了多少」
+    total_tokens: int = 0
     # 產出的檔案（kind → Artifact）
     artifacts: Dict[str, Artifact] = field(default_factory=dict)
 
@@ -61,8 +91,14 @@ class ResearchSession:
             "tools_used": self.tools_used,
             "citations": self.citations,
             "elapsed_ms": self.elapsed_ms,
+            "total_tokens": self.total_tokens,
             "artifacts": [
-                {"kind": a.kind, "filename": a.filename, "size": a.size}
+                {
+                    "kind": a.kind,
+                    "filename": a.primary.filename,
+                    "size": a.size,
+                    "formats": list(a.files),
+                }
                 for a in self.artifacts.values()
             ],
         }

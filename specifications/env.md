@@ -127,9 +127,32 @@ docker compose ... exec backend env | grep <變數名>               # 驗證讀
 
 | 變數 | 預設 | 說明 |
 | :--- | :--- | :--- |
-| `GENERAL_CHAT_MODEL` | `gpt-4o-mini` | `chat_mode=general` 使用的模型 |
-| `GENERAL_CHAT_ENABLE_WEB_SEARCH` | `1` | 一般對話是否允許網路搜尋 |
+| `GENERAL_CHAT_MODEL` | `gpt-5.6-luna` | `chat_mode=general` 的**預設**模型。只能是白名單內的 id，設別的會被忽略並提醒一次 |
+| `GENERAL_CHAT_REASONING_EFFORT` | `low` | 一般對話的思考強度；留空＝不傳此參數（走模型預設 `medium`） |
+| `GENERAL_CHAT_ENABLE_WEB_SEARCH` | `1` | 一般對話是否允許網路搜尋（走 Tavily，非模型內建 web search） |
 | `GENERAL_REWRITE_LLM` | `gpt-4o-mini` | 一般對話檢索前的問句改寫模型 |
+
+> **模型白名單**：一般對話開放使用者在輸入框旁的下拉選單切換模型，可選清單由
+> [`general_chat.py`](../app/backend/agent/general_chat.py) 的 `GENERAL_CHAT_MODEL_CATALOG`
+> 決定（目前 `gpt-5.6-luna` $0.20/$1.20、`gpt-5.4-mini` $0.75/$4.50），前端經
+> `GET /api/chat/models` 取得。前端送來的 `model` 一律過 `resolve_general_chat_model()`，
+> 清單外的值退回預設 —— 開放任意字串等於讓使用者自選單價，而沒有費率的模型會以
+> `cost_usd = 0` 入帳。要新增模型：先在
+> [`token_usage.py`](../app/backend/module/token_usage.py) 補費率，再加進 catalog。
+> 股市 Agent 的 router / analyst 不在此列（寫死在程式裡，不開放切換）。
+>
+> **`GENERAL_CHAT_REASONING_EFFORT` 是這條路徑的延遲主旋鈕。** 在此變數之前，一般對話
+> 完全不帶 `reasoning_effort`，等於吃模型預設 `medium` —— router 用 `minimal`、analyst 用 `low`，
+> 只有這裡漏掉，所以「一般對話比股市 Agent 還慢」。
+>
+> 最低檔的名稱跨世代改過：`gpt-5` / `gpt-5-mini` 那一代叫 `minimal`，`gpt-5.1` 之後（含 5.4／5.6）
+> 改叫 `none`，互相照送會 400。[`general_chat.py`](../app/backend/agent/general_chat.py) 的
+> `_normalize_reasoning_effort()` 會依模型自動對齊，換模型時不必記得改這一行；
+> 非推理模型（`gpt-4o` / `gpt-4.1` 系列）則完全不帶這個參數。
+>
+> 另外兩個延遲來源與思考強度無關：每輪會先跑一次**問句改寫 LLM**（`GENERAL_REWRITE_LLM`），
+> 再打一次 **Tavily**，兩者都在第一個 token 之前。設 `GENERAL_CHAT_ENABLE_WEB_SEARCH=0`
+> 可以把這兩段一起省掉。
 
 ---
 
@@ -196,12 +219,13 @@ docker compose ... exec backend env | grep <變數名>               # 驗證讀
 
 ## 十一、深度研究（Deep Research）
 
-以 OpenAI Agents SDK 執行的獨立功能，與聊天／Flash 完全分開。只有 `DEEP_SEARCH_MODEL` 是必填。
+以 OpenAI Agents SDK 執行的獨立功能，與聊天／Flash 分開，但**共用同一份月配額**（見下方說明）。
+全部變數都有預設值，一個都不設也能運作。
 
 | 變數 | 預設 | 說明 |
 | :--- | :--- | :--- |
-| `DEEP_SEARCH_MODEL` | `gpt-5.6-luna` | **前端未選模型時的預設模型**（本功能唯一必填）。設什麼就送什麼，即使不在下面的清單裡也會自動併入 |
-| `DEEP_SEARCH_MODELS` | 程式內清單 | 逗號分隔，覆寫前端可選的模型；**前端送來**的清單外 id 會被退回預設值 |
+| `DEEP_SEARCH_MODEL` | `gpt-5.6-luna` | 預設模型。**只能是白名單內的 id**，白名單外的值會被忽略並退回 `gpt-5.6-luna`（log 會提醒一次） |
+| `DEEP_SEARCH_MODELS` | 白名單全部 | 逗號分隔，**只能縮減**前端可選清單，不能加入白名單外的模型 |
 | `DEEP_SEARCH_MAX_FILES` | `10` | 單次研究可上傳的檔案數 |
 | `DEEP_SEARCH_MAX_FILE_MB` | `20` | 單一檔案大小上限 |
 | `DEEP_SEARCH_MAX_IMAGES` | `4` | 單次研究可附的圖片數 |
@@ -215,14 +239,23 @@ docker compose ... exec backend env | grep <變數名>               # 驗證讀
 | `DEEP_SEARCH_MAX_SESSIONS_PER_USER` | `5` | 每位使用者保留的 session 數，超過淘汰最舊的 |
 | `DEEP_SEARCH_VECTOR_STORE_EXPIRES_DAYS` | `1` | OpenAI vector store 的 `expires_after` 保險絲 |
 
-> `DEEP_SEARCH_MODELS` 內只該放 **Responses API 支援 hosted tools**（`web_search` / `file_search`）的模型。
-> `gpt-5.6-luna` / `sol` / `terra` 已實測通過（web search、file search、`reasoning.effort=medium`、structured outputs 皆可）。
-> 換新模型前建議先跑一次驗證：附一份只有檔案裡才有的事實，看模型答不答得出來，即可確認 file search 真的生效。
+> **模型白名單**：可選模型由 [`config.py`](../app/backend/deep_research/config.py) 的 `MODEL_CATALOG`
+> 決定，目前只有 `gpt-5.6-luna`（$0.20 / $1.20 per 1M tokens）。環境變數只能在白名單內挑，
+> 不能引入新模型 —— 換模型等於換費率，而 `TOKEN_COST_TABLE` 與配額扣點都以 model id 對照，
+> 只改一邊會讓用量以錯誤單價入帳。要放寬時：先在
+> [`token_usage.py`](../app/backend/module/token_usage.py) 補費率，再把 id 加進 `MODEL_CATALOG`，
+> 並確認該模型在 Responses API 上支援 hosted tools（`web_search` / `file_search`）。
+> 驗證方式：附一份只有檔案裡才有的事實，看模型答不答得出來，即可確認 file search 真的生效。
 > 非推理模型（`gpt-4.1` 系列）不會被帶上 `reasoning.effort` —— 帶了 Responses API 會直接回 400，
-> 判斷邏輯在 [`config.py`](../app/backend/deep_research/config.py) 的 `supports_reasoning_effort()`。
+> 判斷邏輯在 `supports_reasoning_effort()`。
 >
 > 本功能沿用既有的 `OPENAI_API_KEY`；未設定時 `/api/deep-research/runs` 回 **503**。
-> 目前**不計入 `token_usage_logs` 與月配額**（MVP 取捨），改以「每位使用者同時只能跑一個研究」節流。
+>
+> **配額與計費**：與聊天共用 `user_usage_quotas` 的月配額。`POST /runs` 與
+> `POST /runs/{sid}/artifacts` 前各做一次 pre-flight（已達上限回 **429**），結束後把 Agents SDK
+> 回報的用量寫進 `token_usage_logs`（`chat_id` 為 NULL，`caller` = `deep_research` /
+> `deep_research_report` / `deep_research_deck`）。研究中途失敗或前端斷線時，已經花掉的
+> token 一樣會入帳。另有「每位使用者同時只能跑一個研究」的併發節流。
 
 ---
 

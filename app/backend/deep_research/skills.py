@@ -4,22 +4,35 @@
 每個 skill 由三件事組成：
 1. 一段 skill prompt（規定寫作風格與資訊密度）
 2. 一個結構化輸出 schema（讓模型只負責內容，不負責排版）
-3. 一個決定性的 HTML renderer（`templates/`）
+3. 一組決定性的 renderer（`templates/`）
 
 排版交給樣板而非模型，是為了讓輸出穩定好看 —— 模型只要漏一個結束標籤，
 整份檔案就毀了；改成填 JSON 之後，最差情況也只是內容平庸而非版面破碎。
+
+同一份 JSON 會被渲染成多種格式（報告 = docx + html、簡報 = pptx + html）。
+Office 檔不是從 HTML 轉出來的，是另一個吃同一份物件的 renderer ——
+所以沒有轉檔失真，也不需要 LibreOffice 之類的外部程序。
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Literal, Tuple
+from typing import Any, Dict, List, Literal
 
 from agents import Agent, ModelSettings, Runner
 from pydantic import BaseModel, Field
 
 from .config import resolve_length, supports_reasoning_effort
-from .templates import Theme, render_deck, render_report, resolve_theme
+from .session import ArtifactFile
+from .usage import AgentUsage
+from .templates import (
+    Theme,
+    render_deck,
+    render_deck_pptx,
+    render_report,
+    render_report_docx,
+    resolve_theme,
+)
 
 MAX_SKILL_TURNS = 4
 
@@ -158,6 +171,34 @@ DECK_SKILL_PROMPT = """你是一位替高階簡報設計內容的顧問。輸入
 
 
 # ─────────────────────────────────────────────────────────────
+# 產出格式
+# ─────────────────────────────────────────────────────────────
+FORMATS: Dict[str, Dict[str, str]] = {
+    "docx": {
+        "label": "Word",
+        "extension": "docx",
+        "media_type": (
+            "application/vnd.openxmlformats-officedocument"
+            ".wordprocessingml.document"
+        ),
+    },
+    "pptx": {
+        "label": "PowerPoint",
+        "extension": "pptx",
+        "media_type": (
+            "application/vnd.openxmlformats-officedocument"
+            ".presentationml.presentation"
+        ),
+    },
+    "html": {
+        "label": "HTML",
+        "extension": "html",
+        "media_type": "text/html; charset=utf-8",
+    },
+}
+
+
+# ─────────────────────────────────────────────────────────────
 # Skill 註冊表
 # ─────────────────────────────────────────────────────────────
 SKILLS: Dict[str, Dict[str, Any]] = {
@@ -166,18 +207,24 @@ SKILLS: Dict[str, Dict[str, Any]] = {
         "agent_name": "Report Writer",
         "prompt": REPORT_SKILL_PROMPT,
         "output_type": ReportDoc,
-        "renderer": render_report,
-        "extension": "html",
+        # dict 有序，第一個就是主要格式：前端的主要下載按鈕、以及不帶格式的
+        # 舊下載網址都指向它。HTML 排在後面是因為它的角色是預覽與離線放映，
+        # 使用者真正要帶走、要編輯的是 Office 檔。
+        "renderers": {"docx": render_report_docx, "html": render_report},
     },
     "deck": {
         "label": "簡報",
         "agent_name": "Deck Designer",
         "prompt": DECK_SKILL_PROMPT,
         "output_type": DeckDoc,
-        "renderer": render_deck,
-        "extension": "html",
+        "renderers": {"pptx": render_deck_pptx, "html": render_deck},
     },
 }
+
+
+def formats_of(kind: str) -> List[str]:
+    """這個 skill 會產出哪些格式（順序即主要格式在前）。"""
+    return list(SKILLS[kind]["renderers"])
 
 
 def _length_rule(kind: str, length: int) -> str:
@@ -233,12 +280,19 @@ async def generate_artifact(
     citations: List[Dict[str, str]],
     theme: str | Theme | None = None,
     length: int | None = None,
-) -> Tuple[str, str, str]:
+    usage: AgentUsage | None = None,
+) -> List[ArtifactFile]:
     """
-    跑一個 skill，回傳 `(filename, media_type, html)`。
+    跑一個 skill，回傳這個 skill 的每一種格式（主要格式在第一個）。
 
-    模型只產生結構化 JSON，HTML 一律由樣板組出來；`theme` 決定色票與字體配對，
+    模型只產生結構化 JSON，檔案一律由樣板組出來；`theme` 決定色票與字體配對，
     `length` 決定簡報頁數／報告小節數（`None` 用預設值，超出範圍會被 clamp）。
+
+    模型只跑一次，數種格式共用同一份輸出 —— 這是把排版留在樣板層的直接好處：
+    多一種格式的成本是幾十毫秒的渲染，不是再燒一次 token。
+
+    傳入 `usage` 時會把這次的 token 用量寫回去（呼叫端據此扣配額）；
+    產檔是獨立的一次模型呼叫，成本與研究本身分開記帳。
     """
     skill = SKILLS[kind]
     size = resolve_length(kind, length)
@@ -261,12 +315,30 @@ async def generate_artifact(
         max_turns=MAX_SKILL_TURNS,
     )
 
+    # 這裡不放 finally：`Runner.run()` 拋例外時沒有 result 可讀，
+    # 產檔失敗那幾輪的用量拿不到（與研究流程不同，那邊是串流、讀得到累計值）。
+    if usage is not None:
+        usage.absorb(result)
+
     doc = result.final_output
     if isinstance(doc, str):
         # 極少數情況模型會回純文字；試著當成 JSON 救回來
         doc = skill["output_type"].model_validate(json.loads(doc))
 
     chosen = theme if isinstance(theme, Theme) else resolve_theme(theme)
-    html = skill["renderer"](doc, model=model, query=query, theme=chosen)
-    filename = _safe_filename(kind, getattr(doc, "title", ""), skill["extension"])
-    return filename, "text/html; charset=utf-8", html
+    title = getattr(doc, "title", "")
+
+    files: List[ArtifactFile] = []
+    for fmt, renderer in skill["renderers"].items():
+        meta = FORMATS[fmt]
+        content = renderer(doc, model=model, query=query, theme=chosen)
+        files.append(
+            ArtifactFile(
+                fmt=fmt,
+                filename=_safe_filename(kind, title, meta["extension"]),
+                media_type=meta["media_type"],
+                # HTML renderer 回字串、Office renderer 回 bytes；統一成 bytes
+                content=content if isinstance(content, bytes) else content.encode("utf-8"),
+            )
+        )
+    return files

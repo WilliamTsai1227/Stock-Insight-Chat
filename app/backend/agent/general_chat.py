@@ -10,8 +10,10 @@ general_chat.py（一般對話管線）
     Tavily，並將搜尋結果透過 web_context 參數注入系統提示，提供 LLM 即時資料。
 
 對外介面
-  general_chat_astream(messages_lc, web_context, extra_system) → AsyncIterator[chunk]
-  GENERAL_CHAT_MODEL                               → StreamUsageChatOpenAI 實例（供 API 層計費）
+  general_chat_astream(messages_lc, web_context, extra_system, model) → AsyncIterator[chunk]
+  resolve_general_chat_model(requested)  → 把前端送來的 model 收斂進白名單
+  general_chat_models_public()           → GET /api/chat/models 的內容
+  get_general_chat_model(requested)      → 對應的 StreamUsageChatOpenAI 實例（有快取）
 """
 
 from __future__ import annotations
@@ -37,20 +39,135 @@ def get_general_chat_current_time() -> str:
 def get_general_chat_current_year() -> int:
     return datetime.now(_TAIPEI_TZ).year
 
-# ── 模型設定 ──────────────────────────────────────────────────────────────────
-_GENERAL_CHAT_MODEL_NAME = os.getenv("GENERAL_CHAT_MODEL", "gpt-4o-mini").strip()
+# ── 可選模型（白名單）─────────────────────────────────────────────────────────
+# 一般對話開放使用者在前端自選模型，所以這裡是白名單而不是建議清單：
+# model id 直接決定單價，而 `module/token_usage.TOKEN_COST_TABLE` 以 id 對照費率。
+# 讓使用者送任意字串 = 讓他自選單價，而且沒有費率的模型會以 cost_usd=0 入帳。
+#
+# 要新增模型：先在 token_usage.py 補上費率，再把 id 加進這裡，兩邊要一起改。
+GENERAL_CHAT_MODEL_CATALOG: Dict[str, Dict[str, str]] = {
+    "gpt-5.6-luna": {
+        "label": "GPT-5.6 Luna",
+        "description": "最新世代、單價最低（$0.20 / $1.20 per 1M），日常對話的預設選擇",
+    },
+    "gpt-5.4-mini": {
+        "label": "GPT-5.4 mini",
+        "description": "上一代輕量款（$0.75 / $4.50 per 1M），回覆風格較穩定",
+    },
+}
+
+ALLOWED_GENERAL_CHAT_MODELS = frozenset(GENERAL_CHAT_MODEL_CATALOG)
+_FALLBACK_GENERAL_CHAT_MODEL = "gpt-5.6-luna"
+
 _OPENAI_STREAM_OPTS: dict[str, Any] = {"stream_options": {"include_usage": True}}
+
+# 已提醒過的設定錯誤；沒有這個旗標，每一輪對話都會重印同一行警告
+_warned_unlisted_default = False
+
+
+def _default_general_chat_model() -> str:
+    """`GENERAL_CHAT_MODEL` 只能指到白名單內；指到別的就退回 fallback 並提醒一次。"""
+    global _warned_unlisted_default
+    configured = os.getenv("GENERAL_CHAT_MODEL", "").strip()
+    if configured in ALLOWED_GENERAL_CHAT_MODELS:
+        return configured
+    if configured and not _warned_unlisted_default:
+        _warned_unlisted_default = True
+        print(
+            f"[GENERAL-CHAT] 已忽略 GENERAL_CHAT_MODEL={configured!r}（不在白名單內），"
+            f"改用 {_FALLBACK_GENERAL_CHAT_MODEL}"
+            f"（可用：{'、'.join(sorted(ALLOWED_GENERAL_CHAT_MODELS))}）",
+            flush=True,
+        )
+    return _FALLBACK_GENERAL_CHAT_MODEL
+
+
+def resolve_general_chat_model(requested: Optional[str]) -> str:
+    """把前端送來的 model 收斂成白名單內的 id；不認得的一律退回預設值。"""
+    if requested and requested.strip() in ALLOWED_GENERAL_CHAT_MODELS:
+        return requested.strip()
+    return _default_general_chat_model()
+
+
+def general_chat_models_public() -> Dict[str, Any]:
+    """`GET /api/chat/models` 的回應內容（前端下拉選單用）。"""
+    return {
+        "default_model": _default_general_chat_model(),
+        "models": [
+            {"id": mid, "label": meta["label"], "description": meta["description"]}
+            for mid, meta in GENERAL_CHAT_MODEL_CATALOG.items()
+        ],
+    }
+
+
+_GENERAL_CHAT_MODEL_NAME = _default_general_chat_model()
 
 # GENERAL_CHAT_ENABLE_WEB_SEARCH：是否在一般對話前呼叫 Tavily（預設開啟）
 GENERAL_CHAT_ENABLE_WEB_SEARCH: bool = (
     os.getenv("GENERAL_CHAT_ENABLE_WEB_SEARCH", "1").strip() in ("1", "true", "yes")
 )
 
-GENERAL_CHAT_MODEL = StreamUsageChatOpenAI(
-    model=_GENERAL_CHAT_MODEL_NAME,
-    temperature=1,
-    model_kwargs=_OPENAI_STREAM_OPTS,
-)
+# ── 推理強度 ──────────────────────────────────────────────────────────────────
+# 這條路徑原本完全不帶 reasoning_effort，等於吃模型預設值 **medium** ——
+# 對「聊天」而言太深，第一個 token 要等好幾秒（router 用 minimal、analyst 用 low，
+# 只有這裡漏了）。預設改成 low：跨世代都合法，且明顯比 medium 快。
+#
+# 留空字串則不帶此參數（回到模型預設 medium）。
+_GENERAL_CHAT_REASONING_EFFORT = os.getenv(
+    "GENERAL_CHAT_REASONING_EFFORT", "low"
+).strip().lower()
+
+
+def _is_reasoning_model(model: str) -> bool:
+    """非推理模型（gpt-4o / gpt-4.1 系列）帶 reasoning_effort 會被 API 拒絕。"""
+    name = (model or "").lower()
+    return name.startswith(("gpt-5", "o1", "o3", "o4"))
+
+
+def _normalize_reasoning_effort(model: str, effort: str) -> str:
+    """
+    把設定值收斂成這個模型吃得下的值；回傳空字串代表「不要帶這個參數」。
+
+    最低檔的名稱跨世代改過：gpt-5 / gpt-5-mini 那一代叫 `minimal`，
+    gpt-5.1 之後改叫 `none`，互相照送會直接 400。換模型時最容易忘的就是
+    這一行設定，所以在這裡自動對齊，而不是讓它變成一個 500。
+    """
+    if not effort or not _is_reasoning_model(model):
+        return ""
+    # "gpt-5." 開頭＝5.1 以後的世代；"gpt-5" / "gpt-5-mini" 則是最初那一代
+    is_new_gen = model.lower().startswith("gpt-5.")
+    if is_new_gen and effort == "minimal":
+        return "none"
+    if not is_new_gen and effort == "none":
+        return "minimal"
+    return effort
+
+
+def _general_chat_model_kwargs(model: str) -> dict[str, Any]:
+    kwargs = dict(_OPENAI_STREAM_OPTS)
+    effort = _normalize_reasoning_effort(model, _GENERAL_CHAT_REASONING_EFFORT)
+    if effort:
+        kwargs["reasoning_effort"] = effort
+    return kwargs
+
+
+# model id → 實例。建一個 ChatOpenAI 會連帶建 http client，每輪對話重建太浪費；
+# 白名單很短，全部快取起來即可（模組載入時不建，避免 import 就需要 API key）。
+_model_instances: Dict[str, StreamUsageChatOpenAI] = {}
+
+
+def get_general_chat_model(requested: Optional[str] = None) -> StreamUsageChatOpenAI:
+    """取得（必要時建立）指定模型的實例；`requested` 會先過白名單。"""
+    model_id = resolve_general_chat_model(requested)
+    instance = _model_instances.get(model_id)
+    if instance is None:
+        instance = StreamUsageChatOpenAI(
+            model=model_id,
+            temperature=1,
+            model_kwargs=_general_chat_model_kwargs(model_id),
+        )
+        _model_instances[model_id] = instance
+    return instance
 
 # ── 系統提示 ──────────────────────────────────────────────────────────────────
 # _GENERAL_SYSTEM_PROMPT = (
@@ -166,6 +283,7 @@ async def general_chat_astream(
     *,
     web_context: Optional[List[Dict[str, Any]]] = None,
     extra_system: str | None = None,
+    model: Optional[str] = None,
 ) -> AsyncIterator[Any]:
     """
     一般對話串流。
@@ -178,6 +296,8 @@ async def general_chat_astream(
         Tavily 搜尋結果列表（由 API 層傳入）；None 或空列表表示無網路資料。
     extra_system:
         可選：額外附加到系統提示後面的指令。
+    model:
+        使用者選的模型 id；不在白名單內或未指定時用 `GENERAL_CHAT_MODEL` 的預設值。
     """
     system_content = build_general_system_prompt(get_general_chat_current_time())
     if extra_system:
@@ -198,5 +318,5 @@ async def general_chat_astream(
         if web_block:
             full_messages.append(HumanMessage(content=web_block))
 
-    async for chunk in GENERAL_CHAT_MODEL.astream(full_messages):
+    async for chunk in get_general_chat_model(model).astream(full_messages):
         yield chunk

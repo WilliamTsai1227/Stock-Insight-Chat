@@ -1603,10 +1603,20 @@ textarea:disabled {
     transition: 0.2s;
 }
 
-#chat-mode-label {
+#chat-mode-label,
+#general-model-label {
     color: var(--text-main);
     font-weight: 600;
 }
+
+/* 一般對話的模型選擇：外觀與 chat-mode 一致，只是多一個晶片圖示 */
+.general-model-wrap.hidden { display: none; }
+.general-model-icon {
+    width: 13px;
+    height: 13px;
+    opacity: 0.75;
+}
+.chat-mode-btn:hover #general-model-label { color: var(--accent); }
 
 .chat-mode-btn:hover {
     border-color: var(--accent);

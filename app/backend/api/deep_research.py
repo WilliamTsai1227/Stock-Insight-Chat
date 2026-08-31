@@ -10,12 +10,19 @@ MVP 定位是功能驗證，因此刻意不落地：
 
 三個階段各自對應一個端點：
 
-    POST /runs                          multipart → SSE：上傳 + 研究
-    POST /runs/{sid}/artifacts          JSON      → SSE：跑 skill 產生報告／簡報
-    GET  /runs/{sid}/artifacts/{kind}   →  下載已產生的檔案
+    POST /runs                              multipart → SSE：上傳 + 研究
+    POST /runs/{sid}/artifacts              JSON      → SSE：跑 skill 產生報告／簡報
+    GET  /runs/{sid}/artifacts/{kind}       →  下載主要格式（報告 docx／簡報 pptx）
+    GET  /runs/{sid}/artifacts/{kind}/{fmt} →  下載指定格式
 
 SSE 用 POST 而非 EventSource，因為 EventSource 帶不了 Authorization header；
 前端沿用既有的 `authFetch` + ReadableStream 解析方式（同 /api/chat/messages）。
+
+計費與配額與聊天共用同一套（`module/usage_quota` + `module/token_usage`）：
+研究與產檔前各做一次 pre-flight（已超額回 429），結束後把 Agents SDK 回報的
+用量寫進 `user_usage_quotas` 與 `token_usage_logs`（`chat_id` 為 NULL，
+以 `caller` 分辨來源）。深度研究單次動輒數十萬 token，不記帳等於開一個
+繞過配額的後門。
 """
 
 from __future__ import annotations
@@ -51,7 +58,7 @@ from app.backend.deep_research.config import (
 )
 from app.backend.deep_research.researcher import stream_research
 from app.backend.deep_research.session import Artifact, session_store
-from app.backend.deep_research.skills import SKILLS, generate_artifact
+from app.backend.deep_research.skills import FORMATS, SKILLS, generate_artifact
 from app.backend.deep_research.templates import resolve_theme
 from app.backend.deep_research.sources import (
     PreparedSources,
@@ -59,7 +66,14 @@ from app.backend.deep_research.sources import (
     read_uploads,
     source_manifest,
 )
+from app.backend.deep_research.usage import (
+    AgentUsage,
+    CALLER_RESEARCH,
+    caller_for_artifact,
+    record_agent_usage,
+)
 from app.backend.module.jwt import get_current_user_id
+from app.backend.module.usage_quota import assert_preflight_llm_quota
 
 router = APIRouter(prefix="/api/deep-research", tags=["Deep Research"])
 
@@ -170,6 +184,11 @@ async def create_research_run(
             detail="您已有一個研究任務正在執行，請等它完成後再開始下一個。",
         )
 
+    # Token 配額 pre-flight：已達上限直接 429，不進 OpenAI。
+    # 一次深度研究比一輪聊天貴上兩個數量級，因此擋在最前面 ——
+    # 連檔案都還沒讀，使用者也不會白等一個注定要失敗的上傳。
+    await assert_preflight_llm_quota(user_id)
+
     # 讀檔與格式驗證放在 handler：格式錯誤要回正常的 4xx，而不是包在 SSE 裡
     uploads = await read_uploads(files or [])
 
@@ -179,6 +198,8 @@ async def create_research_run(
     )
     session.source_names = [u.filename for u in uploads]
     _active_runs.add(user_key)
+
+    usage = AgentUsage()
 
     async def produce(queue: asyncio.Queue) -> None:
         prepared: Optional[PreparedSources] = None
@@ -212,7 +233,10 @@ async def create_research_run(
             )
 
             async for event in stream_research(
-                query=cleaned_query, model=chosen_model, prepared=prepared
+                query=cleaned_query,
+                model=chosen_model,
+                prepared=prepared,
+                usage=usage,
             ):
                 name = event.pop("event")
                 if name == "complete":
@@ -221,6 +245,7 @@ async def create_research_run(
                     session.tools_used = event["tools_used"]
                     session.elapsed_ms = event["elapsed_ms"]
                     session.status = "done"
+                    session.total_tokens += usage.total_tokens
                     await queue.put(
                         _sse(
                             "done",
@@ -230,8 +255,16 @@ async def create_research_run(
                                 "citations": session.citations,
                                 "tools_used": session.tools_used,
                                 "elapsed_ms": session.elapsed_ms,
+                                "usage": usage.as_dict(),
                                 "skills": [
-                                    {"kind": k, "label": v["label"]}
+                                    {
+                                        "kind": k,
+                                        "label": v["label"],
+                                        "formats": [
+                                            {"fmt": f, "label": FORMATS[f]["label"]}
+                                            for f in v["renderers"]
+                                        ],
+                                    }
                                     for k, v in SKILLS.items()
                                 ],
                             },
@@ -261,6 +294,19 @@ async def create_research_run(
             # 同步狀態先清：被 cancel 時 finally 裡的第一個 await 就會再拋 CancelledError，
             # 放在 await 後面的 discard 永遠不會執行，使用者會被鎖住再也開不了新研究。
             _active_runs.discard(user_key)
+            # 記帳同樣不分成功失敗：中途斷線、逾時、跑到一半出錯的那幾輪
+            # OpenAI 一樣收錢，不扣配額就等於使用者可以靠中斷來免費研究。
+            # 走 _spawn_cleanup 而非直接 await —— 被 cancel 時 finally 裡的
+            # await 會立刻再拋 CancelledError，記帳根本不會發生。
+            _spawn_cleanup(
+                record_agent_usage(
+                    user_id=user_id,
+                    model=chosen_model,
+                    usage=usage,
+                    caller=CALLER_RESEARCH,
+                    session_id=session.id,
+                )
+            )
             # 不論成功、失敗或前端斷線，都要把 OpenAI 上的暫存檔清掉
             if prepared is not None:
                 _spawn_cleanup(prepared.cleanup())
@@ -317,10 +363,15 @@ async def create_artifact(
             detail=f"篇幅請介於 1 到 {LENGTH_HARD_MAX} 之間。",
         )
 
+    # 產檔是獨立的一次模型呼叫（研究結果重寫成報告／簡報），因此獨立 pre-flight：
+    # 研究本身的用量就是在這之前記進配額的，剛好用爆的人會擋在這一步。
+    await assert_preflight_llm_quota(user_id)
+
     label = SKILLS[kind]["label"]
     # clamp 在這裡做，好讓 done 事件回報「實際採用的數字」而非使用者送來的值
     length = resolve_length(kind, payload.length)
     unit = LENGTH_SPECS[kind]["unit"]
+    usage = AgentUsage()
 
     async def produce(queue: asyncio.Queue) -> None:
         try:
@@ -328,7 +379,7 @@ async def create_artifact(
                 _sse("status", {"text": f"{label}撰寫中（{length}{unit}）…"})
             )
 
-            filename, media_type, content = await generate_artifact(
+            files = await generate_artifact(
                 kind=kind,
                 model=session.model,
                 query=session.query,
@@ -336,29 +387,37 @@ async def create_artifact(
                 citations=session.citations,
                 theme=payload.theme,
                 length=length,
+                usage=usage,
             )
+            session.total_tokens += usage.total_tokens
 
-            artifact = Artifact(
-                kind=kind,
-                filename=filename,
-                media_type=media_type,
-                content=content,
-            )
+            artifact = Artifact(kind=kind, files={f.fmt: f for f in files})
             session.artifacts[kind] = artifact
 
+            base = f"/api/deep-research/runs/{session.id}/artifacts/{kind}"
             await queue.put(
                 _sse(
                     "done",
                     {
                         "kind": kind,
                         "label": label,
-                        "filename": artifact.filename,
-                        "size": artifact.size,
+                        # 不帶格式的欄位一律指主要格式（報告 docx、簡報 pptx）
+                        "filename": artifact.primary.filename,
+                        "size": artifact.primary.size,
+                        "download_path": base,
                         "theme": resolve_theme(payload.theme).id,
                         "length": length,
-                        "download_path": (
-                            f"/api/deep-research/runs/{session.id}/artifacts/{kind}"
-                        ),
+                        "usage": usage.as_dict(),
+                        "formats": [
+                            {
+                                "fmt": f.fmt,
+                                "label": FORMATS[f.fmt]["label"],
+                                "filename": f.filename,
+                                "size": f.size,
+                                "download_path": f"{base}/{f.fmt}",
+                            }
+                            for f in files
+                        ],
                     },
                 )
             )
@@ -372,6 +431,16 @@ async def create_artifact(
                 _sse("error", {"message": f"{label}產生失敗：{type(exc).__name__}: {exc}"})
             )
         finally:
+            # 與研究流程同理：前端斷線時 await 會再拋 CancelledError，記帳要丟出去跑
+            _spawn_cleanup(
+                record_agent_usage(
+                    user_id=user_id,
+                    model=session.model,
+                    usage=usage,
+                    caller=caller_for_artifact(kind),
+                    session_id=session.id,
+                )
+            )
             with suppress(asyncio.CancelledError):
                 await queue.put(None)
 
@@ -381,13 +450,15 @@ async def create_artifact(
 # ─────────────────────────────────────────────────────────────
 # 4. 下載
 # ─────────────────────────────────────────────────────────────
-@router.get("/runs/{session_id}/artifacts/{kind}")
-async def download_artifact(
-    session_id: str,
-    kind: str,
-    user_id: UUID = Depends(get_current_user_id),
-):
-    """回傳已產生的檔案；前端以 authFetch 取 blob 後再觸發瀏覽器下載。"""
+async def _artifact_response(
+    session_id: str, kind: str, fmt: Optional[str], user_id: UUID
+) -> Response:
+    """
+    取出指定產出並包成下載回應。
+
+    `fmt=None` 代表主要格式 —— 舊版前端（Cloudflare 上還沒換掉的 JS）打的是
+    不帶格式的網址，讓它繼續拿得到檔案比回 404 好。
+    """
     session = await session_store.get(session_id, str(user_id))
     artifact = session.artifacts.get(kind) if session else None
     if artifact is None:
@@ -396,16 +467,47 @@ async def download_artifact(
             detail="檔案不存在或已逾時，請重新產生。",
         )
 
+    if fmt is None:
+        item = artifact.primary
+    else:
+        item = artifact.files.get(fmt)
+        if item is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"這份產出沒有 {fmt} 格式，可用的格式：{'、'.join(artifact.files)}。",
+            )
+
     # 檔名含中文，必須用 RFC 5987 的 filename* 才不會在下載時變成亂碼
-    disposition = f"attachment; filename*=UTF-8''{quote(artifact.filename)}"
+    disposition = f"attachment; filename*=UTF-8''{quote(item.filename)}"
     return Response(
-        content=artifact.content,
-        media_type=artifact.media_type,
+        content=item.content,
+        media_type=item.media_type,
         headers={
             "Content-Disposition": disposition,
             "Cache-Control": "no-store",
         },
     )
+
+
+@router.get("/runs/{session_id}/artifacts/{kind}")
+async def download_artifact(
+    session_id: str,
+    kind: str,
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """下載主要格式；前端以 authFetch 取 blob 後再觸發瀏覽器下載。"""
+    return await _artifact_response(session_id, kind, None, user_id)
+
+
+@router.get("/runs/{session_id}/artifacts/{kind}/{fmt}")
+async def download_artifact_format(
+    session_id: str,
+    kind: str,
+    fmt: str,
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """下載指定格式（報告：docx / html；簡報：pptx / html）。"""
+    return await _artifact_response(session_id, kind, fmt, user_id)
 
 
 # ─────────────────────────────────────────────────────────────

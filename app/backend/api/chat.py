@@ -119,6 +119,15 @@ class MessageRequest(BaseModel):
             "flash=單輪新聞檢索+輕量 Analyst"
         ),
     )
+    model: Optional[str] = Field(
+        default=None,
+        max_length=64,
+        description=(
+            "chat_mode=general 時生效：使用者選的模型 id。"
+            "只接受 GET /api/chat/models 回傳的白名單，其餘一律退回預設模型 —— "
+            "這個值來自瀏覽器，開放任意字串等於讓使用者自選單價。"
+        ),
+    )
 
 
 class CreateChatRequest(BaseModel):
@@ -1055,6 +1064,22 @@ async def get_chat_messages(
 # POST /api/chat/messages —— SSE 串流端點
 # ─────────────────────────────────────────────────────────────────────────────
 
+@router.get("/api/chat/models")
+async def list_general_chat_models(
+    _user_id: UUID = Depends(get_current_user_id),
+):
+    """
+    一般對話（chat_mode=general）可選的模型清單，供前端下拉選單初始化。
+
+    只列白名單內的模型：model id 決定單價，清單外的 id 會被
+    `resolve_general_chat_model()` 退回預設值。股市 Agent 的模型不在此列
+    （router / analyst 寫在程式裡，不開放前端切換）。
+    """
+    from app.backend.agent.general_chat import general_chat_models_public
+
+    return {"status": "success", "data": general_chat_models_public()}
+
+
 @router.post("/api/chat/messages")
 async def get_ai_response(
     request: MessageRequest,
@@ -1533,7 +1558,11 @@ async def get_ai_response(
         """一般對話模式：可選先呼叫 Tavily 取得即時資料，再串流 LLM 回應。"""
         start_total = time.time()
         pending_token_log_ids: List[UUID] = []
-        acc_model_name: str = os.getenv("GENERAL_CHAT_MODEL", "gpt-4o-mini")
+        # 使用者選的模型（已過白名單）；同時是 usage 解析不到 model 時的計費標籤
+        from app.backend.agent.general_chat import resolve_general_chat_model
+
+        chosen_model: str = resolve_general_chat_model(request.model)
+        acc_model_name: str = chosen_model
         web_results: list = []
 
         title_task: Optional[asyncio.Task] = (
@@ -1546,7 +1575,6 @@ async def get_ai_response(
         try:
             from app.backend.agent.general_chat import (
                 general_chat_astream,
-                GENERAL_CHAT_MODEL,
                 GENERAL_CHAT_ENABLE_WEB_SEARCH,
             )
             from app.backend.tools.global_search import tavily_search, TavilySearchError
@@ -1575,7 +1603,9 @@ async def get_ai_response(
             final_content = ""
             last_chunk = None
             usage_chunk = None
-            async for chunk in general_chat_astream(messages_lc, web_context=web_results or None):
+            async for chunk in general_chat_astream(
+                messages_lc, web_context=web_results or None, model=chosen_model
+            ):
                 last_chunk = chunk
                 chunk_bp, chunk_bc = parse_usage_from_llm_message(chunk)
                 if chunk_bp > 0 or chunk_bc > 0:

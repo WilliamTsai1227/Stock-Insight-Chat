@@ -205,6 +205,10 @@
 }
 
 .dr-model-btn:hover { border-color: rgba(var(--accent-rgb), 0.4); color: var(--accent); }
+
+/* 只有一個模型可選時（目前的深度研究就是），按鈕退化成純標示 */
+.dr-model-btn.locked { cursor: default; }
+.dr-model-btn.locked:hover { border-color: var(--border); color: var(--text-main); }
 .dr-model-btn i { width: 14px; height: 14px; color: var(--text-dim); }
 .dr-chevron { transition: transform 0.18s; }
 .dr-model-btn[aria-expanded="true"] .dr-chevron { transform: rotate(180deg); }
@@ -359,6 +363,14 @@
     font-size: 0.85rem;
     line-height: 1.6;
     margin-bottom: 1.2rem;
+}
+
+/* 配額用盡時放的是聊天那張 .quota-error-card，卡片自己有標題與配色，
+   外層再套紅框會變成框中框 —— 這裡把外框收掉，只留間距 */
+.dr-error.quota {
+    border-color: var(--border);
+    background: var(--mode-btn-bg);
+    color: var(--text-main);
 }
 
 /* 研究結果（Markdown） */

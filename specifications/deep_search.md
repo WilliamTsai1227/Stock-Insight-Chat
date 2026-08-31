@@ -1294,7 +1294,7 @@ pymupdf>=1.24.0
 | 原始檔 | S3 永久保存 | 只在研究期間存在於 OpenAI 臨時 vector store，結束即刪 |
 | 中繼資料 | PostgreSQL `research_workspaces` 等表 | **完全不寫 DB**，記憶體 session |
 | 生命週期 | 使用者手動刪除 | TTL 120 分鐘 / 後端重啟 / 前端重新整理即消失 |
-| 產出 | Phase 2 才做 | 已有「研究報告」與「簡報」兩個 skill |
+| 產出 | Phase 2 才做 | 已有「研究報告」（docx + html）與「簡報」（pptx + html）兩個 skill |
 
 ### 21.2 模組結構
 
@@ -1305,7 +1305,12 @@ app/backend/deep_research/
 ├── sources.py           # 上傳檔案前處理：vector store / 試算表轉文字 / 圖片轉 data URL
 ├── researcher.py        # Agents SDK 研究流程，把 SDK 事件轉成 SSE 事件
 ├── skills.py            # 報告 / 簡報 skill：prompt + 結構化 schema + renderer 註冊表
-└── templates/           # 決定性的 HTML 樣板（report.py / deck.py / common.py）
+└── templates/           # 決定性的樣板；同一份物件渲染成多種格式
+    ├── themes.py        # 五組視覺主題（色票 + 字體配對 + 排版取向）
+    ├── common.py        # HTML 共用：轉義、Markdown→HTML、scrub
+    ├── report.py        # 報告 → HTML        deck.py       # 簡報 → HTML
+    ├── report_docx.py   # 報告 → .docx       deck_pptx.py  # 簡報 → .pptx
+    └── office.py        # Office 共用：字型對應、紙張色票、Markdown→區塊
 app/backend/api/deep_research.py   # 路由（SSE）
 app/frontend/js/deep-research.js   # 前端
 app/frontend/css/deep-research.css
@@ -1328,8 +1333,8 @@ app/frontend/css/deep-research.css
  │                              │
  │ POST artifacts {kind}         │
  ├─────────────────────────────►│ Runner.run(output_type=ReportDoc/DeckDoc) ─► 結構化 JSON
- │◄── SSE: done(download_path) ─┤ templates/ 組出 HTML，存進記憶體 session
- │ GET .../artifacts/{kind}      │
+ │◄── SSE: done(formats) ───────┤ templates/ 用同一份 JSON 組出 docx/pptx + HTML
+ │ GET .../artifacts/{kind}/{fmt}│ 存進記憶體 session
  ├─────────────────────────────►│ Response(attachment)
 ```
 
@@ -1358,6 +1363,22 @@ app/frontend/css/deep-research.css
 命中率夠好，偶爾偏一頁遠比破壞內容划算。頁數同時會影響簡報的節奏規則：
 八頁以上才要求 section 分隔頁與 stats／quote 頁，更短時以論點優先。
 
+**Office 檔不是從 HTML 轉出來的。** 報告額外產出 `.docx`、簡報額外產出 `.pptx`，
+兩者都是**吃同一份結構化 JSON 的另一個 renderer**（`report_docx.py` / `deck_pptx.py`），
+不是把 HTML 丟給轉檔器。這是「排版不交給模型」這個決定的直接紅利：
+物件已經是結構化的，多一種格式的成本只有幾十毫秒的渲染，不用再燒一次 token，
+也不會有 HTML→Office 轉換那種版面走樣。反過來走（pandoc / LibreOffice headless）
+還要在 image 裡塞一整套辦公軟體，動輒 1GB+ 記憶體 —— backend 的 `mem_limit`
+只有 640m，裝不下。`python-docx` / `python-pptx` 一律在 renderer 函式內才 import，
+免得 lxml 與 Pillow 常駐佔記憶體。
+
+兩種格式的分工是刻意的：Office 檔是使用者要帶走、要編輯、要在會議室打開的那一份
+（簡報的講稿進 PowerPoint 的備忘稿）；HTML 檔負責瀏覽器內預覽、離線放映與列印成 PDF。
+視覺上 Office 版比 HTML 版樸素 —— CSS 漸層與翻頁動畫換不過來，也不該換。
+主題（色票、字體配對）兩邊共用，但 Word 一律用淺色紙張：文件會被列印，
+而 Word 預設不印背景色，暗色主題照搬過去就是白紙配一片看不見的淺色字
+（`office.paper_palette()` 負責換算，強調色會壓暗到在白底上可讀）。
+
 **用內容預算取代 render QA 迴圈。**
 [OpenAI slides skill](https://github.com/openai/skills) 的作法是
 產生 → 用 LibreOffice rasterize 成 PNG → 程式化偵測溢位／重疊 → 修正。
@@ -1374,7 +1395,11 @@ app/frontend/css/deep-research.css
 **上傳檔案不留在 OpenAI。** 研究結束（含失敗與前端斷線）一律 `cleanup()` 刪掉 vector store
 與底層 file 物件；另外掛 `expires_after` 當保險絲，避免後端沒清乾淨時檔案留在帳號裡。
 
-**預設模型是 `gpt-5.6-luna`。** 已用 Agents SDK 實測：`WebSearchTool` 與 `FileSearchTool` 都正常
+**模型鎖定 `gpt-5.6-luna`（白名單，不是預設值）。** 前端下拉只會有這一個，後端
+`config.MODEL_CATALOG` 是唯一的來源，環境變數只能縮減不能擴充。理由是計費：
+換模型等於換一組費率，而 `TOKEN_COST_TABLE` 的對照與配額扣點都綁在 model id 上，
+開放自選模型等於開放使用者自選單價（Luna $0.20/$1.20、Sol $4/$20 差二十倍）。
+要放寬時先補費率再加 id，兩邊要一起改。已用 Agents SDK 實測：`WebSearchTool` 與 `FileSearchTool` 都正常
 （附一份只有檔案內才有的代號，模型答得出來即證明 file search 生效），`reasoning.effort=medium`
 與 structured outputs 亦可用。注意 `reasoning_effort=minimal` **不被** 5.4 之後的模型接受，
 但深度研究只用 `medium` / `low`，不受影響；聊天那條路的 `ROUTER_REASONING_EFFORT=minimal` 則要留意。
@@ -1387,10 +1412,34 @@ app/frontend/css/deep-research.css
 一併把 `openai` 升到 `1.109.1`、`pydantic` 升到 `2.13.4`（openai-agents 的下限），
 `langchain` 系列版本不動。
 
-### 21.5 已知限制（要進 Phase 2 前必須處理）
+### 21.5 計費與配額
 
-- **不計費**：目前不寫 `token_usage_logs`、不檢查月配額，只用「每位使用者同時一個研究」節流。
-  hosted web search 的成本不低，開放前要接上 [`usage_quota`](../app/backend/module/usage_quota.py)。
+深度研究與聊天吃**同一份月配額**，共用 [`usage_quota`](../app/backend/module/usage_quota.py)
+與 [`token_usage`](../app/backend/module/token_usage.py)，串接點集中在
+[`deep_research/usage.py`](../app/backend/deep_research/usage.py)。
+
+| 時機 | 做什麼 |
+|------|--------|
+| `POST /runs` 進來 | `assert_preflight_llm_quota()`：已達上限直接 429，連檔案都不讀 |
+| `POST /runs/{sid}/artifacts` 進來 | 同上；產檔是另一次模型呼叫，獨立擋一次 |
+| 研究結束（含失敗、斷線） | 把 `result.context_wrapper.usage` 記進配額與 `token_usage_logs` |
+| 產檔結束 | 同上，另記一列 |
+
+三個實作上的取捨：
+
+- **用量從 `context_wrapper.usage` 取**，那是 Agents SDK 跨多輪（web search 會用掉數輪）
+  累加後的總和，所以一次研究只結算一列，而不是每輪一列。
+- **中斷也要記帳**。`stream_research()` 在 `finally` 回填用量，API 層則用 `_spawn_cleanup()`
+  把記帳丟成獨立 task —— 前端斷線時 producer 已被 cancel，`finally` 裡直接 `await`
+  會立刻再拋 `CancelledError`，記帳根本不會發生。不記帳的話，中斷就是免費研究的後門。
+- **`chat_id` 留 NULL**。研究不隸屬任何一則對話（欄位本身可為 NULL），改用 `caller` 分辨來源：
+  `deep_research`、`deep_research_report`、`deep_research_deck`，對帳時可直接依此分群。
+
+pre-flight 只擋「開始之前」，不會在跑到一半時中止（與聊天一致）：允許最後一次請求略超上限，
+下一次再擋。單次研究動輒數十萬 token，因此另有「每位使用者同時只能跑一個研究」的併發節流。
+
+### 21.6 已知限制（要進 Phase 2 前必須處理）
+
 - **單 process**：session 在記憶體，多 worker 或多台機器會拿不到彼此的 session，得換 Redis。
 - **前端斷線即中止**：SSE generator 被 cancel 時會連帶取消研究任務（沒有持久化，續跑沒有意義）。
 - **無歷史**：重新整理就沒了，這是刻意的取捨。
@@ -1422,3 +1471,4 @@ app/frontend/css/deep-research.css
 | 2026-06-05 | 初版：彙整多輪討論（完整願景 → MVP 限縮 → S3 儲存決策） |
 | 2026-08-24 | 新增 §21：以 OpenAI Agents SDK 實作不落地的功能驗證版；§1–20 維持為未實作的規劃 |
 | 2026-08-25 | 預設模型改 `gpt-5.6-luna`（實測通過 web/file search）；新增五組視覺主題與內容預算排版；簡報新增 `section` / `compare` 版面 |
+| 2026-08-30 | 接上 token 計費與月配額（§21.5）：研究與產檔各做一次 pre-flight，用量寫進 `token_usage_logs`；模型鎖成 `gpt-5.6-luna` 白名單，前後端一起擋 |
