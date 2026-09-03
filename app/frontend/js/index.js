@@ -950,8 +950,9 @@ function initGeneralModelSelector() {
         btn.setAttribute('aria-expanded', String(willOpen));
     });
     menu.addEventListener('click', (e) => e.stopPropagation());
-
-    loadGeneralChatModels();
+    // 注意：模型清單要打需要認證的 API，不能在這裡載入——
+    // initEventListeners() 跑在身分驗證之前，AT 還沒到手。
+    // 實際載入見 DOMContentLoaded 裡驗證完成後的 Promise.all。
 }
 
 function initChatModeSelector() {
@@ -1070,18 +1071,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     initEventListeners();
     initProjectViewTabs();
 
-    // auth.js 的 DOMContentLoaded 會觸發 tryRefreshToken() 取得 AT；
-    // 這裡再呼叫一次（受 _isRefreshing 並發鎖保護，會共用同一個 Promise，
-    // 不會重複打 /refresh），確保我們在 AT 就緒後才載入專案列表。
-    if (typeof tryRefreshToken === 'function') {
-        await tryRefreshToken();
-    }
+    // Session 由 auth.js 的 authReady 統一初始化，這裡只等它完成，
+    // 確保 AT 就緒後才打需要認證的 API（自行呼叫 tryRefreshToken() 會多消費一枚 RT）。
+    const authOk = await (window.authReady ?? Promise.resolve(true));
+    if (!authOk) return;   // 驗證失敗，auth.js 已負責導向 /login
 
-    // 兩支 list API 沒有相依關係，並行載入
+    // 這幾支 API 彼此沒有相依關係，並行載入
     await Promise.all([
         loadProjectsFromServer(),
         loadRecentChatsFromServer(),
         refreshUserQuotaFromServer(),
+        loadGeneralChatModels(),
     ]);
     updateSendButtonForStreamingState();
 });

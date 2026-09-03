@@ -157,6 +157,14 @@ async function tryRefreshToken() {
 async function authFetch(url, options = {}) {
     let token = getAccessToken();
     if (!token) {
+        // AT 只存在記憶體，頁面剛載入時必然是 null。這裡不能直接導去 /login——
+        // 初始化期間（DOMContentLoaded 早期）呼叫的 authFetch 會在身分驗證
+        // 都還沒開始前就把使用者踢走，連 OAuth 回跳的 /?sso=1 也一起踢。
+        // 正確作法是等 session 初始化（authReady）完成後再判斷。
+        await authReady;
+        token = getAccessToken();
+    }
+    if (!token) {
         window.location.href = '/login';
         return;
     }
@@ -985,13 +993,20 @@ document.addEventListener('keydown', (e) => {
 });
 
 
-// ─── 頁面初始化 ──────────────────────────────────────────────────
+// ─── Session 初始化 ──────────────────────────────────────────────
 // 頁面刷新後記憶體 AT 消失，優先用 RT Cookie 靜默換取新 AT。
 // Google SSO callback 後也走同一條路：後端設 RT Cookie → 302 回前端 →
-// 此處 tryRefreshToken() 取得 AT → 若 localStorage 無 user 則自動 fetch profile。
+// 此處取得 AT → 若 localStorage 無 user 則自動 fetch profile。
+//
+// authReady 在 auth.js 載入當下就啟動（換 token 不需要 DOM），這樣任何在
+// DOMContentLoaded 早期呼叫 authFetch 的模組都有一個明確的對象可以等。
+// 其他模組請 `await window.authReady`，不要自行呼叫 tryRefreshToken()。
+const authReady = tryRefreshToken();
+window.authReady = authReady;
+
 
 window.addEventListener('DOMContentLoaded', async () => {
-    const ok = await tryRefreshToken();
+    const ok = await authReady;
     if (!ok) {
         localStorage.removeItem('user');
         window.location.href = '/login';
