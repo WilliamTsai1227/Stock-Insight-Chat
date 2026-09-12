@@ -52,6 +52,11 @@ from langgraph.graph import StateGraph, END
 # 導入我們之前寫好的工具函式
 from app.backend.tools.news import search_news
 from app.backend.tools.ai_analysis import search_ai_analysis, search_recommendations
+from app.backend.tools.mcp_client import (
+    MCPToolError,
+    is_mcp_tool_name,
+    mcp_client_manager,
+)
 
 load_dotenv()
 
@@ -119,6 +124,11 @@ def _format_retrieved_data_for_analyst(
                 lines.append(f"時間: {it['publishAt']}")
             if it.get("sentiment_label"):
                 lines.append(f"情緒: {it['sentiment_label']}")
+        elif st == "mcp":
+            if it.get("server"):
+                lines.append(f"MCP Server: {it['server']}")
+            if it.get("remote_tool"):
+                lines.append(f"MCP Tool: {it['remote_tool']}")
 
         lines.append("")
         lines.append(body if body else "（無內文）")
@@ -197,7 +207,8 @@ class AgentState(TypedDict):
     # 儲存檢索到的原始結構化數據，供 API 讀取 Metadata
     retrieved_data: Annotated[List[Dict[str, Any]], lambda x, y: x + y]
     # 前端指定的可用工具列表 (可選)
-    enabled_tools: List[str]
+    # None = Smart Mode（全部可用工具）；list = 使用者手動白名單。
+    enabled_tools: Optional[List[str]]
     # 本輪（單次使用者提問）已呼叫 tavily_global_search 的累計次數
     web_search_calls: int
 
@@ -573,10 +584,6 @@ def _analyst_turn_messages(messages: List[BaseMessage]) -> List[BaseMessage]:
     return out
 
 
-def _state_had_any_tool_messages(messages: List[BaseMessage]) -> bool:
-    return any(isinstance(m, ToolMessage) for m in messages)
-
-
 # --- 3. 定義節點 (Nodes) ---
 
 async def call_router(state: AgentState):
@@ -586,28 +593,50 @@ async def call_router(state: AgentState):
     current_now = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
     
     # 取得前端指定的工具清單
-    enabled = state.get("enabled_tools", [])
-    # 這裡列出我們系統中「真正實作」的工具名稱
-    all_tool_names = ["search_stock_news", "search_market_ai_analysis", "get_market_recommendations", "tavily_global_search"]
+    enabled = state.get("enabled_tools")
+    # 外部 MCP 工具會先轉成 OpenAI function schema，再與本機 LangChain tools
+    # 一起交給既有 ChatOpenAI.bind_tools；發現失敗的 server 不影響本機工具。
+    mcp_openai_tools = await mcp_client_manager.openai_tools()
+    mcp_tool_names = [
+        item["function"]["name"]
+        for item in mcp_openai_tools
+        if isinstance(item, dict) and isinstance(item.get("function"), dict)
+    ]
+    # 這裡列出系統中真正可執行的工具名稱（本機 + 已發現的 MCP）。
+    local_tool_names = [
+        "search_stock_news",
+        "search_market_ai_analysis",
+        "get_market_recommendations",
+        "tavily_global_search",
+    ]
+    all_tool_names = local_tool_names + mcp_tool_names
     
     # 邏輯：過濾掉前端傳入但不認識的名稱，確保 AI 不會試圖呼叫不存在的工具
-    valid_enabled = [t for t in enabled if t in all_tool_names]
+    valid_enabled = [t for t in enabled if t in all_tool_names] if enabled is not None else []
     
     # 決定最終要告訴 AI 的「可用工具箱」
-    # 如果前端傳入的清單有合法項，就以該清單為主；否則全開
-    target_tools = valid_enabled if valid_enabled else all_tool_names
+    # None 代表 Smart Mode；手動模式即使清單為空或工具已下線，也必須維持
+    # 「不開放任何工具」，不可意外退回全開。
+    target_tools = all_tool_names if enabled is None else valid_enabled
     
     system_prompt = build_router_system_prompt(current_now, target_tools)
     
     # 核心修正：動態挑選工具物件實體，進行硬性綁定
-    # 從 tools 全域變數中，找出名稱符合 target_tools 的物件
+    # 從本機工具及 MCP function schemas 中挑出本輪允許的工具。
     current_tools_to_bind = [t for t in tools if t.name in target_tools]
+    current_tools_to_bind.extend(
+        item for item in mcp_openai_tools
+        if item["function"]["name"] in target_tools
+    )
     
     # 萃取目前的 trace 紀錄，計算已經走過幾次 router 節點
     trace = state.get("trace", {})
     router_cycles = sum(1 for step in trace.get("steps", []) if step.get("node") == "router")
 
-    if router_cycles >= ROUTER_MAX_CYCLES:
+    if not current_tools_to_bind:
+        system_prompt += "\n\n[系統通知] 本輪沒有開放任何工具。請停止檢索並交給 Analyst 說明資料限制。"
+        dynamic_router = router_model_base
+    elif router_cycles >= ROUTER_MAX_CYCLES:
         # 達到上限：清空可用工具，並在 prompt 加上強制終止指令
         current_tools_to_bind = []
         system_prompt += f"\n\n[系統通知 - 極重要] 檢索次數已達上限 ({ROUTER_MAX_CYCLES}次)。請立刻根據你目前手邊已獲取的所有資料進行總結與回覆。"
@@ -674,9 +703,9 @@ async def call_analyst(state: AgentState):
         tail.append(SystemMessage(
             content="【完整參考資料】（供撰寫報告，以下為向量庫取回之完整正文，未套用 Router 側單片段字數截斷）\n\n" + full_ref
         ))
-    elif _state_had_any_tool_messages(messages):
+    else:
         tail.append(SystemMessage(
-            content="【檢索狀態】本輪未寫入可引用之完整參考段落（資料庫可能無命中或結果未進入向量正文）。請依對話誠實說明資料缺口，切勿臆撰具體數據、股價或標的細節。"
+            content="【檢索狀態】本輪沒有可引用的完整參考段落（可能未開放工具、外部 MCP 未連線、資料庫無命中，或結果未進入參考正文）。請依對話誠實說明資料缺口，切勿臆撰具體數據、股價或標的細節。"
         ))
     chat_turns = _analyst_turn_messages(messages)
     full_messages = [SystemMessage(content=analyst_prompt)] + chat_turns + tail
@@ -835,6 +864,23 @@ async def call_tools(state: AgentState, *, retrieval_top_k: Optional[int] = None
                     "publishAt": r.get("published_date"),
                     "score": r.get("score", 0),
                 })
+
+        elif is_mcp_tool_name(tool_name):
+            try:
+                mcp_result = await mcp_client_manager.call_tool(tool_name, args)
+                ai_content = mcp_result.content
+                if mcp_result.is_error:
+                    ai_content = f"MCP 工具回報錯誤：{ai_content}"
+                else:
+                    retrieved.append({
+                        "source_tool": "mcp",
+                        "title": f"{mcp_result.server} / {mcp_result.remote_name}",
+                        "server": mcp_result.server,
+                        "remote_tool": mcp_result.remote_name,
+                        "content": mcp_result.content,
+                    })
+            except MCPToolError as exc:
+                ai_content = f"MCP 工具執行失敗：{exc}"
 
         else:
             ai_content = f"錯誤：找不到工具 {tool_name}"

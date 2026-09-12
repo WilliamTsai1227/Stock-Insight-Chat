@@ -875,6 +875,56 @@ async function loadGeneralChatModels() {
     }
 }
 
+/** 由後端安全目錄載入外部 MCP 工具；回應不包含 server URL 或憑證。 */
+async function loadMcpTools() {
+    const root = document.getElementById('mcp-tools');
+    if (!root) return;
+    try {
+        const res = await authFetch(`${state.apiBase}/mcp/servers`);
+        if (!res || !res.ok) return;
+        const json = await res.json();
+        const servers = (json.data && json.data.servers) || [];
+        const tools = servers
+            .filter((server) => server.connected)
+            .flatMap((server) => (server.tools || []).map((tool) => ({ ...tool, server: server.name })));
+
+        root.textContent = '';
+        if (!tools.length) {
+            root.classList.add('hidden');
+            return;
+        }
+
+        const title = document.createElement('span');
+        title.className = 'mcp-tool-group-title';
+        title.textContent = '外部 MCP 工具';
+        root.appendChild(title);
+
+        tools.forEach((tool) => {
+            TOOL_DISPLAY_NAMES[tool.id] = `${tool.server} · ${tool.name}`;
+            const label = document.createElement('label');
+            if (tool.description) label.title = tool.description;
+
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.className = 'tool-check';
+            checkbox.value = tool.id;
+
+            const text = document.createElement('span');
+            text.textContent = tool.name;
+            const server = document.createElement('span');
+            server.className = 'mcp-tool-server';
+            server.textContent = `(${tool.server})`;
+
+            label.append(checkbox, text, server);
+            root.appendChild(label);
+        });
+        root.classList.remove('hidden');
+    } catch (err) {
+        root.classList.add('hidden');
+        console.error('[MCP] 工具清單載入失敗：', err);
+    }
+}
+
 function renderGeneralModelMenu() {
     const menu = document.getElementById('general-model-menu');
     if (!menu) return;
@@ -1082,6 +1132,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         loadRecentChatsFromServer(),
         refreshUserQuotaFromServer(),
         loadGeneralChatModels(),
+        loadMcpTools(),
     ]);
     updateSendButtonForStreamingState();
 });
@@ -3254,7 +3305,8 @@ async function sendMessage() {
             body: JSON.stringify({
                 query,
                 chat_id: streamTargetChatId,   // 與發送瞬間鎖定，勿用 state.currentChatId（使用者可能 await 時已換對話）
-                agent_config: { enabled_tools },
+                // null = Smart Mode；array（即使為空）= 嚴格手動白名單。
+                agent_config: { enabled_tools: isAuto ? null : enabled_tools },
                 chat_mode: chatMode,
                 response_mode: chatResponseMode === 'flash' ? 'flash' : 'thinking',
                 // 只有一般對話吃這個欄位；清單沒載到時不帶，後端用預設模型

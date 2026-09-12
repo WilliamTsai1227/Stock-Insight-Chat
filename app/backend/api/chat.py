@@ -74,11 +74,12 @@ _STOCK_DISCLAIMER = (
 
 _ALLOWED_TOOLS: frozenset[str] = frozenset({
     "search_stock_news",
-    "search_ai_analysis",
-    "search_supply_chain",
+    "search_market_ai_analysis",
+    "get_market_recommendations",
     "tavily_global_search",
 })
-_MAX_ENABLED_TOOLS = 10
+_MCP_TOOL_ID_PATTERN = re.compile(r"^mcp__[A-Za-z0-9_-]{1,59}$")
+_MAX_ENABLED_TOOLS = 32
 
 
 class AgentConfig(BaseModel):
@@ -92,8 +93,13 @@ class AgentConfig(BaseModel):
         # 長度上限
         if len(v) > _MAX_ENABLED_TOOLS:
             v = v[:_MAX_ENABLED_TOOLS]
-        # 白名單過濾（只保留合法工具名）
-        return [t for t in v if isinstance(t, str) and t in _ALLOWED_TOOLS]
+        # 本機工具走固定白名單；MCP id 只先做格式驗證，Router 還會依後端
+        # 實際發現的工具清單做第二層過濾，偽造名稱不會被綁定或執行。
+        return [
+            t for t in v
+            if isinstance(t, str)
+            and (t in _ALLOWED_TOOLS or _MCP_TOOL_ID_PATTERN.fullmatch(t))
+        ]
 
 
 # 使用者輸入 query 的最大字元數（防止 token flooding）
@@ -1168,8 +1174,8 @@ async def get_ai_response(
 
     # 4. SSE 必要參數
     chat_id_str = str(request.chat_id)
-    enabled_tools: List[str] = []
-    if request.agent_config and request.agent_config.enabled_tools:
+    enabled_tools: Optional[List[str]] = None
+    if request.agent_config is not None:
         enabled_tools = request.agent_config.enabled_tools
 
     initial_state = {
