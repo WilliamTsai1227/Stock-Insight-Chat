@@ -3363,3 +3363,37 @@ body.light-theme .pv-file-status {
     stroke: currentColor;
     fill: none;
 }
+
+/* ============================================================
+   PWA / iOS 安全區（viewport-fit=cover）
+   index.html 的 viewport 加了 viewport-fit=cover，畫面會鋪滿到瀏海與
+   Home Indicator 底下，env(safe-area-inset-*) 才會回傳非 0。以下補上
+   上面 RWD 區塊沒涵蓋到的邊界；非 iOS / 無瀏海裝置 env() 為 0，
+   max() 會退回原本數值，等於沒改。
+   ============================================================ */
+@media (max-width: 1024px) {
+    /* 橫向時瀏海在左右側，標題列與訊息區要往內縮 */
+    .chat-header {
+        padding-top: max(0.85rem, env(safe-area-inset-top, 0px));
+        padding-left: max(1rem, env(safe-area-inset-left, 0px));
+        padding-right: max(1rem, env(safe-area-inset-right, 0px));
+    }
+
+    .chat-messages {
+        padding-left: max(1rem, env(safe-area-inset-left, 0px));
+        padding-right: max(1rem, env(safe-area-inset-right, 0px));
+    }
+
+    /* 抽屜側欄貼齊左緣與底部，避免最後一項被 Home Indicator 蓋住 */
+    .sidebar {
+        padding-left: max(0.75rem, env(safe-area-inset-left, 0px));
+        padding-bottom: max(1rem, env(safe-area-inset-bottom, 0px));
+    }
+}
+
+@media (max-width: 480px) {
+    .chat-messages {
+        padding-left: max(0.85rem, env(safe-area-inset-left, 0px));
+        padding-right: max(0.85rem, env(safe-area-inset-right, 0px));
+    }
+}

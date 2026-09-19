@@ -2,8 +2,19 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0, viewport-fit=cover">
     <title>Insight | AI Workspace</title>
+    <!-- PWA：可安裝、iOS 加到主畫面後以獨立視窗（standalone）開啟 -->
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#0d0d0d">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <!-- default：內容排在狀態列下方，狀態列底色跟著 theme-color 走（淺色主題才不會頂一條黑） -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="Insight">
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16.png">
     <script>
         // 快速跳轉：無登入快取且非 OAuth 回跳（?sso=1）時直接去登入頁，避免主頁閃現。
         // 真正的登入驗證仍由 auth.js 的 tryRefreshToken() 把關。
@@ -615,6 +626,7 @@
             window.STOCK_INSIGHT_API_BASE = 'https://api.insight-chat.xyz/api';
         }
     </script>
+    <script src="/js/pwa.js"></script>
     <script src="/js/api-config.js"></script>
     <script src="/js/auth.js"></script>
     <script src="/js/index.js"></script>

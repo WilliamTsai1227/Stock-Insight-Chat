@@ -8,6 +8,10 @@ COPY deploy/nginx/default.conf /etc/nginx/conf.d/default.conf
 COPY app/frontend/css /usr/share/nginx/html/css
 COPY app/frontend/js /usr/share/nginx/html/js
 COPY app/frontend/*.html /usr/share/nginx/html/
+# PWA：manifest／service worker／圖示都必須位於站台根目錄（sw.js 的 scope 是 /）
+COPY app/frontend/icons /usr/share/nginx/html/icons
+COPY app/frontend/manifest.json /usr/share/nginx/html/
+COPY app/frontend/sw.js /usr/share/nginx/html/
 
 # 開放 Nginx 預設的 80 端口
 EXPOSE 80

@@ -16,12 +16,17 @@
 app/frontend/
 ├── index.html          ← 主應用（對話、專案、探索、回饋）
 ├── login.html          ← 登入頁（Google SSO + 法遵條款）
-├── css/index.css, css/login.css
+├── manifest.json       ← PWA manifest（見 §8）── 必須位於站台根目錄
+├── sw.js               ← Service Worker（scope `/`）── 必須位於站台根目錄
+├── icons/              ← PWA / apple-touch-icon / favicon（PNG）
+├── css/index.css, css/login.css, css/deep-research.css
 └── js/
     ├── api-config.js       ← API base URL 解析（見 §5）
+    ├── pwa.js              ← SW 註冊、theme-color 同步、iOS 加入主畫面提示（見 §8）
     ├── auth.js             ← AT 記憶體保存、自動 refresh
     ├── index.js            ← 主應用邏輯（SSE、對話、專案、回饋）
     ├── login.js
+    ├── deep-research.js    ← 深度研究模組
     └── legal-content.js    ← 服務條款／隱私權內容
 ```
 
@@ -89,3 +94,46 @@ window.API_BACKEND_PORT         // 本機 dev 的 backend port（預設 8000）
 
 *   **Stock Ticker Highlighting**: 自動偵測內容中的 4 位數字股票代碼，包裝成 `.stock-ticker` 高亮標籤。
 *   **並行對話 / Parked staging**: 對話離開視圖時封存其 DOM，上限 `MAX_PARKED_STAGING_CHATS`（依 Map 插入序 FIFO 剔除最舊，並 `abort` 對應 fetch）；刪除專案成功後對其底下 chat id 呼叫 `evictParkedPane`，避免 CASCADE 後殘留。細節見 [`todo.md`](./todo.md)。
+
+## 8. PWA（加到主畫面 / 獨立視窗）
+
+網站可安裝成 App：iOS Safari「分享 → 加入主畫面」後，從圖示點開會是**獨立視窗**（沒有網址列與分頁列），Android / 桌面 Chrome 則可直接安裝。
+
+### 8.1 組成
+
+| 檔案 | 作用 |
+| --- | --- |
+| `manifest.json` | `display: standalone`、`start_url: /`、`scope: /`、名稱、主題色、4 個 icon |
+| `sw.js` | Service Worker。導覽用 network-first、靜態資源用 stale-while-revalidate；跨網域（CDN、`api.*`）與 `/api/`、`/explore/`、SSE 一律不攔 |
+| `js/pwa.js` | 註冊 SW、同步 `<meta name="theme-color">`、iOS「加入主畫面」提示 |
+| `icons/*.png` | `apple-touch-icon`(180，不透明全出血)、192/512(`any`)、512(`maskable`)、favicon 16/32 |
+
+圖示由 `deploy/generate_pwa_icons.py` 產生（已 commit，只有要改配色或造型時才需重跑）。
+
+SW 的目的是**啟動變快 + 獨立視窗外殼**，不是離線可用：marked / DOMPurify / lucide / highlight.js 都在第三方 CDN（跨網域，SW 不攔），對話本身也一定要連後端 API。斷網時只會拿到快取的頁面外殼。
+
+`manifest.json` 與 `sw.js` **必須放在站台根目錄**：SW 的控制範圍不能超出自己所在的路徑，放進子目錄就管不到 `/`。
+
+### 8.2 iOS 相關細節
+
+*   `apple-mobile-web-app-capable: yes` — 舊版 iOS 靠這個才會用獨立視窗開啟。
+*   `apple-mobile-web-app-status-bar-style: default` — 內容排在狀態列**下方**，狀態列底色跟著 `theme-color`。刻意不用 `black-translucent`：那會強制白色狀態列文字，淺色主題會看不見。
+*   `theme-color` 由 `pwa.js` 的 `syncPwaThemeColor()` 隨深／淺色切換更新，`index.js` 與 `login.js` 的 `applyUiTheme()` 都會呼叫它。
+*   viewport 加了 `viewport-fit=cover`，`env(safe-area-inset-*)` 才會回傳非 0；CSS 一律用 `max(原值, env(...))`，在沒有瀏海的裝置上等於維持原樣。
+*   從主畫面開啟時 `<html>` 會掛上 `.pwa-standalone`，需要針對「像 App」情境調整版面時可以用。
+*   **儲存空間是獨立的**：主畫面 App 與 Safari 不共用 Cookie／localStorage，安裝後需要重新用 Google 登入一次。
+
+### 8.3 「加入主畫面」提示
+
+iOS 沒有安裝提示 API，只能自己講。`pwa.js` 會在**同時**滿足下列條件時，於登入頁底部顯示一則可關閉的提示：
+
+*   `<body>` 帶 `data-pwa-install-hint="on"`（目前只有 `login.html` 有）
+*   iOS Safari（非 Chrome/Firefox iOS，步驟不同）
+*   尚未從主畫面開啟
+*   使用者沒按過關閉（記在 `localStorage.insightA2hsHintDismissed`）
+
+要讓主應用也顯示，把同一個 `data-pwa-install-hint="on"` 加到 `index.html` 的 `<body>` 即可。
+
+### 8.4 改前端後必做
+
+`sw.js` 的 `VERSION` 常數要加一，否則舊的 `insight-static-*` 快取不會淘汰，使用者可能拿到舊的 css/js。導覽（HTML）走 network-first，所以頁面本身不會卡舊版。

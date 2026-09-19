@@ -92,16 +92,37 @@ aws s3 sync app/frontend/ s3://<你的前端bucket>/ \
 aws s3 cp app/frontend/js/index.js s3://<你的前端bucket>/js/index.js
 ```
 
-### 2.2 清 Cloudflare 快取（必做，否則使用者拿到舊檔）
+### 2.2 PWA 檔案的 Cache-Control（第一次部署要設，之後不用再動）
+
+`sw.js` 與 `manifest.json` 若被 CDN 長時間快取，使用者會卡在舊版 Service Worker，
+前端更新要等快取過期才生效。上傳時單獨覆寫這兩個檔案的 header：
+
+```bash
+aws s3 cp app/frontend/sw.js s3://<你的前端bucket>/sw.js \
+  --cache-control "no-cache, no-store, must-revalidate" --content-type "text/javascript"
+
+aws s3 cp app/frontend/manifest.json s3://<你的前端bucket>/manifest.json \
+  --cache-control "no-cache" --content-type "application/json"
+```
+
+Cloudflare 端另外加一條 Cache Rule：`URI Path equals /sw.js` → **Bypass cache**。
+
+> 只要改了 `app/frontend/` 底下任何 css/js，就要把 `sw.js` 裡的 `VERSION` 加一
+> （`v1` → `v2`），舊的 `insight-static-*` 快取才會被淘汰。詳見
+> [`frontend_spec.md` §8](./frontend_spec.md)。
+
+### 2.3 清 Cloudflare 快取（必做，否則使用者拿到舊檔）
 
 Cloudflare Dashboard → 該網域 → Caching → **Purge Everything**（或針對改動的檔案 Purge by URL）。
 
-### 2.3 驗證
+### 2.4 驗證
 
 - 無痕視窗開正式站，DevTools → Network 確認 js/css 是新版（比對檔案內容或 Response 大小）。
 - 跑一輪登入 → 對話 → 探索。
+- PWA：DevTools → Application → Manifest 無錯誤、Service Workers 顯示新版 `activated`。
+  改版後若行為怪異，先 **Unregister service worker + Clear storage** 再重載。
 
-### 2.4 回滾
+### 2.5 回滾
 
 前端沒有 tag 機制，回滾 = 用 git 切回上一版重新上傳：
 

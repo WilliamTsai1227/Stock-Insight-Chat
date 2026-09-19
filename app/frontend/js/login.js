@@ -15,6 +15,10 @@ function applyUiTheme(theme) {
     try {
         localStorage.setItem(THEME_STORAGE_KEY, theme);
     } catch (_) {}
+
+    // iOS 獨立視窗的狀態列底色跟著主題走（pwa.js 提供）
+    if (typeof window.syncPwaThemeColor === 'function') window.syncPwaThemeColor(theme);
+
     requestAnimationFrame(() => {
         document.body.classList.remove('theme-switching');
     });
