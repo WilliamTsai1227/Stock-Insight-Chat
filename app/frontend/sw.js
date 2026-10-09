@@ -8,7 +8,7 @@
  *
  * 改動前端檔案後請把 VERSION 加一，否則舊 cache 不會淘汰。
  */
-const VERSION = 'v2';
+const VERSION = 'v3';
 const STATIC_CACHE = `insight-static-${VERSION}`;
 const PAGE_CACHE = `insight-pages-${VERSION}`;
 const CURRENT_CACHES = [STATIC_CACHE, PAGE_CACHE];

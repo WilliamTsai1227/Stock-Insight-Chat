@@ -11,6 +11,9 @@
  * 後端 notes.canvas_* 欄位已預留，長成白板時不需要再 migration。
  */
 
+/** 與後端 notes.py 的 _NOTE_CONTENT_MAX 一致 */
+const NOTE_CONTENT_MAX = 20000;
+
 const notesState = {
     pages: [],
     currentPageId: null,
@@ -19,6 +22,8 @@ const notesState = {
     /** @type {Set<string>} 已勾選的 message id */
     selected: new Set(),
     loaded: false,
+    /** @type {object|null} 編輯中的筆記；null = 新增模式 */
+    editing: null,
 };
 
 const noteEl = (id) => document.getElementById(id);
@@ -36,6 +41,7 @@ function showNotesView() {
     if (typeof hideExploreView === 'function') hideExploreView();
     if (typeof hideDeepResearchView === 'function') hideDeepResearchView();
     exitNoteSelectMode();
+    closeNoteEditor();
 
     noteEl('chat-messages').style.display = 'none';
     noteEl('project-view').style.display = 'none';
@@ -111,6 +117,9 @@ function renderNotePages() {
 
         li.append(name, count);
         li.addEventListener('click', () => {
+            if (page.id === notesState.currentPageId) return;
+            // 換頁時關掉編輯器，否則未儲存的內容會被寫進新的一頁
+            closeNoteEditor();
             notesState.currentPageId = page.id;
             renderNotePages();
             loadNotesOfPage(page.id);
@@ -230,6 +239,17 @@ function renderNotes() {
         const title = document.createElement('h4');
         title.textContent = note.title;
 
+        const edit = document.createElement('button');
+        edit.type = 'button';
+        edit.className = 'notes-icon-btn';
+        edit.title = '編輯筆記';
+        edit.setAttribute('aria-label', '編輯筆記');
+        edit.innerHTML = '<i data-lucide="pencil"></i>';
+        edit.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openNoteEditor(note);
+        });
+
         const del = document.createElement('button');
         del.type = 'button';
         del.className = 'notes-icon-btn danger';
@@ -241,7 +261,10 @@ function renderNotes() {
             deleteNote(note);
         });
 
-        head.append(title, del);
+        const actions = document.createElement('div');
+        actions.className = 'note-card-actions';
+        actions.append(edit, del);
+        head.append(title, actions);
 
         const body = document.createElement('div');
         body.className = 'note-card-body';
@@ -255,13 +278,101 @@ function renderNotes() {
         const foot = document.createElement('footer');
         foot.className = 'note-card-foot';
         const when = note.created_at ? new Date(note.created_at).toLocaleString('zh-TW') : '';
-        foot.textContent = `${when}　·　整理自 ${note.source_message_ids.length} 則訊息`;
+        // 手動建立的筆記沒有來源訊息，不顯示「整理自 0 則」這種無意義的字樣
+        const srcCount = (note.source_message_ids || []).length;
+        foot.textContent = srcCount
+            ? `${when}　·　整理自 ${srcCount} 則訊息`
+            : when;
 
         card.append(head, body, foot);
         list.appendChild(card);
     });
 
     if (typeof lucide !== 'undefined') lucide.createIcons();
+}
+
+// ============================================================
+// 手動新增／編輯筆記（不經過 LLM，不計費）
+// ============================================================
+
+/** note 省略 = 新增模式；帶入既有筆記 = 編輯模式 */
+function openNoteEditor(note) {
+    if (!notesState.currentPageId) {
+        showToast('請先建立或選擇一個筆記頁', 'info');
+        return;
+    }
+    notesState.editing = note || null;
+
+    const box = noteEl('note-editor');
+    const titleEl = noteEl('note-editor-title');
+    const contentEl = noteEl('note-editor-content');
+    titleEl.value = note ? note.title : '';
+    contentEl.value = note ? note.content : '';
+
+    box.classList.remove('hidden');
+    noteEl('note-editor-save').textContent = note ? '更新' : '儲存';
+    updateNoteEditorCount();
+    contentEl.focus();
+}
+
+function closeNoteEditor() {
+    notesState.editing = null;
+    const box = noteEl('note-editor');
+    if (box) box.classList.add('hidden');
+    noteEl('note-editor-title').value = '';
+    noteEl('note-editor-content').value = '';
+}
+
+function updateNoteEditorCount() {
+    const len = noteEl('note-editor-content').value.length;
+    const label = noteEl('note-editor-count');
+    label.textContent = `${len} / ${NOTE_CONTENT_MAX}`;
+    label.classList.toggle('over', len > NOTE_CONTENT_MAX);
+    noteEl('note-editor-save').disabled = len === 0 || len > NOTE_CONTENT_MAX;
+}
+
+async function saveNoteEditor() {
+    const title = noteEl('note-editor-title').value.trim();
+    const content = noteEl('note-editor-content').value;
+    if (!content.trim()) return;
+
+    const editing = notesState.editing;
+    const btn = noteEl('note-editor-save');
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '儲存中…';
+
+    try {
+        const res = editing
+            ? await authFetch(`${state.apiBase}/notes/${editing.id}`, {
+                method: 'PATCH',
+                // 標題留空時不覆寫原標題，所以帶 undefined 而非空字串
+                body: JSON.stringify({ title: title || undefined, content }),
+            })
+            : await authFetch(`${state.apiBase}/notes`, {
+                method: 'POST',
+                body: JSON.stringify({
+                    page_id: notesState.currentPageId,
+                    title: title || undefined,
+                    content,
+                }),
+            });
+        if (!res) return;
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            showToast(err.detail || `儲存失敗（HTTP ${res.status}）`, 'error');
+            return;
+        }
+        closeNoteEditor();
+        await loadNotePages(notesState.currentPageId);
+        showToast(editing ? '已更新' : '已新增筆記', 'success');
+    } catch (err) {
+        console.error('[NOTES] 儲存失敗：', err);
+        showToast('儲存失敗，請稍後再試', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+    }
 }
 
 async function deleteNote(note) {
@@ -421,10 +532,10 @@ async function confirmGenerateNote() {
     try {
         const res = await authFetch(`${state.apiBase}/notes/generate`, {
             method: 'POST',
+            // 不帶 page_id：後端會對應到這則對話專屬的筆記頁（沒有就新建一頁）
             body: JSON.stringify({
                 chat_id: state.currentChatId,
                 message_ids: ordered,
-                page_id: notesState.currentPageId || undefined,
             }),
         });
         if (!res) return;
@@ -469,12 +580,19 @@ document.addEventListener('DOMContentLoaded', () => {
         if (el) el.addEventListener('click', fn);
     };
     bind('note-page-add', createNotePage);
+    bind('note-add', () => openNoteEditor(null));
+    bind('note-editor-cancel', closeNoteEditor);
+    bind('note-editor-save', saveNoteEditor);
+    const editorContent = noteEl('note-editor-content');
+    if (editorContent) editorContent.addEventListener('input', updateNoteEditorCount);
     bind('note-page-rename', renameNotePage);
     bind('note-page-delete', deleteNotePage);
     bind('note-select-cancel', exitNoteSelectMode);
     bind('note-select-confirm', confirmGenerateNote);
 
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && notesState.selecting) exitNoteSelectMode();
+        if (e.key !== 'Escape') return;
+        if (notesState.selecting) exitNoteSelectMode();
+        else if (!noteEl('note-editor').classList.contains('hidden')) closeNoteEditor();
     });
 });

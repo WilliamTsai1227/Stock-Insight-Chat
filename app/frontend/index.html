@@ -309,10 +309,27 @@
                     <div class="notes-main-head">
                         <h3 id="note-page-title">筆記</h3>
                         <div class="notes-main-actions">
+                            <button type="button" id="note-add" class="notes-primary-btn">新增筆記</button>
                             <button type="button" id="note-page-rename" class="notes-text-btn">重新命名</button>
                             <button type="button" id="note-page-delete" class="notes-text-btn danger">刪除此頁</button>
                         </div>
                     </div>
+
+                    <!-- 手動新增／編輯筆記的編輯器（不經過 LLM，不計費） -->
+                    <div id="note-editor" class="note-editor hidden">
+                        <input type="text" id="note-editor-title" class="note-editor-title"
+                               placeholder="標題（留空會取內文第一行）" maxlength="200">
+                        <textarea id="note-editor-content" class="note-editor-content"
+                                  placeholder="貼上或輸入內容，支援 Markdown…" rows="8" maxlength="20000"></textarea>
+                        <div class="note-editor-foot">
+                            <span id="note-editor-count" class="note-editor-count">0 / 20000</span>
+                            <div class="note-editor-actions">
+                                <button type="button" id="note-editor-cancel" class="notes-text-btn">取消</button>
+                                <button type="button" id="note-editor-save" class="notes-primary-btn">儲存</button>
+                            </div>
+                        </div>
+                    </div>
+
                     <div id="note-list" class="notes-list"></div>
                     <p id="notes-empty" class="notes-empty hidden">
                         這一頁還沒有筆記。回到對話，點右上角的

@@ -333,3 +333,64 @@
                  3rem max(1rem, env(safe-area-inset-right, 0px));
     }
 }
+
+/* ── 手動新增／編輯筆記的編輯器 ───────────────────── */
+
+.note-editor {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    margin: 1.2rem 1.75rem 0;
+    padding: 1rem 1.1rem;
+    border: 1px solid var(--accent);
+    border-radius: 14px;
+    background: var(--panel-body-bg);
+}
+
+.note-editor.hidden { display: none; }
+
+.note-editor-title,
+.note-editor-content {
+    width: 100%;
+    padding: 0.55rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: var(--modal-input-bg);
+    color: var(--text-main);
+    font-family: inherit;
+    font-size: 0.88rem;
+}
+
+.note-editor-title:focus,
+.note-editor-content:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.note-editor-content {
+    min-height: 150px;
+    line-height: 1.7;
+    resize: vertical;
+}
+
+.note-editor-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.note-editor-count {
+    color: var(--text-dim);
+    font-size: 0.72rem;
+}
+
+.note-editor-count.over { color: #ff6b6b; }
+
+.note-editor-actions { display: flex; gap: 0.45rem; }
+
+.note-card-actions { display: flex; flex: none; gap: 0.15rem; }
+
+@media (max-width: 1024px) {
+    .note-editor { margin: 1rem 1rem 0; }
+}

@@ -11,7 +11,7 @@
 
 | 表 | 說明 |
 | --- | --- |
-| `note_pages` | 筆記頁。一個使用者可有多頁，每頁是一塊獨立空間 |
+| `note_pages` | 筆記頁。一個使用者可有多頁；`source_chat_id` 非 NULL 代表這頁對應某則對話 |
 | `notes` | 單則筆記。`canvas_x/y/w/h` 保留給白板階段，本階段全為 NULL |
 
 幾個刻意的設計：
@@ -36,6 +36,7 @@
 | PATCH | `/api/notes/pages/{id}` | 重新命名 |
 | DELETE | `/api/notes/pages/{id}` | 刪除（底下筆記 CASCADE） |
 | GET | `/api/notes?page_id=` | 列出筆記 |
+| POST | `/api/notes` | **手動建立筆記**（使用者自己貼內容，不經 LLM、不計費） |
 | POST | `/api/notes/generate` | **把選取的訊息整理成筆記** |
 | PATCH | `/api/notes/{id}` | 編輯標題／內容，或搬到另一頁 |
 | DELETE | `/api/notes/{id}` | 刪除筆記 |
@@ -43,12 +44,23 @@
 頁面標題套用與 `project.py` 相同的白名單正則；筆記**內容**不套
 （它是 LLM 產生的 Markdown，由前端既有的消毒渲染路徑處理）。
 
-### 2.1 `/api/notes/generate` 的安全要點
+### 2.1 一則對話 = 一個筆記頁
+
+`/api/notes/generate` 不帶 `page_id` 時，會找出該對話對應的筆記頁；沒有就新建一頁，
+**頁名取用對話標題**（對話還沒標題時退而用 LLM 產生的筆記標題）。
+
+同一則對話再整理一次會累加到同一頁，不會每次長出新頁 ——
+由 `ux_note_pages_user_chat` 這個部分唯一索引保證（手動建立的頁 `source_chat_id`
+為 NULL，不受限制）。
+
+要指定頁時仍可帶 `page_id`，會跳過上述邏輯。
+
+### 2.2 `/api/notes/generate` 的安全要點
 
 查詢來源訊息時同時限定 `chat_id` 與該 chat 的擁有者 —— 只比對 `message_id`
 的話，帶別人的 id 就能把他人對話內容撈出來。
 
-### 2.2 計費
+### 2.3 計費
 
 與 `/chat/messages`、深度研究一致：發 LLM 前 `assert_preflight_llm_quota()`
 （超額回 429），結束後 `record_token_usage(caller="notes_generate")`。
@@ -64,7 +76,14 @@ usage chunk 取得 —— 走串流才接得上既有計費。筆記不需即時
 | `js/notes.js` | 視圖切換、筆記頁／筆記 CRUD、對話選取模式 |
 | `css/notes.css` | 只用 `index.css` 的設計 token，深淺主題自動跟著切換 |
 
-### 3.1 選取模式
+### 3.1 手動新增／編輯
+
+筆記頁右上角「新增筆記」開啟編輯器（標題 + 內文），標題留空會取內文第一行。
+每張筆記卡片的 ✎ 可以編輯既有內容，`Esc` 關閉編輯器。
+
+換頁時會關閉編輯器 —— 否則未儲存的內容會被寫進新選的那一頁。
+
+### 3.2 選取模式
 
 對話標題列的 ✎ 按鈕進入選取模式：每則訊息右側出現勾選框，勾完按浮動動作列的
 「整理成筆記」。`Esc` 或切換視圖都會退出。
@@ -72,7 +91,7 @@ usage chunk 取得 —— 走串流才接得上既有計費。筆記不需即時
 浮動動作列掛在 `.input-container` 底下（它已是 `position: relative`），
 而不是讓 `.main-content` 變成定位基準 —— 後者會影響其他既有的 absolute 元素。
 
-### 3.2 訊息 id 怎麼來
+### 3.3 訊息 id 怎麼來
 
 後端的 SSE `done` 事件在 assistant 訊息寫進 DB **之前**就送出，所以剛對話完的
 氣泡沒有 `data-message-id`。`syncMessageIds()` 在進入選取模式時向

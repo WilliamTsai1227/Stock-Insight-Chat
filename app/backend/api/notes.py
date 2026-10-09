@@ -43,6 +43,7 @@ _MAX_SOURCE_CHARS = 48000
 _MAX_PAGES_PER_USER = 50
 _MAX_NOTES_PER_PAGE = 500
 
+# 對話沒有標題時，筆記頁的後備名稱
 _DEFAULT_PAGE_TITLE = "我的筆記"
 
 # 頁面標題白名單（與 project.py 的 name 規則一致）。
@@ -108,6 +109,13 @@ class GenerateNoteRequest(BaseModel):
     instruction: Optional[str] = None
 
 
+class CreateNoteRequest(BaseModel):
+    """手動建立筆記（使用者自己貼內容，不經過 LLM）。"""
+    page_id: UUID
+    title: Optional[str] = None
+    content: str
+
+
 class UpdateNoteRequest(BaseModel):
     title: Optional[str] = None
     content: Optional[str] = None
@@ -135,18 +143,36 @@ def _note_row(row: asyncpg.Record) -> Dict[str, Any]:
     }
 
 
-async def _ensure_default_page(db: asyncpg.Connection, user_id: UUID) -> UUID:
-    """取得使用者的第一頁；完全沒有頁時自動建一頁。"""
+async def _ensure_chat_page(
+    db: asyncpg.Connection, user_id: UUID, chat_id: UUID, fallback_title: str
+) -> UUID:
+    """
+    取得該對話對應的筆記頁；沒有就建一頁。
+
+    一則對話對應一頁（唯一索引 ux_note_pages_user_chat 保證），所以同一則對話
+    再整理一次會累加到同一頁，而不是每次長出新頁。頁名優先用對話標題，
+    對話還沒有標題（剛建立）時才退而用筆記標題。
+    """
     existing = await db.fetchval(
-        "SELECT id FROM note_pages WHERE user_id = $1 ORDER BY position, created_at LIMIT 1",
-        user_id,
+        "SELECT id FROM note_pages WHERE user_id = $1 AND source_chat_id = $2",
+        user_id, chat_id,
     )
     if existing:
         return existing
+
+    chat_title = await db.fetchval(
+        "SELECT title FROM chats WHERE id = $1 AND user_id = $2", chat_id, user_id
+    )
+    title = (chat_title or "").strip() or fallback_title
     return await db.fetchval(
-        "INSERT INTO note_pages (user_id, title, position) VALUES ($1, $2, 0) RETURNING id",
-        user_id,
-        _DEFAULT_PAGE_TITLE,
+        """
+        INSERT INTO note_pages (user_id, title, position, source_chat_id)
+        VALUES ($1, $2,
+                COALESCE((SELECT MAX(position) + 1 FROM note_pages WHERE user_id = $1), 0),
+                $3)
+        RETURNING id
+        """,
+        user_id, _clean_note_title(title)[:_PAGE_TITLE_MAX], chat_id,
     )
 
 
@@ -168,7 +194,7 @@ async def list_pages(
     """列出筆記頁（含每頁筆記數）。"""
     rows = await db.fetch(
         """
-        SELECT p.id, p.title, p.position, p.created_at, p.updated_at,
+        SELECT p.id, p.title, p.position, p.source_chat_id, p.created_at, p.updated_at,
                COUNT(n.id)::int AS note_count
         FROM note_pages p
         LEFT JOIN notes n ON n.page_id = p.id
@@ -182,6 +208,7 @@ async def list_pages(
         {
             "id": str(r["id"]), "title": r["title"], "position": r["position"],
             "note_count": r["note_count"],
+            "source_chat_id": str(r["source_chat_id"]) if r["source_chat_id"] else None,
             "created_at": r["created_at"].isoformat() if r["created_at"] else None,
             "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
         } for r in rows
@@ -292,6 +319,49 @@ async def list_notes(
             user_id,
         )
     return {"status": "success", "data": {"notes": [_note_row(r) for r in rows]}}
+
+
+@router.post("/api/notes", status_code=status.HTTP_201_CREATED)
+async def create_note(
+    request: CreateNoteRequest,
+    db: asyncpg.Connection = Depends(get_db),
+    current_user: asyncpg.Record = Depends(get_current_user),
+):
+    """手動建立筆記（使用者自己貼內容，不經過 LLM，因此不計費）。"""
+    user_id = current_user["id"]
+    await _assert_page_owned(db, request.page_id, user_id)
+
+    content = (request.content or "").strip()
+    if not content:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "筆記內容不可為空。")
+    if len(content) > _NOTE_CONTENT_MAX:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"筆記內容不可超過 {_NOTE_CONTENT_MAX} 字（目前 {len(content)}）。",
+        )
+
+    note_count = await db.fetchval(
+        "SELECT COUNT(*) FROM notes WHERE page_id = $1", request.page_id
+    )
+    if note_count >= _MAX_NOTES_PER_PAGE:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"該頁筆記數已達上限（{_MAX_NOTES_PER_PAGE} 則）。",
+        )
+
+    # 沒給標題就取內文第一行（去掉 Markdown 標題符號）
+    title = request.title if request.title is not None else content.split("\n")[0].lstrip("#").strip()
+
+    row = await db.fetchrow(
+        """
+        INSERT INTO notes (page_id, user_id, title, content)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id, page_id, title, content, source_chat_id, source_message_ids,
+                  created_at, updated_at
+        """,
+        request.page_id, user_id, _clean_note_title(title), content,
+    )
+    return {"status": "success", "data": _note_row(row)}
 
 
 @router.patch("/api/notes/{note_id}")
@@ -463,18 +533,9 @@ async def generate_note(
     if not source_text.strip():
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "選取的訊息沒有可整理的內容。")
 
-    page_id = request.page_id
-    if page_id is not None:
-        await _assert_page_owned(db, page_id, user_id)
-    else:
-        page_id = await _ensure_default_page(db, user_id)
-
-    note_count = await db.fetchval("SELECT COUNT(*) FROM notes WHERE page_id = $1", page_id)
-    if note_count >= _MAX_NOTES_PER_PAGE:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            f"該頁筆記數已達上限（{_MAX_NOTES_PER_PAGE} 則）。",
-        )
+    # 指定了頁就先驗證擁有權；沒指定的話等 LLM 跑完再決定（需要筆記標題當後備頁名）
+    if request.page_id is not None:
+        await _assert_page_owned(db, request.page_id, user_id)
 
     # 延後 import：notes 模組被 api/__init__ 直接載入，不該在匯入期就把
     # LangChain / OpenAI client 一起初始化
@@ -523,6 +584,18 @@ async def generate_note(
 
     title, body = _split_title_and_body(raw_content)
     body = body[:_NOTE_CONTENT_MAX]
+
+    # 一則對話對應一個筆記頁：同一則對話再整理會累加到同一頁
+    page_id = request.page_id or await _ensure_chat_page(
+        db, user_id, request.chat_id, fallback_title=title
+    )
+
+    note_count = await db.fetchval("SELECT COUNT(*) FROM notes WHERE page_id = $1", page_id)
+    if note_count >= _MAX_NOTES_PER_PAGE:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"該頁筆記數已達上限（{_MAX_NOTES_PER_PAGE} 則）。",
+        )
 
     row = await db.fetchrow(
         """
