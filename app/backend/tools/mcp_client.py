@@ -20,6 +20,7 @@ import re
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Any, AsyncIterator, Dict, List, Mapping, Optional, Tuple
 from urllib.parse import urlsplit
 
@@ -296,14 +297,26 @@ def _safe_exception_text(exc: Exception) -> str:
     return _URL_IN_ERROR_RE.sub("[MCP endpoint]", str(exc))[:300]
 
 
+def _first_attr(obj: Any, *names: str) -> Any:
+    """SDK 欄位在 mcp 1.x 是 camelCase、2.x 是 snake_case，兩種都試過再放棄。
+
+    這樣寫是為了讓同一份程式碼同時吃得下兩個世代的 SDK —— 目前釘在 1.x
+    （openai-agents 0.3.3 要求 mcp<2），日後整組升級到 2.x 時不用再回來改。
+    """
+    if obj is None:
+        return None
+    for name in names:
+        value = obj.get(name) if isinstance(obj, dict) else getattr(obj, name, None)
+        if value is not None:
+            return value
+    return None
+
+
 def _tool_read_only(tool: Any) -> bool:
     annotations = getattr(tool, "annotations", None)
     if annotations is None:
         return False
-    value = getattr(annotations, "read_only_hint", None)
-    if value is None and isinstance(annotations, dict):
-        value = annotations.get("readOnlyHint", annotations.get("read_only_hint"))
-    return bool(value)
+    return bool(_first_attr(annotations, "readOnlyHint", "read_only_hint"))
 
 
 def _model_dump(value: Any) -> Any:
@@ -317,7 +330,7 @@ def _model_dump(value: Any) -> Any:
 def _result_content(result: Any, max_chars: int) -> Tuple[str, bool]:
     """Flatten an MCP result to bounded text suitable for a ToolMessage."""
     blocks: List[str] = []
-    structured = getattr(result, "structured_content", None)
+    structured = _first_attr(result, "structuredContent", "structured_content")
     if structured is not None:
         blocks.append(json.dumps(structured, ensure_ascii=False, default=str))
 
@@ -341,7 +354,7 @@ def _result_content(result: Any, max_chars: int) -> Tuple[str, bool]:
     content = "\n\n".join(part for part in blocks if part).strip() or "MCP tool returned no content."
     if len(content) > max_chars:
         content = content[: max_chars - 1] + "…"
-    return content, bool(getattr(result, "is_error", False))
+    return content, bool(_first_attr(result, "isError", "is_error"))
 
 
 class MCPClientManager:
@@ -378,30 +391,37 @@ class MCPClientManager:
 
     @asynccontextmanager
     async def _open_client(self, config: MCPServerConfig) -> AsyncIterator[Any]:
+        """開一次性的 MCP session（每次工具呼叫各自建立，適合多使用者並行）。
+
+        寫法對應 mcp 1.x：streamable_http_client 是 async generator，yield 出
+        (read, write, get_session_id) 三元組；ClientSession 不會自己握手，
+        必須明確 initialize() 一次。mcp 2.x 的 Client 則是兩者合一。
+        """
         try:
-            import httpx2
-            from mcp import Client
+            import httpx
+            from mcp import ClientSession
             from mcp.client.streamable_http import streamable_http_client
         except ImportError as exc:  # pragma: no cover - dependency check is deployment-specific
             raise MCPToolError("MCP client dependency is not installed") from exc
 
-        timeout = httpx2.Timeout(
+        timeout = httpx.Timeout(
             connect=config.timeout_seconds,
             read=config.timeout_seconds,
             write=config.timeout_seconds,
             pool=config.timeout_seconds,
         )
-        async with httpx2.AsyncClient(
+        # trust_env=False：不讓環境變數的 proxy 設定把 MCP 流量導去別處
+        async with httpx.AsyncClient(
             headers=dict(config.headers),
             timeout=timeout,
             trust_env=False,
         ) as http_client:
-            transport = streamable_http_client(config.url, http_client=http_client)
-            async with Client(
-                transport,
-                read_timeout_seconds=config.timeout_seconds,
-            ) as client:
-                yield client
+            async with streamable_http_client(
+                config.url, http_client=http_client
+            ) as (read_stream, write_stream, _get_session_id):
+                async with ClientSession(read_stream, write_stream) as client:
+                    await client.initialize()
+                    yield client
 
     async def _discover_one(self, config: MCPServerConfig) -> MCPServerSnapshot:
         try:
@@ -422,7 +442,7 @@ class MCPClientManager:
                             # operator must explicitly opt in through allowed_tools.
                             if allowed is None and not read_only:
                                 continue
-                            schema = getattr(tool, "input_schema", None) or {
+                            schema = _first_attr(tool, "inputSchema", "input_schema") or {
                                 "type": "object",
                                 "properties": {},
                             }
@@ -516,7 +536,8 @@ class MCPClientManager:
                     result = await client.call_tool(
                         tool.remote_name,
                         dict(arguments),
-                        read_timeout_seconds=config.timeout_seconds,
+                        # mcp 1.x 這個參數吃 timedelta，給 float 會在協議層拋型別錯誤
+                        read_timeout_seconds=timedelta(seconds=config.timeout_seconds),
                     )
             content, is_error = _result_content(result, self._max_output_chars)
             return MCPToolExecution(

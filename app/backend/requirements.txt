@@ -51,8 +51,11 @@ openai==1.109.1
 # 深度研究：OpenAI Agents SDK。0.3.3 是最後一個相容 openai 1.x 的版本，
 # 更新版本要求 openai>=2，會與 langchain-openai 0.1.1 衝突。
 openai-agents==0.3.3
-# 外部 MCP Server（Streamable HTTP）client；v2 支援目前與舊版協議協商。
-mcp==2.2.0
+# 外部 MCP Server（Streamable HTTP）client。
+# 必須留在 1.x：openai-agents 0.3.3（深度研究用）要求 mcp<2，而它被釘在 0.3.3
+# 是因為更新版本要 openai>=2，會與 langchain-openai 0.1.1 衝突。
+# 要改用 mcp 2.x 就得連帶升級 openai-agents + openai + langchain 整組。
+mcp==1.30.0
 orjson==3.11.8
 # 深度研究：研究報告樣板把 LLM 產出的 Markdown 轉成 HTML
 Markdown==3.10.3
@@ -99,7 +102,7 @@ tqdm==4.67.3
 typing-inspect==0.9.0
 typing_extensions==4.15.0
 urllib3==2.6.3
-# mcp 2.x 的傳遞依賴下限為 uvicorn>=0.31.1。
+# mcp 1.30.0 的傳遞依賴下限為 uvicorn>=0.31.1。
 uvicorn==0.31.1
 uvloop==0.22.1
 watchfiles==1.1.1
