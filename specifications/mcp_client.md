@@ -64,3 +64,61 @@ API 不會回傳 MCP URL、header 或 token。連線錯誤中的 URL 也會被�
 - 未設定 `allowed_tools` 時，只匯入 MCP 明確標註為唯讀的工具；未標註或可能修改資料的工具必須由部署者明確加入白名單。
 - 請透過 `allowed_tools` 僅開放需要的工具；會寫入或刪除資料的工具不應加入 Smart Mode。
 - 單一 Server 預設最多載入 24 個工具，單次結果最多注入 12,000 字元。
+
+## 本機 docker compose 測試
+
+`deploy/docker-compose.yml`（dev）內建一個 `mcp-test` 服務：用 mcp 2.x 寫的
+Streamable HTTP Server，提供 `get_quote` / `company_profile` 兩個唯讀假工具，
+不連任何外部服務。正式環境（`docker-compose.prod.yml`）沒有這個服務。
+
+```bash
+cd deploy
+docker compose up -d --build
+```
+
+backend 的 `environment` 已經預設指向它：
+
+```yaml
+- MCP_ALLOW_INSECURE_HTTP=1
+- MCP_SERVERS_JSON={"market-data":{"url":"http://mcp-test:8080/mcp","allowed_tools":[...]}}
+```
+
+設定寫在 `environment` 而非 `.env`，是因為 compose 各版本對 `env_file` 中含引號的
+JSON 解析行為不一致；寫在 `environment` 才能保證值原封不動傳進容器。
+
+### 驗證
+
+```bash
+# 1. 連線狀態（需登入後帶 AT）
+curl -s localhost:8000/api/mcp/servers -H "Authorization: Bearer <AT>" | jq
+
+# 2. 直接戳測試 server（host 上已把 8080 映射到 8090）
+curl -s -o /dev/null -w "%{http_code}\n" -X POST localhost:8090/mcp
+```
+
+前端開 `http://localhost` → 股市 Agent → 思考模式 → 輸入框打 `@`，
+應該看到 `get_quote` 與 `company_profile`（見 [`frontend_spec.md` §9](./frontend_spec.md)）。
+
+### 三個容易卡住的點
+
+1. **工具清單快取 300 秒。** 改了 `MCP_SERVERS_JSON` 或重啟 `mcp-test` 之後，
+   舊的（可能是失敗的）快照還會留著。打 `POST /api/mcp/servers/refresh` 強制更新，
+   或直接 `docker compose restart backend`。
+2. **`http://` 一定要配 `MCP_ALLOW_INSECURE_HTTP=1`。** 私有 IP 檢查只擋**字面 IP**，
+   docker 服務名（`mcp-test`）不受影響；但 http scheme 的檢查擋所有人。
+3. **自架 MCP Server 的 DNS rebinding 保護。** mcp 2.x 的
+   `TransportSecuritySettings` 預設 `enable_dns_rebinding_protection=True` 且
+   `allowed_hosts=[]`，等於**拒絕所有 Host header**。`deploy/mcp-test-server/server.py`
+   為此明確關閉；正式的 MCP Server 應改為列出 `allowed_hosts`。
+
+### 換成真正的外部 MCP Server
+
+把 compose 裡那兩行 `MCP_*` 註解掉，改在 `.env` 設定（HTTPS 不需要
+`MCP_ALLOW_INSECURE_HTTP`）。`.env` 單行 JSON 用單引號包住即可。
+
+### ⚠️ 本機測試會連到正式資料庫
+
+`.env` 的 `DATABASE_URL` 目前指向 AWS RDS。`docker compose up` 起的 backend
+會**直接讀寫正式資料庫** —— 你在本機測試建立的對話、訊息、token 用量都會寫進去。
+要隔離的話，把 `docker-compose.yml` 裡註解掉的 `db` 服務打開，並把 `.env` 的
+`DATABASE_URL` 改指向 `postgresql+asyncpg://postgres:password123@db:5432/Insight`。

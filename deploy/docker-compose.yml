@@ -5,28 +5,63 @@ services:
       context: .. 
       dockerfile: deploy/backend.Dockerfile
     ports:
-      - "8000:8000"
+      # host port 可用環境變數避開衝突（本機已有 postgres／SSH tunnel 占用時）：
+      #   BACKEND_HOST_PORT=8001 DB_HOST_PORT=5433 docker compose up -d
+      # 注意：前端在 http 下會推導成 http://<hostname>:8000/api，改了這個 port
+      # 瀏覽器就連不到後端，只適合用 curl 直接測 API。
+      - "${BACKEND_HOST_PORT:-8000}:8000"
     env_file:
       - ../.env # 這邊會自動讀取你 .env 內的 MONGODB_URL 與 OPENAI_API_KEY
     environment:
       - QDRANT_HOST=qdrant
       # DATABASE_URL 由 ../.env 注入（本機 db 或 AWS RDS）
+      #
+      # ── 本機 MCP 測試 ───────────────────────────────────────
+      # 寫在這裡而不是 .env：env_file 對含引號的 JSON 解析行為在各版本
+      # compose 不一致，寫在 environment 才能確保值原封不動傳進容器。
+      # 要改接真正的外部 MCP Server 時，把下面兩行註解掉，改在 ../.env
+      # 設定 MCP_SERVERS_JSON（HTTPS 就不需要 MCP_ALLOW_INSECURE_HTTP）。
+      #
+      # mcp-test 是 docker 服務名（非字面 IP），所以不會被私有位址檢查擋下；
+      # 但 http:// 仍需要 MCP_ALLOW_INSECURE_HTTP=1。
+      - MCP_ALLOW_INSECURE_HTTP=1
+      - MCP_SERVERS_JSON={"market-data":{"url":"http://mcp-test:8080/mcp","allowed_tools":["get_quote","company_profile"]}}
+      #
+      # 覆寫 ../.env 的 DATABASE_URL，讓本機開發不會讀寫正式 RDS。
+      # （environment 的優先度高於 env_file，所以 .env 不必改。）
+      # 真的要對正式資料庫測試時，把下面這行註解掉即可。
+      - DATABASE_URL=postgresql+asyncpg://postgres:password123@db:5432/Insight
     depends_on:
-      - qdrant
+      db:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      mcp-test:
+        condition: service_started
 
-  # 2. 資料庫 (PostgreSQL 16) — 已改用 AWS RDS 時可整段註解，不再啟動本機 db
-  # db:
-  #   image: postgres:16-alpine
-  #   restart: always
-  #   environment:
-  #     - POSTGRES_USER=postgres
-  #     - POSTGRES_PASSWORD=password123
-  #     - POSTGRES_DB=Insight
-  #   ports:
-  #     - "5432:5432"
-  #   volumes:
-  #     - db_data:/var/lib/postgresql/data
-  #     - ../app/backend/database/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql:ro
+  # 2. 資料庫 (PostgreSQL 16) — 本機開發用，與正式環境的 AWS RDS 隔離。
+  # init_db.sql 只在 volume 為空時執行一次；改了 schema 要重建：
+  #   docker compose down && docker volume rm deploy_db_data && docker compose up -d
+  db:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password123
+      - POSTGRES_DB=Insight
+    ports:
+      # backend 是走 docker network 連 db:5432，這裡只影響從 host 連進來。
+      - "${DB_HOST_PORT:-5432}:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ../app/backend/database/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql:ro
+    # backend 的 lifespan 一開機就 create_pool()，沒有 healthcheck 會搶在
+    # postgres 接受連線之前啟動而爆掉。
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d Insight"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
 
   # 3. 向量資料庫 (Qdrant)
   qdrant:
@@ -42,16 +77,29 @@ services:
     volumes:
       - qdrant_storage:/qdrant/storage
 
+  # 3.5 本機測試用 MCP Server（Streamable HTTP）
+  # 只給 dev 用：提供 get_quote / company_profile 兩個唯讀假工具，
+  # 讓你不必準備真的外部 MCP Server 就能驗證 @ 提及 → Router → 工具呼叫。
+  # 正式環境（docker-compose.prod.yml）沒有這個服務。
+  mcp-test:
+    build:
+      context: ./mcp-test-server
+      dockerfile: Dockerfile
+    ports:
+      # 只為了方便在 host 上 curl 除錯；backend 是走 docker network 連 mcp-test:8080
+      - "8090:8080"
+
   # 4. 前端 (Nginx + Frontend)
   frontend:
     build:
       context: .. 
       dockerfile: deploy/frontend.Dockerfile
     ports:
-      - "80:80"
+      # 同樣可覆寫：FRONTEND_HOST_PORT=8080 docker compose up -d
+      - "${FRONTEND_HOST_PORT:-80}:80"
     depends_on:
       - backend
 
 volumes:
-  # db_data:   # 本機 db 停用後可一併註解；舊 volume 仍佔磁碟，需手動 docker volume rm
+  db_data:
   qdrant_storage:

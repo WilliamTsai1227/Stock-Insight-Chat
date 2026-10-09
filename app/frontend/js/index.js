@@ -878,6 +878,13 @@ async function loadGeneralChatModels() {
     }
 }
 
+/**
+ * 已連線的外部 MCP 工具目錄，由 loadMcpTools() 填入。
+ * 「工具權限」checkbox 與輸入框的 @ 提及選單共用同一份，避免兩邊不同步。
+ * 每一筆：{ id: 'mcp__<server>__<tool>', name, description, server, read_only }
+ */
+let mcpToolCatalog = [];
+
 /** 由後端安全目錄載入外部 MCP 工具；回應不包含 server URL 或憑證。 */
 async function loadMcpTools() {
     const root = document.getElementById('mcp-tools');
@@ -890,6 +897,7 @@ async function loadMcpTools() {
         const tools = servers
             .filter((server) => server.connected)
             .flatMap((server) => (server.tools || []).map((tool) => ({ ...tool, server: server.name })));
+        mcpToolCatalog = tools;
 
         root.textContent = '';
         if (!tools.length) {
@@ -923,9 +931,186 @@ async function loadMcpTools() {
         });
         root.classList.remove('hidden');
     } catch (err) {
+        mcpToolCatalog = [];
         root.classList.add('hidden');
         console.error('[MCP] 工具清單載入失敗：', err);
     }
+}
+
+// ============================================================
+// @ 提及：在輸入框指定本輪要用的外部 MCP 工具
+// ------------------------------------------------------------
+// 後端 agent_config.enabled_tools 早已接受 mcp__* 格式，所以這裡純前端：
+// @ 只是換一種產生 enabled_tools 的 UI，不需要後端配合。
+// ============================================================
+
+/** 股市 Agent 內建的本機工具（Smart Mode 下維持全開）。與後端 _ALLOWED_TOOLS 一致。 */
+const LOCAL_AGENT_TOOL_IDS = [
+    'search_stock_news',
+    'search_market_ai_analysis',
+    'get_market_recommendations',
+    'tavily_global_search',
+];
+
+/** 插進輸入框的字樣，也是送出時回推 tool id 的依據。 */
+function mcpMentionToken(tool) {
+    return `@${tool.server}:${tool.name}`;
+}
+
+/**
+ * 只有「股市 Agent + 思考模式」會把工具綁進 Router。
+ * 一般對話是直打 LLM（無工具），快捷模式走固定的單輪檢索管線，
+ * 在這兩種模式下開 @ 選單等於騙使用者。
+ */
+function mentionSupported() {
+    return chatMode === 'stock_agent' && chatResponseMode !== 'flash';
+}
+
+/** open=選單是否開著；start/end=輸入框中 @ 片段的範圍；index=鍵盤游標 */
+const mentionState = { open: false, items: [], index: 0, start: -1, end: -1 };
+
+/**
+ * 從游標往前找出正在輸入的 @ 片段。
+ * 必須在行首或空白後才算提及（避免 email、程式碼裡的 @ 誤觸發）；
+ * 片段內出現空白就視為已結束。
+ */
+function currentMentionQuery(el) {
+    if (el.selectionStart !== el.selectionEnd) return null;
+    const caret = el.selectionStart;
+    const before = el.value.slice(0, caret);
+    const at = before.lastIndexOf('@');
+    if (at === -1) return null;
+    if (at > 0 && !/\s/.test(before[at - 1])) return null;
+    const fragment = before.slice(at + 1);
+    if (/\s/.test(fragment)) return null;
+    return { start: at, end: caret, query: fragment.toLowerCase() };
+}
+
+function matchMcpTools(query) {
+    if (!query) return mcpToolCatalog;
+    return mcpToolCatalog.filter((tool) =>
+        `${tool.server}:${tool.name}`.toLowerCase().includes(query) ||
+        (tool.description || '').toLowerCase().includes(query)
+    );
+}
+
+function closeMentionMenu() {
+    const box = document.getElementById('mention-popover');
+    if (box) box.classList.add('hidden');
+    mentionState.open = false;
+    mentionState.items = [];
+    mentionState.index = 0;
+}
+
+function renderMentionMenu() {
+    const box = document.getElementById('mention-popover');
+    if (!box) return;
+    box.textContent = '';
+
+    if (!mentionState.items.length) {
+        const hint = document.createElement('p');
+        hint.className = 'mention-hint';
+        if (!mentionSupported()) {
+            hint.textContent = '@ 工具目前僅支援「股市 Agent ＋ 思考模式」。';
+        } else if (!mcpToolCatalog.length) {
+            hint.textContent = '尚未連線任何外部 MCP Server，請先在後端設定 MCP_SERVERS_JSON。';
+        } else {
+            hint.textContent = '找不到符合的工具。';
+        }
+        box.appendChild(hint);
+        return;
+    }
+
+    mentionState.items.forEach((tool, i) => {
+        const item = document.createElement('div');
+        item.className = 'mention-item' + (i === mentionState.index ? ' active' : '');
+        item.setAttribute('role', 'option');
+        item.setAttribute('aria-selected', String(i === mentionState.index));
+
+        const top = document.createElement('div');
+        top.className = 'mention-item-top';
+        const name = document.createElement('span');
+        name.textContent = tool.name;
+        const server = document.createElement('span');
+        server.className = 'mention-item-server';
+        server.textContent = tool.server;
+        top.append(name, server);
+        item.appendChild(top);
+
+        if (tool.description) {
+            const desc = document.createElement('div');
+            desc.className = 'mention-item-desc';
+            desc.textContent = tool.description;
+            item.appendChild(desc);
+        }
+
+        // 用 mousedown 而非 click：click 時輸入框已失焦，選取範圍會跑掉
+        item.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            applyMention(tool);
+        });
+        box.appendChild(item);
+    });
+}
+
+function openMentionMenu(hit) {
+    const box = document.getElementById('mention-popover');
+    if (!box) return;
+    mentionState.open = true;
+    mentionState.start = hit.start;
+    mentionState.end = hit.end;
+    mentionState.items = mentionSupported() ? matchMcpTools(hit.query) : [];
+    mentionState.index = 0;
+    renderMentionMenu();
+    box.classList.remove('hidden');
+}
+
+/** 每次輸入／移動游標後重算：有 @ 片段就開選單，否則收起來 */
+function refreshMentionMenu() {
+    const el = document.getElementById('user-input');
+    if (!el) return;
+    const hit = currentMentionQuery(el);
+    if (!hit) {
+        closeMentionMenu();
+        return;
+    }
+    openMentionMenu(hit);
+}
+
+function moveMentionSelection(step) {
+    if (!mentionState.items.length) return;
+    const n = mentionState.items.length;
+    mentionState.index = (mentionState.index + step + n) % n;
+    renderMentionMenu();
+    const active = document.querySelector('.mention-item.active');
+    if (active) active.scrollIntoView({ block: 'nearest' });
+}
+
+/** 把 @片段 換成完整字樣，游標移到其後 */
+function applyMention(tool) {
+    const el = document.getElementById('user-input');
+    if (!el) return;
+    const token = mcpMentionToken(tool) + ' ';
+    el.value = el.value.slice(0, mentionState.start) + token + el.value.slice(mentionState.end);
+    const caret = mentionState.start + token.length;
+    closeMentionMenu();
+    el.focus();
+    el.setSelectionRange(caret, caret);
+    el.style.height = 'auto';
+    el.style.height = el.scrollHeight + 'px';
+}
+
+/**
+ * 從送出的文字反推被 @ 的工具 id。
+ * 刻意不另外維護一份「已選取」狀態 —— 使用者把字樣刪掉，提及就自動失效，
+ * 不會出現畫面上沒有、實際仍送出的鬼工具。
+ */
+function collectMentionedMcpToolIds(text) {
+    const ids = [];
+    mcpToolCatalog.forEach((tool) => {
+        if (text.includes(mcpMentionToken(tool))) ids.push(tool.id);
+    });
+    return ids;
 }
 
 function renderGeneralModelMenu() {
@@ -1148,6 +1333,36 @@ function initEventListeners() {
         this.style.height = 'auto';
         this.style.height = this.scrollHeight + 'px';
         updateSendButtonForStreamingState();
+    });
+
+    // @ 提及：輸入或移動游標後重算選單；點空白處、失焦則收起
+    userInput.addEventListener('input', refreshMentionMenu);
+    userInput.addEventListener('click', refreshMentionMenu);
+    userInput.addEventListener('blur', () => setTimeout(closeMentionMenu, 0));
+    document.addEventListener('click', (e) => {
+        if (e.target !== userInput) closeMentionMenu();
+    });
+
+    // 必須註冊在下面的送出處理之前：選單開著時 Enter 是「選取」不是「送出」。
+    // 同一元素上的 listener 依註冊順序觸發，攔截時用 stopImmediatePropagation 阻斷後續。
+    userInput.addEventListener('keydown', (e) => {
+        if (!mentionState.open || e.isComposing || e.keyCode === 229) return;
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            moveMentionSelection(e.key === 'ArrowDown' ? 1 : -1);
+        } else if (e.key === 'Enter' || e.key === 'Tab') {
+            // 選單開著但沒有可選項（模式不支援／無連線）時不攔截，讓 Enter 正常送出
+            const tool = mentionState.items[mentionState.index];
+            if (!tool) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            applyMention(tool);
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            closeMentionMenu();
+        }
     });
 
     userInput.addEventListener('keydown', (e) => {
@@ -3138,6 +3353,15 @@ async function sendMessage() {
         });
     }
 
+    // @ 點名的 MCP 工具。Smart Mode 下本機工具維持全開，但 MCP 只開放被點名的
+    // 那幾個（等於「這輪就用這個」）；手動模式則併進已勾選清單。
+    const mentionedMcpTools = mentionSupported() ? collectMentionedMcpToolIds(query) : [];
+    if (mentionedMcpTools.length) {
+        const base = isAuto ? LOCAL_AGENT_TOOL_IDS : enabled_tools;
+        enabled_tools = [...new Set([...base, ...mentionedMcpTools])];
+    }
+    closeMentionMenu();
+
     // 顯示使用者訊息（先記錄送出前是否已有歷史，供 429 判斷是否清除側欄孤兒 chat）
     const chatHadPriorMessages = !!document.querySelector('#chat-messages .message');
     const userMsgEl = addMessageToUI('user', query);
@@ -3309,7 +3533,7 @@ async function sendMessage() {
                 query,
                 chat_id: streamTargetChatId,   // 與發送瞬間鎖定，勿用 state.currentChatId（使用者可能 await 時已換對話）
                 // null = Smart Mode；array（即使為空）= 嚴格手動白名單。
-                agent_config: { enabled_tools: isAuto ? null : enabled_tools },
+                agent_config: { enabled_tools: (isAuto && !mentionedMcpTools.length) ? null : enabled_tools },
                 chat_mode: chatMode,
                 response_mode: chatResponseMode === 'flash' ? 'flash' : 'thinking',
                 // 只有一般對話吃這個欄位；清單沒載到時不帶，後端用預設模型

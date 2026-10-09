@@ -285,6 +285,8 @@
             <!-- 輸入區塊 -->
             <footer class="chat-input-area">
                 <div class="input-container">
+                    <!-- @ 提及：輸入 @ 時列出已連線的外部 MCP 工具，選中即指定本輪使用 -->
+                    <div id="mention-popover" class="mention-popover hidden" role="listbox" aria-label="選擇外部 MCP 工具"></div>
                     <!-- 上方：使用者輸入 -->
                     <div class="input-top-row">
                         <textarea id="user-input" placeholder="問我任何事…" rows="1" maxlength="2000"></textarea>
