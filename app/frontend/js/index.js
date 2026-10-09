@@ -2924,6 +2924,7 @@ function setActivePvTab(tab) {
 function showChatView() {
     hideExploreView();
     if (typeof hideDeepResearchView === 'function') hideDeepResearchView();
+    if (typeof hideNotesView === 'function') hideNotesView();
     document.getElementById('project-view').style.display   = 'none';
     const main = document.querySelector('.main-content');
     if (main) main.classList.remove('project-view-mode');
@@ -2949,6 +2950,9 @@ function showExploreView() {
     document.querySelector('.chat-input-area').style.display = 'none';
     document.getElementById('explore-view').style.display    = 'flex';
     if (typeof hideDeepResearchView === 'function') hideDeepResearchView();
+    if (typeof hideNotesView === 'function') hideNotesView();
+    // 離開對話視圖時收掉選取模式，否則回來會看到孤兒勾選框
+    if (typeof exitNoteSelectMode === 'function') exitNoteSelectMode();
 
     document.getElementById('explore-btn').classList.add('active');
     setMainChatTitle('探索');
@@ -3013,7 +3017,7 @@ async function loadChatHistoryIntoView(chatId) {
         msgs.forEach(m => {
             const role = m.role || '';
             if (role === 'user') {
-                addMessageToUI('user', m.content || '', { skipScroll: true });
+                addMessageToUI('user', m.content || '', { skipScroll: true, messageId: m.id });
             } else if (role === 'assistant') {
                 appendAssistantHistoryMessage(m);
             }
@@ -4087,6 +4091,8 @@ function addMessageToUI(role, content, options) {
 
     const msgDiv = document.createElement('div');
     msgDiv.className = `message ${role}`;
+    // 筆記的選取模式靠這個 id 指定要整理哪幾則訊息
+    if (opt.messageId) msgDiv.dataset.messageId = opt.messageId;
 
     const bubble = document.createElement('div');
     bubble.className = 'bubble';

@@ -70,6 +70,8 @@ function showDeepResearchView() {
         );
     }
     if (typeof hideExploreView === 'function') hideExploreView();
+    if (typeof hideNotesView === 'function') hideNotesView();
+    if (typeof exitNoteSelectMode === 'function') exitNoteSelectMode();
 
     drEl('chat-messages').style.display = 'none';
     drEl('project-view').style.display = 'none';

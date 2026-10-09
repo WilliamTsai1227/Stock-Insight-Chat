@@ -29,6 +29,7 @@
     </script>
     <link rel="stylesheet" href="/css/index.css">
     <link rel="stylesheet" href="/css/deep-research.css">
+    <link rel="stylesheet" href="/css/notes.css">
     <!-- Google Fonts: Outfit & Inter -->
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
     <!-- Lucide Icons -->
@@ -69,6 +70,12 @@
             <button id="deep-research-btn" class="new-chat-btn explore-btn">
                 <i data-lucide="telescope"></i>
                 <span>深度研究</span>
+            </button>
+
+            <!-- 筆記：把對話整理成筆記，分頁管理 -->
+            <button id="notes-btn" class="new-chat-btn explore-btn">
+                <i data-lucide="notebook-pen"></i>
+                <span>筆記</span>
             </button>
 
             <!-- 可捲動列表區 -->
@@ -117,6 +124,10 @@
                     </div>
                 </div>
                 <div class="header-actions">
+                    <!-- 進入選取模式：勾選對話訊息後整理成筆記 -->
+                    <button type="button" id="note-select-btn" class="icon-btn" aria-label="整理成筆記" title="整理成筆記">
+                        <i data-lucide="notebook-pen"></i>
+                    </button>
                     <button type="button" id="theme-toggle-btn" class="icon-btn theme-toggle-btn" aria-label="切換淺色／深色模式" title="切換主題">
                         <i data-lucide="contrast"></i>
                     </button>
@@ -282,11 +293,48 @@
                 </div>
             </div>
 
+            <!-- 筆記視圖：左側頁面清單，右側該頁筆記 -->
+            <div id="notes-view" class="notes-view">
+                <aside class="notes-pages">
+                    <div class="notes-pages-head">
+                        <span>筆記頁</span>
+                        <button type="button" id="note-page-add" class="notes-icon-btn" title="新增筆記頁" aria-label="新增筆記頁">
+                            <i data-lucide="plus"></i>
+                        </button>
+                    </div>
+                    <ul id="note-page-list" class="notes-page-list"></ul>
+                </aside>
+
+                <section class="notes-main">
+                    <div class="notes-main-head">
+                        <h3 id="note-page-title">筆記</h3>
+                        <div class="notes-main-actions">
+                            <button type="button" id="note-page-rename" class="notes-text-btn">重新命名</button>
+                            <button type="button" id="note-page-delete" class="notes-text-btn danger">刪除此頁</button>
+                        </div>
+                    </div>
+                    <div id="note-list" class="notes-list"></div>
+                    <p id="notes-empty" class="notes-empty hidden">
+                        這一頁還沒有筆記。回到對話，點右上角的
+                        <i data-lucide="notebook-pen"></i>
+                        選取訊息後就能整理成筆記。
+                    </p>
+                </section>
+            </div>
+
             <!-- 輸入區塊 -->
             <footer class="chat-input-area">
                 <div class="input-container">
                     <!-- @ 提及：輸入 @ 時列出已連線的外部 MCP 工具，選中即指定本輪使用 -->
                     <div id="mention-popover" class="mention-popover hidden" role="listbox" aria-label="選擇外部 MCP 工具"></div>
+                    <!-- 選取模式的浮動動作列：浮在輸入框正上方 -->
+                    <div id="note-select-bar" class="note-select-bar hidden">
+                        <span id="note-select-count">已選 0 則</span>
+                        <div class="note-select-actions">
+                            <button type="button" id="note-select-cancel" class="notes-text-btn">取消</button>
+                            <button type="button" id="note-select-confirm" class="notes-primary-btn">整理成筆記</button>
+                        </div>
+                    </div>
                     <!-- 上方：使用者輸入 -->
                     <div class="input-top-row">
                         <textarea id="user-input" placeholder="問我任何事…" rows="1" maxlength="2000"></textarea>
@@ -633,6 +681,7 @@
     <script src="/js/auth.js"></script>
     <script src="/js/index.js"></script>
     <script src="/js/deep-research.js"></script>
+    <script src="/js/notes.js"></script>
     <script>lucide.createIcons();</script>
 </body>
 </html>

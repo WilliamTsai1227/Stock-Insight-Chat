@@ -7,6 +7,7 @@ from .project import router as project_router
 from .explore import router as explore_router
 from .deep_research import router as deep_research_router
 from .mcp import router as mcp_router
+from .notes import router as notes_router
 
 
 api_router = APIRouter()
@@ -34,5 +35,8 @@ api_router.include_router(deep_research_router)
 
 # 7. 外部 MCP Server（第一階段：本專案作為 MCP Client）
 api_router.include_router(mcp_router)
+
+# 8. 筆記（把對話整理成筆記）
+api_router.include_router(notes_router)
 
 __all__ = ["api_router"]
