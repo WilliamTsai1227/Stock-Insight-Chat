@@ -30,6 +30,7 @@
     <link rel="stylesheet" href="/css/index.css">
     <link rel="stylesheet" href="/css/deep-research.css">
     <link rel="stylesheet" href="/css/notes.css">
+    <link rel="stylesheet" href="/css/portfolio.css">
     <!-- Google Fonts: Outfit & Inter -->
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
     <!-- Lucide Icons -->
@@ -76,6 +77,12 @@
             <button id="notes-btn" class="new-chat-btn explore-btn">
                 <i data-lucide="notebook-pen"></i>
                 <span>筆記</span>
+            </button>
+
+            <!-- 投資組合：庫存／觀察清單，排程呼叫 Zentra 產生分析與調整建議 -->
+            <button id="portfolio-btn" class="new-chat-btn explore-btn">
+                <i data-lucide="briefcase"></i>
+                <span>投資組合</span>
             </button>
 
             <!-- 可捲動列表區 -->
@@ -337,6 +344,169 @@
                         選取訊息後就能整理成筆記。
                     </p>
                 </section>
+            </div>
+
+            <!-- 投資組合視圖：庫存、觀察清單、排程、分析報告（portfolio.js） -->
+            <div id="portfolio-view" class="pf-view">
+                <nav class="pf-tabs" role="tablist">
+                    <button type="button" class="pf-tab active" data-tab="HOLDING" role="tab">庫存</button>
+                    <button type="button" class="pf-tab" data-tab="WATCHLIST" role="tab">觀察清單</button>
+                    <button type="button" class="pf-tab" data-tab="schedule" role="tab">排程</button>
+                    <button type="button" class="pf-tab" data-tab="report" role="tab">分析報告</button>
+                </nav>
+
+                <div class="pf-scroll">
+                    <!-- 清單（庫存與觀察清單共用，依 data-tab 切換） -->
+                    <section id="pf-list-panel" class="pf-panel">
+                        <!-- 庫存總覽：即時報價算出的現值與各檔比例（只在「庫存」分頁顯示） -->
+                        <div id="pf-overview" class="pf-overview hidden">
+                            <div class="pf-ov-head">
+                                <span class="pf-ov-label">庫存總現值 (TWD)</span>
+                                <span id="pf-ov-asof" class="pf-ov-asof"></span>
+                            </div>
+                            <div class="pf-ov-total">
+                                <span id="pf-ov-value" class="pf-ov-value">—</span>
+                                <span id="pf-ov-day" class="pf-ov-day"></span>
+                            </div>
+                            <div class="pf-ov-grid">
+                                <div><span class="pf-ov-label">總成本</span><span id="pf-ov-cost" class="pf-ov-num">—</span></div>
+                                <div><span class="pf-ov-label">未實現損益</span><span id="pf-ov-pnl" class="pf-ov-num">—</span></div>
+                            </div>
+                            <div id="pf-ov-split" class="pf-split" role="img"></div>
+                            <div id="pf-ov-split-legend" class="pf-split-legend"></div>
+
+                            <div class="pf-donut-card">
+                                <h4 class="pf-donut-title">庫存現值比例</h4>
+                                <div class="pf-donut-body">
+                                    <div class="pf-donut-wrap">
+                                        <svg id="pf-donut" class="pf-donut" viewBox="0 0 200 200" role="img"></svg>
+                                        <div class="pf-donut-center">
+                                            <span class="pf-donut-cur">TWD</span>
+                                            <span id="pf-donut-total" class="pf-donut-total">—</span>
+                                            <span id="pf-donut-day" class="pf-donut-day"></span>
+                                        </div>
+                                        <div id="pf-donut-tip" class="pf-donut-tip hidden" role="status"></div>
+                                    </div>
+                                    <ul id="pf-donut-legend" class="pf-donut-legend"></ul>
+                                </div>
+                                <p id="pf-ov-note" class="pf-hint"></p>
+                            </div>
+                        </div>
+
+                        <form id="pf-item-form" class="pf-form" autocomplete="off">
+                            <label class="pf-field pf-field-sm">
+                                <span>市場</span>
+                                <select name="market">
+                                    <option value="TW">台股</option>
+                                    <option value="US">美股</option>
+                                </select>
+                            </label>
+                            <label class="pf-field pf-field-sm">
+                                <span>代碼</span>
+                                <input name="symbol" maxlength="15" placeholder="2330 / AAPL" required>
+                            </label>
+                            <label class="pf-field">
+                                <span>名稱</span>
+                                <input name="name" maxlength="60" placeholder="台積電" required>
+                            </label>
+                            <label class="pf-field pf-field-sm" data-holding-only>
+                                <span>成本價</span>
+                                <input name="cost" type="number" min="0" step="any" placeholder="每股">
+                            </label>
+                            <label class="pf-field pf-field-sm" data-holding-only>
+                                <span>股數</span>
+                                <input name="shares" type="number" min="0" step="any">
+                            </label>
+                            <div class="pf-form-actions">
+                                <button type="submit" class="pf-primary-btn" id="pf-item-submit">加入</button>
+                                <button type="button" class="pf-text-btn hidden" id="pf-item-cancel">取消編輯</button>
+                            </div>
+                        </form>
+                        <p class="pf-hint" id="pf-list-hint"></p>
+                        <div class="pf-table-wrap">
+                            <table class="pf-table">
+                                <thead id="pf-item-head"></thead>
+                                <tbody id="pf-item-body"></tbody>
+                            </table>
+                        </div>
+                        <p id="pf-list-empty" class="pf-empty hidden"></p>
+                    </section>
+
+                    <!-- 排程 -->
+                    <section id="pf-schedule-panel" class="pf-panel hidden">
+                        <p id="pf-service-state" class="pf-hint"></p>
+                        <form id="pf-schedule-form" class="pf-form pf-form-col">
+                            <label class="pf-check">
+                                <input type="checkbox" name="enabled" checked>
+                                <span>啟用排程</span>
+                            </label>
+                            <div class="pf-row">
+                                <label class="pf-field">
+                                    <span>頻率</span>
+                                    <select name="frequency">
+                                        <option value="WEEKDAYS">每個交易日（週一至週五）</option>
+                                        <option value="DAILY">每天</option>
+                                        <option value="WEEKLY">每週</option>
+                                        <option value="MONTHLY">每月</option>
+                                    </select>
+                                </label>
+                                <label class="pf-field pf-field-sm" data-freq="WEEKLY">
+                                    <span>星期</span>
+                                    <select name="weekday">
+                                        <option value="1">週一</option><option value="2">週二</option>
+                                        <option value="3">週三</option><option value="4">週四</option>
+                                        <option value="5">週五</option><option value="6">週六</option>
+                                        <option value="7">週日</option>
+                                    </select>
+                                </label>
+                                <label class="pf-field pf-field-sm" data-freq="MONTHLY">
+                                    <span>每月幾號</span>
+                                    <input name="month_day" type="number" min="1" max="28" value="1">
+                                </label>
+                                <label class="pf-field pf-field-sm">
+                                    <span>時間（台北）</span>
+                                    <input name="run_time" type="time" value="14:30" required>
+                                </label>
+                            </div>
+                            <div class="pf-row">
+                                <label class="pf-field">
+                                    <span>風險偏好</span>
+                                    <select name="risk_tolerance">
+                                        <option value="">不指定</option>
+                                        <option value="CONSERVATIVE">保守</option>
+                                        <option value="BALANCED">穩健</option>
+                                        <option value="AGGRESSIVE">積極</option>
+                                    </select>
+                                </label>
+                                <label class="pf-field">
+                                    <span>可動用現金（台幣，選填）</span>
+                                    <input name="cash_twd" type="number" min="0" step="any">
+                                </label>
+                            </div>
+                            <p class="pf-hint">台股 13:30 收盤，建議設 14:30 之後；美股收盤約台北時間 04:00–05:00。</p>
+                            <div class="pf-form-actions">
+                                <button type="submit" class="pf-primary-btn">儲存排程</button>
+                                <button type="button" class="pf-text-btn" id="pf-run-now">立即分析一次</button>
+                            </div>
+                            <p id="pf-next-run" class="pf-next-run"></p>
+                        </form>
+                    </section>
+
+                    <!-- 分析報告 -->
+                    <section id="pf-report-panel" class="pf-panel hidden">
+                        <div class="pf-report-head">
+                            <label class="pf-field">
+                                <span>分析紀錄</span>
+                                <select id="pf-job-select"></select>
+                            </label>
+                            <span id="pf-job-status" class="pf-badge"></span>
+                            <button type="button" class="pf-text-btn" id="pf-report-refresh">重新整理</button>
+                        </div>
+                        <p id="pf-job-meta" class="pf-hint"></p>
+                        <div id="pf-report"></div>
+                        <p id="pf-report-empty" class="pf-empty hidden">還沒有分析紀錄。到「排程」設定時間，或按「立即分析一次」。</p>
+                    </section>
+                </div>
             </div>
 
             <!-- 輸入區塊 -->
@@ -699,6 +869,7 @@
     <script src="/js/index.js"></script>
     <script src="/js/deep-research.js"></script>
     <script src="/js/notes.js"></script>
+    <script src="/js/portfolio.js"></script>
     <script>lucide.createIcons();</script>
 </body>
 </html>

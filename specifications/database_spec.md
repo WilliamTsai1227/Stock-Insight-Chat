@@ -27,6 +27,13 @@ erDiagram
     chats ||--o{ messages : "對話記錄"
     chats |o--o{ token_usage_logs : "按對話統計"
     messages ||--o{ messages : "Q&A 對齊 (parent_id)"
+    users ||--o{ note_pages : "筆記頁"
+    note_pages ||--o{ notes : "筆記"
+    chats |o--o{ note_pages : "來源對話 (一則對話最多一頁)"
+    users ||--o{ portfolio_items : "庫存／觀察清單"
+    users ||--o| insight_schedules : "排程設定"
+    users ||--o{ insight_jobs : "分析紀錄"
+    insight_jobs ||--o{ insight_results : "每檔 × 每個 tool"
 
     subscription_tiers {
         uuid id PK
@@ -431,11 +438,137 @@ stateDiagram-v2
 
 聯絡方式不需另存：提交者身分與 `users.email` 已可關聯查詢。
 
+### 2.14 note_pages（筆記頁）
+
+筆記功能（V009，V010 加 `source_chat_id`）。一個使用者可以有多頁，每頁是一塊獨立空間。
+從對話整理出的筆記，**一則對話對應一頁**：同一則對話再整理會回到同一頁累加。手動建立的頁沒有來源對話。
+API 見 [`api/notes.py`](../app/backend/api/notes.py)。
+
+| 欄位名稱 | 資料型別 | 限制 | 說明 |
+| :--- | :--- | :--- | :--- |
+| id | UUID | PRIMARY KEY | 識別碼 |
+| user_id | UUID | FK → users.id, NOT NULL, ON DELETE CASCADE | 擁有者 |
+| title | VARCHAR(100) | NOT NULL | 頁面名稱 |
+| position | INTEGER | NOT NULL, DEFAULT 0 | 側欄排序 |
+| source_chat_id | UUID | FK → chats.id, ON DELETE SET NULL | 來源對話（V010）；手動建立的頁為 NULL。對話刪除後頁面保留 |
+| created_at / updated_at | TIMESTAMPTZ | DEFAULT CURRENT_TIMESTAMP | |
+
+約束：`ux_note_pages_user_chat UNIQUE (user_id, source_chat_id) WHERE source_chat_id IS NOT NULL`（一則對話最多對應一頁；手動建立的頁不受限制）。
+上限：每位使用者 50 頁（API 層）。
+
+### 2.15 notes（筆記）
+
+單則筆記。`canvas_*` 是之後白板視圖的座標，目前不寫入（NULL = 尚未擺放），先留欄位，避免以後再做一次 migration。
+
+| 欄位名稱 | 資料型別 | 限制 | 說明 |
+| :--- | :--- | :--- | :--- |
+| id | UUID | PRIMARY KEY | 識別碼 |
+| page_id | UUID | FK → note_pages.id, NOT NULL, ON DELETE CASCADE | 所屬筆記頁 |
+| user_id | UUID | FK → users.id, NOT NULL, ON DELETE CASCADE | 擁有者（冗餘存放，查詢時直接用來做授權條件） |
+| title | VARCHAR(200) | NOT NULL | 標題 |
+| content | TEXT | NOT NULL | 內容（LLM 產生或手動輸入的 Markdown，前端以純文字渲染；上限 20,000 字） |
+| source_chat_id | UUID | FK → chats.id, ON DELETE SET NULL | 來源對話；對話刪除後筆記保留 |
+| source_message_ids | JSONB | NULLABLE | 整理時選取的訊息 id 清單 |
+| canvas_x / canvas_y / canvas_w / canvas_h | INTEGER | NULLABLE | 白板座標與尺寸（目前全為 NULL） |
+| created_at / updated_at | TIMESTAMPTZ | DEFAULT CURRENT_TIMESTAMP | |
+
+上限：每頁 500 則（API 層）。
+
+### 2.16 portfolio_items（投資組合：庫存／觀察清單）
+
+使用者在「投資組合」頁維護的股票（V011）。排程分析與庫存總覽都從這張表讀。流程見 [`portfolio_insight_spec.md`](./portfolio_insight_spec.md)。
+
+| 欄位名稱 | 資料型別 | 限制 | 說明 |
+| :--- | :--- | :--- | :--- |
+| id | UUID | PRIMARY KEY | 識別碼 |
+| user_id | UUID | FK → users.id, NOT NULL, ON DELETE CASCADE | 擁有者 |
+| list_type | VARCHAR(10) | NOT NULL, CHECK IN (`HOLDING`, `WATCHLIST`) | `HOLDING` = 已買庫存；`WATCHLIST` = 觀察清單 |
+| market | VARCHAR(2) | NOT NULL, CHECK IN (`TW`, `US`) | 台股／美股 |
+| symbol | VARCHAR(15) | NOT NULL | 代碼。台股存數字代碼（不含 `.TW`），美股大寫 ticker |
+| name | VARCHAR(60) | NOT NULL | 股票名稱 |
+| cost | NUMERIC(18,4) | NULLABLE | 每股成本價（原幣） |
+| shares | NUMERIC(20,4) | NULLABLE | 持有股數 |
+| created_at | TIMESTAMPTZ | NOT NULL, DEFAULT CURRENT_TIMESTAMP | 加入時間（圓餅圖依此決定每檔的顏色） |
+| updated_at | TIMESTAMPTZ | NOT NULL, DEFAULT CURRENT_TIMESTAMP | 最後修改時間 |
+
+約束：
+- `uq_portfolio_items_symbol UNIQUE (user_id, market, symbol)`：**同一檔只能在一個清單**，買進時從觀察清單「移到」庫存。
+- `ck_portfolio_items_holding`：`HOLDING` 必須有 `cost >= 0` 與 `shares > 0`；`WATCHLIST` 可以沒有。
+- 每個清單最多 30 檔（API 層限制，等同 Zentra `portfolio-advisor` 的上限）。
+
+### 2.17 insight_schedules（投資組合：排程設定）
+
+每位使用者一列。排程器以 `next_run_at` 認領到期的排程（`FOR UPDATE SKIP LOCKED`）。
+
+| 欄位名稱 | 資料型別 | 限制 | 說明 |
+| :--- | :--- | :--- | :--- |
+| user_id | UUID | PRIMARY KEY, FK → users.id, ON DELETE CASCADE | 一人一列 |
+| enabled | BOOLEAN | NOT NULL, DEFAULT TRUE | 是否啟用 |
+| frequency | VARCHAR(10) | NOT NULL, CHECK IN (`DAILY`, `WEEKDAYS`, `WEEKLY`, `MONTHLY`) | 每天／週一至週五／每週／每月 |
+| run_time | TIME | NOT NULL | 執行時間，**台北時間**（UTC+8） |
+| weekday | SMALLINT | CHECK 1–7 | ISO 星期（1=週一）；`WEEKLY` 必填 |
+| month_day | SMALLINT | CHECK 1–28 | 每月幾號；`MONTHLY` 必填（只到 28，避免二月沒有那天） |
+| risk_tolerance | VARCHAR(12) | CHECK IN (`CONSERVATIVE`, `BALANCED`, `AGGRESSIVE`) | 風險偏好，傳給整體建議 |
+| cash_twd | NUMERIC(18,2) | CHECK >= 0 | 可動用現金（台幣），傳給整體建議 |
+| next_run_at | TIMESTAMPTZ | NULLABLE | 下一次執行時間（UTC）；NULL = 停用 |
+| last_run_at | TIMESTAMPTZ | NULLABLE | 上一次被認領的排程時間點 |
+| created_at / updated_at | TIMESTAMPTZ | NOT NULL, DEFAULT CURRENT_TIMESTAMP | |
+
+約束：`ck_insight_schedules_weekly`（`WEEKLY` 必有 `weekday`）、`ck_insight_schedules_monthly`（`MONTHLY` 必有 `month_day`）。
+
+### 2.18 insight_jobs（投資組合：每次分析）
+
+每次執行（排程觸發或手動「立即分析」）一列，也保存 `portfolio-advisor` 的整體建議。
+
+| 欄位名稱 | 資料型別 | 限制 | 說明 |
+| :--- | :--- | :--- | :--- |
+| id | UUID | PRIMARY KEY | 識別碼 |
+| user_id | UUID | FK → users.id, NOT NULL, ON DELETE CASCADE | 擁有者 |
+| trigger | VARCHAR(10) | NOT NULL, CHECK IN (`SCHEDULED`, `MANUAL`) | 觸發來源 |
+| scheduled_for | TIMESTAMPTZ | NOT NULL | 排程的目標時間；手動 = 按下的時間 |
+| status | VARCHAR(10) | NOT NULL, DEFAULT `QUEUED`, CHECK IN (`QUEUED`, `RUNNING`, `SUCCEEDED`, `PARTIAL`, `FAILED`) | 狀態（語意見 portfolio_insight_spec §1） |
+| started_at | TIMESTAMPTZ | NULLABLE | 開始執行 |
+| heartbeat_at | TIMESTAMPTZ | NULLABLE | 每完成一個 tool 更新；超過 30 分鐘沒動視為中斷 |
+| finished_at | TIMESTAMPTZ | NULLABLE | 結束 |
+| error | TEXT | NULLABLE | 失敗原因（契約不符、設定錯誤、清單為空、中斷…） |
+| counts | JSONB | NULLABLE | `{"total", "succeeded", "failed"}`（個股 tool 呼叫數） |
+| portfolio_status | VARCHAR(10) | CHECK IN (`SUCCEEDED`, `FAILED`, `SKIPPED`) | 整體建議的結果；`SKIPPED` = 沒有庫存 |
+| portfolio_run_id | TEXT | NULLABLE | Zentra 的 run_id（追查用） |
+| portfolio_output | JSONB | NULLABLE | `portfolio-advisor` 的完整輸出 |
+| portfolio_error | TEXT | NULLABLE | 整體建議失敗原因 |
+| created_at | TIMESTAMPTZ | NOT NULL, DEFAULT CURRENT_TIMESTAMP | 建立時間 |
+
+約束（部分唯一索引）：
+- `uq_insight_jobs_scheduled (user_id, scheduled_for) WHERE trigger = 'SCHEDULED'`：同一個排程時間點只會有一個 job。
+- `uq_insight_jobs_active (user_id) WHERE status IN ('QUEUED','RUNNING')`：同一位使用者同時最多一個進行中的 job。
+
+保留期：超過 `INSIGHT_RETENTION_DAYS`（預設 180 天）的已結束 job 會連同結果一起刪除。
+
+### 2.19 insight_results（投資組合：每檔 × 每個 tool 的結果）
+
+| 欄位名稱 | 資料型別 | 限制 | 說明 |
+| :--- | :--- | :--- | :--- |
+| id | UUID | PRIMARY KEY | 識別碼 |
+| job_id | UUID | FK → insight_jobs.id, NOT NULL, ON DELETE CASCADE | 所屬分析 |
+| user_id | UUID | FK → users.id, NOT NULL, ON DELETE CASCADE | 擁有者（冗餘，方便授權查詢） |
+| list_type | VARCHAR(10) | NOT NULL, CHECK IN (`HOLDING`, `WATCHLIST`) | 執行當下在哪個清單 |
+| market / symbol / name | VARCHAR | NOT NULL | 執行當下的快照 |
+| cost / shares | NUMERIC | NULLABLE | 執行當下的快照（之後改清單不影響舊報告） |
+| tool | VARCHAR(40) | NOT NULL, CHECK IN (`stock-news`, `stock-chart`, `stock-technical`, `stock-fundamental`) | 哪個 Zentra tool |
+| status | VARCHAR(10) | NOT NULL, CHECK IN (`SUCCEEDED`, `FAILED`) | 結果 |
+| run_id | TEXT | NULLABLE | Zentra 的 run_id |
+| output | JSONB | NULLABLE | tool 的完整輸出（K 線圖的 base64 已移到 `chart_png`） |
+| chart_png | BYTEA | NULLABLE | 只有 stock-chart 有（約 100 KB）；超過 `INSIGHT_CHART_RETENTION_DAYS`（預設 30 天）清成 NULL |
+| error | TEXT | NULLABLE | 失敗原因 |
+| started_at / finished_at | TIMESTAMPTZ | NULLABLE | 執行起訖 |
+
+約束：`uq_insight_results_cell UNIQUE (job_id, market, symbol, tool)`。
+
 ---
 
 ## 3. 索引設計 (Performance Indexing)
 
-索引皆定義於 `init_db.sql` §15（token_usage_logs 複合索引另見 V003）。
+索引皆定義於 `init_db.sql` §15（token_usage_logs 複合索引另見 V003；筆記見 V009／V010；投資組合見 V011）。
 
 | 索引 | 欄位 | 對應熱點查詢 |
 | :--- | :--- | :--- |
@@ -452,6 +585,14 @@ stateDiagram-v2
 | idx_files_project_id / idx_files_chat_id | — | 檔案列表 |
 | idx_user_feedback_user_created_at | (user_id, created_at DESC) | 使用者回饋歷史 |
 | idx_user_feedback_status_created_at | (status, created_at DESC) | 後台依狀態篩選待辦（`WHERE status='new' ORDER BY created_at DESC`） |
+| idx_note_pages_user | (user_id, position, created_at) | 筆記頁側欄排序 |
+| ux_note_pages_user_chat | (user_id, source_chat_id) WHERE source_chat_id IS NOT NULL | 一則對話對應一頁（唯一）；整理時找回同一頁 |
+| idx_notes_page / idx_notes_user | (page_id, created_at DESC) · (user_id, created_at DESC) | 某頁的筆記、我的所有筆記 |
+| idx_portfolio_items_user | (user_id, list_type, created_at) | 投資組合清單 |
+| idx_insight_schedules_due | (next_run_at) WHERE enabled AND next_run_at IS NOT NULL | 排程器每輪找到期的排程 |
+| idx_insight_jobs_user | (user_id, created_at DESC) | 分析紀錄列表 |
+| idx_insight_jobs_queued | (created_at) WHERE status = 'QUEUED' | 排程器認領排隊中的 job |
+| idx_insight_results_job | (job_id) | 讀單次分析的所有結果 |
 
 ---
 
@@ -466,5 +607,8 @@ stateDiagram-v2
 | V006 | 新增 `quota_reset_logs` 表 |
 | V007 | 新增 `user_feedback` 表 |
 | V008 | `user_feedback` 加入 `tokens_granted` |
+| V009 | 新增 `note_pages`、`notes`（筆記功能） |
+| V010 | `note_pages` 加入 `source_chat_id` 與唯一索引（一則對話對應一頁） |
+| V011 | 投資組合排程分析：`portfolio_items`、`insight_schedules`、`insight_jobs`、`insight_results`（見 [`portfolio_insight_spec.md`](./portfolio_insight_spec.md)） |
 
 新環境直接執行 `init_db.sql`（已含所有變更、冪等）；既有環境依序套用 `migrations/`。

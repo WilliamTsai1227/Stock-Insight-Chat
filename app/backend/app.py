@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.backend.api import api_router
 from app.backend.database.postgresql import create_pool, close_pool
+from app.backend.insight.scheduler import scheduler as insight_scheduler
 
 
 def _warmup_sparse_bm25() -> None:
@@ -34,7 +35,10 @@ def _warmup_sparse_bm25() -> None:
 async def lifespan(app: FastAPI):
     await create_pool()
     _warmup_sparse_bm25()
+    # 投資組合排程分析：沒設定 Zentra 時不會啟動（見 app/backend/insight/scheduler.py）
+    insight_scheduler.start()
     yield
+    await insight_scheduler.stop()
     await close_pool()
 
 

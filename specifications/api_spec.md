@@ -568,6 +568,30 @@ Body `{"kind": "report" | "deck", "theme": "consulting", "length": 12}`
 
 ---
 
+## 8.6 投資組合排程分析（Portfolio Insight）
+
+> 流程、排程語意、Zentra 契約見 [`portfolio_insight_spec.md`](./portfolio_insight_spec.md)。全部需要登入，資料只看得到自己的。
+
+| 方法 | 路徑 | 說明 |
+| :--- | :--- | :--- |
+| `GET` | `/api/portfolio/items` | `{holdings[], watchlist[], limit_per_list}` |
+| `POST` | `/api/portfolio/items` | `{list_type: HOLDING\|WATCHLIST, market: TW\|US, symbol, name, cost?, shares?}` → `201`。庫存必填 `cost`、`shares`（`422`）；同市場同代碼已存在（不論在哪個清單）→ `409`；超過 30 檔 → `409` |
+| `PATCH` | `/api/portfolio/items/{id}` | `{list_type?, name?, cost?, shares?}`。市場與代碼不能改。改成 `HOLDING` 時仍要有成本與股數 |
+| `DELETE` | `/api/portfolio/items/{id}` | |
+| `GET` | `/api/portfolio/summary` | 庫存總覽（「庫存」頁的總現值與甜甜圈圖）：`total_value_twd`、`total_cost_twd`、`unrealized_pnl_twd/pct`、`day_change_pct`（對昨收）、`market_split_pct{TW,US}`、`usd_twd`、`holdings[]`（各檔 `price`、`value_twd`、`weight_pct`、`pnl_twd`、`day_change_pct`）、`unpriced[]`（抓不到報價、未計入的代碼）。報價來自 Yahoo，快取 `QUOTE_CACHE_SECONDS`（預設 60） |
+| `GET` | `/api/insights/schedule` | `{schedule \| null, zentra_configured, scheduler_running}` |
+| `PUT` | `/api/insights/schedule` | `{enabled, frequency: DAILY\|WEEKDAYS\|WEEKLY\|MONTHLY, run_time: "HH:MM"（台北）, weekday?（1–7）, month_day?（1–28）, risk_tolerance?, cash_twd?}`，回傳含 `next_run_at` |
+| `POST` | `/api/insights/jobs` | 立即分析一次 → `202`。已有進行中的 → `409`；清單是空的 → `422`；Zentra 未設定或排程器沒跑 → `503` |
+| `GET` | `/api/insights/jobs?limit=20` | 最近的分析紀錄（不含結果） |
+| `GET` | `/api/insights/jobs/{id}` | 單次分析：job 欄位 + `portfolio_output`（portfolio-advisor 完整輸出）+ `results[]`（每檔 × 每個 tool 的完整輸出，K 線圖以 `has_chart` 表示） |
+| `GET` | `/api/insights/results/{id}/chart` | K 線圖 `image/png`。超過保留期或不是 stock-chart → `404` |
+
+`results[].output` 與 `portfolio_output` 的結構就是 Zentra 的輸出信封
+（`tool`、`as_of`、`security`、`data`、`analysis`、`warnings`、`disclaimer`），
+欄位定義見 Zentra repo 的 `examples/stock-suite/README.md`。
+
+---
+
 ## 9. 環境變數參考
 
 完整清單見 [`env.md`](./env.md)，以下僅列與本文件端點直接相關者：

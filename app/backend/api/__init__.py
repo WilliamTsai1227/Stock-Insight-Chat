@@ -8,6 +8,7 @@ from .explore import router as explore_router
 from .deep_research import router as deep_research_router
 from .mcp import router as mcp_router
 from .notes import router as notes_router
+from .portfolio import router as portfolio_router
 
 
 api_router = APIRouter()
@@ -38,5 +39,8 @@ api_router.include_router(mcp_router)
 
 # 8. 筆記（把對話整理成筆記）
 api_router.include_router(notes_router)
+
+# 投資組合排程分析（庫存／觀察清單 → Zentra stock-suite）
+api_router.include_router(portfolio_router)
 
 __all__ = ["api_router"]

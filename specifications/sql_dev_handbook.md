@@ -184,6 +184,9 @@ COMMIT;
 | `V006__quota_reset_logs.sql` | 新增 `quota_reset_logs` 表 |
 | `V007__user_feedback.sql` | 新增 `user_feedback` 表 |
 | `V008__user_feedback_tokens_granted.sql` | `user_feedback.tokens_granted` |
+| `V009__notes.sql` | 新增 `note_pages`、`notes`（筆記功能）。⚠️ 2026-11-07 查核：**正式 RDS 尚未套用** |
+| `V010__note_pages_source_chat.sql` | `note_pages.source_chat_id` + 唯一索引（須在 V009 之後）。⚠️ 2026-11-07 查核：**正式 RDS 尚未套用** |
+| `V011__portfolio_insight.sql` | 投資組合排程分析四張表（2026-11-07 已套用正式 RDS） |
 
 ### 4.3 對既有資料庫執行 migration
 

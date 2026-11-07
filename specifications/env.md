@@ -281,6 +281,22 @@ docker compose ... exec backend env | grep <變數名>               # 驗證讀
 
 ---
 
+## 十二之一、投資組合排程分析（Zentra）
+
+| 變數 | 預設 | 說明 |
+| :--- | :--- | :--- |
+| `ZENTRA_MCP_URL` | — | Zentra 的 MCP 端點。**允許 http 與私有 IP**（同 VPC 內網），例如 `http://10.0.3.7:8000/mcp` |
+| `ZENTRA_MCP_KEY` | — | Zentra 發的 `zmcp_live_…`，只勾選 stock-suite 五個 Agent |
+| `ZENTRA_API_URL` | MCP 網址去掉 `/mcp` | 輪詢 Run 結果用的 REST 根網址 |
+| `INSIGHT_MAX_CONCURRENCY` | 4 | 一個 job 內同時呼叫幾個個股 tool |
+| `INSIGHT_SCHEDULER_ENABLED` | 1 | `0` 關閉排程器 |
+
+兩個必填變數沒設定時排程器不啟動，其他功能不受影響。完整清單（逾時、保留期等）見
+[`portfolio_insight_spec.md` §3](./portfolio_insight_spec.md#3-設定)。
+**不要**把 Zentra 加進 `MCP_SERVERS_JSON`，那會讓聊天的 LLM 也能呼叫這些 tool。
+
+---
+
 ## 十三、除錯
 
 | 變數 | 預設 | 說明 |
@@ -326,6 +342,10 @@ TAVILY_API_KEY=tvly-...
 
 # ── 深度研究 ──────────────────────────────────────────
 DEEP_SEARCH_MODEL=gpt-5.6-luna
+
+# ── 投資組合排程分析（Zentra，同 VPC 內網）──────────
+ZENTRA_MCP_URL=http://10.0.3.7:8000/mcp
+ZENTRA_MCP_KEY=zmcp_live_...
 
 # ── 延遲調校（可選；不設則用程式預設）────────────────
 ROUTER_REASONING_EFFORT=minimal
