@@ -69,7 +69,7 @@ class InsightScheduler:
         self._last_cleanup: datetime | None = None
         self.tick_seconds = _env_int("INSIGHT_TICK_SECONDS", 30, 5, 300)
         self.stale_minutes = _env_int("INSIGHT_STALE_MINUTES", 30, 5, 24 * 60)
-        self.max_running = _env_int("INSIGHT_MAX_RUNNING_JOBS", 2, 1, 20)
+        self.max_running = _env_int("INSIGHT_MAX_RUNNING_JOBS", 4, 1, 20)
 
     # ── 生命週期 ────────────────────────────────────────────────────
 

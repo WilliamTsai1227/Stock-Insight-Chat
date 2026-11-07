@@ -38,7 +38,7 @@ Zentra 那一側的契約（輸入、輸出、錯誤、部署）以 Zentra repo 
 | 庫存整體（有庫存才做） | `portfolio-advisor` | `use_llm=true`，`precomputed` = 上面庫存那幾檔成功的輸出（K 線圖的 base64 已移除），`investor_profile` = 排程設定的風險偏好與現金 |
 
 - 觀察清單**不進** `portfolio-advisor`。
-- 個股呼叫同時最多 `INSIGHT_MAX_CONCURRENCY` 個（預設 4）。每完成一個就寫一列 `insight_results`，前端可以邊跑邊看。
+- 個股呼叫同時最多 `INSIGHT_MAX_CONCURRENCY` 個（預設 8）。每完成一個就寫一列 `insight_results`，前端可以邊跑邊看。
 - 實測（2026-11-07，本機）：2 檔庫存 + 1 檔觀察清單，12 個個股呼叫加上 1 次整體建議，總共約 1 分 50 秒。
 
 ### 「不能 call 錯」的保證
@@ -111,6 +111,41 @@ Zentra 那一側的契約（輸入、輸出、錯誤、部署）以 Zentra repo 
    上一輪還沒跑完時下一個排程到了，這次會跳過並記 log，排程照樣往後推。手動按「立即分析」會回 `409`。
 5. **收屍**：`RUNNING` 但 `heartbeat_at` 超過 `INSIGHT_STALE_MINUTES`（預設 30）沒更新的 job 會標成 `FAILED`，通常是因為 backend 在執行中被重啟。
 
+### 排隊（很多人同時到點時）
+
+**排隊在 PostgreSQL，不在 backend 記憶體。** 到點時排程器只做一件事：為每位使用者 INSERT 一列
+`insight_jobs`（`status = QUEUED`）。真正開始跑的時候才從 DB 認領：
+
+```sql
+UPDATE insight_jobs SET status = 'RUNNING' …
+ WHERE id IN (SELECT id FROM insight_jobs WHERE status = 'QUEUED'
+               ORDER BY created_at LIMIT <空位數> FOR UPDATE SKIP LOCKED)
+```
+
+- **順序**：先建立的先跑（FIFO）。同一時間點到期的排程在同一輪建立，所以先後差距只有幾毫秒。
+- **同時跑幾個**：`INSIGHT_MAX_RUNNING_JOBS`（預設 4）。有一個跑完就立刻叫醒排程器，補下一個，不必等下一輪。
+- **記憶體**：只有**正在跑**的 job 佔記憶體。每個 job 把 1–4 的輸出留到最後交給 portfolio-advisor，
+  一檔大約 30–100 KB（K 線圖已經轉存 DB，不在記憶體），30 檔約 3 MB；4 個 job 同時跑約 12 MB，
+  遠低於 backend 的 640 MB 上限。排隊中的 job 不佔任何記憶體。
+- **backend 重啟**：排隊中的 job 留在 DB，重啟後照樣會跑。執行到一半的 job 超過 `INSIGHT_STALE_MINUTES`
+  沒有心跳就標成 `FAILED`，已經寫入的個股結果會保留，但**不會自動重跑**，要等下一次排程或手動重跑。
+
+**人很多時，「準時」指的是準時開始排隊，不保證準時跑完。** 粗估（2026-11-07 實測：3 檔股票一次約 2 分鐘）：
+
+| 同時到點的人數（每人約 5 檔） | 預設設定下全部跑完 |
+| :--- | :--- |
+| 4 | 約 3 分鐘 |
+| 40 | 約 30 分鐘 |
+| 400 | 約 5 小時 |
+
+要撐更多人，依序可以：
+
+1. **調高 `INSIGHT_MAX_RUNNING_JOBS` / `INSIGHT_MAX_CONCURRENCY`**：實際上限是 LLM 供應商的速率限制
+   （每檔新聞要 3 次網路搜尋），不是 backend 或 Zentra。
+2. **多開 backend 實例**：認領用 `FOR UPDATE SKIP LOCKED`，多個實例同時跑不會搶到同一個 job，也不會重複執行。
+   不想讓 API 實例跑分析的話，設 `INSIGHT_SCHEDULER_ENABLED=0`，另外開專門跑排程的實例。
+3. **錯開時間**：前端預設 14:30；使用者多時可以把預設時間分散，避免全部擠在同一分鐘。
+
 ### 保留期
 
 每小時清理一次：
@@ -132,8 +167,8 @@ K 線圖以 BYTEA 存在 `insight_results.chart_png`，每張約 100 KB，不放
 | `ZENTRA_REQUEST_TIMEOUT_SECONDS` | 30 | 單次 HTTP 請求的逾時 |
 | `INSIGHT_TOOL_TIMEOUT_SECONDS` | 1200 | 單一 tool 從送出到結束最多等多久 |
 | `INSIGHT_POLL_SECONDS` | 3 | 輪詢起始間隔（會漸增到最多 15 秒） |
-| `INSIGHT_MAX_CONCURRENCY` | 4 | 一個 job 內同時進行的個股呼叫數 |
-| `INSIGHT_MAX_RUNNING_JOBS` | 2 | 一個 backend 同時跑幾個 job（多使用者時排隊） |
+| `INSIGHT_MAX_CONCURRENCY` | 8 | 一個 job 內同時進行的個股呼叫數 |
+| `INSIGHT_MAX_RUNNING_JOBS` | 4 | 一個 backend 同時跑幾個 job（多使用者時排隊，見 §2「排隊」） |
 | `INSIGHT_SCHEDULER_ENABLED` | 1 | `0` = 這個實例不跑排程器 |
 | `INSIGHT_TICK_SECONDS` | 30 | 排程器最長睡多久 |
 | `INSIGHT_STALE_MINUTES` | 30 | 多久沒有心跳就當作中斷 |

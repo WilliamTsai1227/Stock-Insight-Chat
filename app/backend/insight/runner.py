@@ -130,7 +130,7 @@ async def _run(job_id: UUID) -> None:
         await _finish(job_id, status="FAILED", error="庫存與觀察清單都是空的", counts={"total": 0, "succeeded": 0, "failed": 0})
         return
 
-    concurrency = max(1, min(int(os.getenv("INSIGHT_MAX_CONCURRENCY", "4") or 4), 16))
+    concurrency = max(1, min(int(os.getenv("INSIGHT_MAX_CONCURRENCY", "8") or 8), 16))
     semaphore = asyncio.Semaphore(concurrency)
     outputs: dict[tuple[str, str, str], dict[str, Any]] = {}
     tally = {"total": 0, "succeeded": 0, "failed": 0}

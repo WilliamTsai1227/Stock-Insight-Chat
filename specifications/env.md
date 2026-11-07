@@ -297,7 +297,8 @@ docker compose ... exec backend env | grep <變數名>               # 驗證讀
 | `ZENTRA_MCP_URL` | — | Zentra 的 MCP 端點。**允許 http 與私有 IP**（同 VPC 內網），例如 `http://10.0.3.7:8000/mcp` |
 | `ZENTRA_MCP_KEY` | — | Zentra 發的 `zmcp_live_…`，只勾選 stock-suite 五個 Agent |
 | `ZENTRA_API_URL` | MCP 網址去掉 `/mcp` | 輪詢 Run 結果用的 REST 根網址 |
-| `INSIGHT_MAX_CONCURRENCY` | 4 | 一個 job 內同時呼叫幾個個股 tool |
+| `INSIGHT_MAX_CONCURRENCY` | 8 | 一個 job 內同時呼叫幾個個股 tool |
+| `INSIGHT_MAX_RUNNING_JOBS` | 4 | 一個 backend 同時跑幾位使用者的分析，其餘在 DB 排隊 |
 | `INSIGHT_SCHEDULER_ENABLED` | 1 | `0` 關閉排程器 |
 
 兩個必填變數沒設定時排程器不啟動，其他功能不受影響。完整清單（逾時、保留期等）見
