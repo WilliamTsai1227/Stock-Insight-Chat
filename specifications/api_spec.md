@@ -568,6 +568,38 @@ Body `{"kind": "report" | "deck", "theme": "consulting", "length": 12}`
 
 ---
 
+## 8.5 新聞瀏覽／AI 分析瀏覽（Market Feed）
+
+實作：[`app/backend/api/market_feed.py`](../app/backend/api/market_feed.py)。從原 stock_insight 專案移植，直接讀 MongoDB（預設沿用 `MONGO_URI` / `MONGO_DB`，可用 `FEED_MONGO_URI` / `FEED_MONGO_DB` 覆寫）。三個端點皆需 `Authorization: Bearer <access_token>`；連線字串未設定時回 `503`，Mongo 連線失敗回 `502`。
+
+### `GET /api/feed/news`
+
+| 參數 | 型別 | 說明 |
+| :--- | :--- | :--- |
+| `keyword` | string? | 關鍵字（≤100 字）。優先走 `$text`；collection 沒有 text index 時退回標題／內文 regex |
+| `start_time` / `end_time` | int? | Unix 秒，篩 `publishAt` |
+| `page` | int | 從 1 開始，每頁 20 筆，上限 500 |
+
+回應：`{ "page": 1, "nextPage": 2 | null, "data": [{ title, content(前 150 字), publishAt, category, source, url, ... }] }`
+
+### `GET /api/feed/news/{news_id}`
+
+`news_id` 為 ObjectId 字串。回應 `{ "data": { "url": "...", "title": "..." } }`；格式錯誤 `400`、不存在 `404`。
+
+### `GET /api/feed/ai-analysis`
+
+| 參數 | 型別 | 說明 |
+| :--- | :--- | :--- |
+| `keyword` | string? | 比對 `summary` / `important_news` / `potential_stocks_and_industries` / `source_news.title`（escape 後 regex） |
+| `industry` | string? | 比對 `industry_list` 任一元素 |
+| `is_summary` | bool? | `false` 逐條分析、`true` 統整分析 |
+| `start_time` / `end_time` | int? | Unix 秒 |
+| `page` | int | 每頁 15 筆 |
+
+回應格式同上，`data` 為 `AI_news_analysis` 原始文件（`_id` 等 ObjectId 已轉字串）。
+
+---
+
 ## 8.6 投資組合排程分析（Portfolio Insight）
 
 > 流程、排程語意、Zentra 契約見 [`portfolio_insight_spec.md`](./portfolio_insight_spec.md)。全部需要登入，資料只看得到自己的。

@@ -95,6 +95,15 @@ docker compose ... exec backend env | grep <變數名>               # 驗證讀
 
 > ⚠️ `MONGO_URI` 與 `MONGODB_URL` 是**兩個不同的變數名指向同一個 MongoDB**（[`news.py`](../app/backend/tools/news.py) 讀前者、[`ai_analysis.py`](../app/backend/tools/ai_analysis.py) 讀後者）。正式環境**兩個都要設**，且值要相同，否則其中一個工具會連到 `localhost` 而失敗。
 
+### 新聞瀏覽／AI 分析瀏覽（側欄「新聞」「AI 分析」）
+
+| 變數 | 預設 | 說明 |
+| :--- | :--- | :--- |
+| `FEED_MONGO_URI` | 沿用 `MONGO_URI` | （選用）覆寫瀏覽頁的 MongoDB 連線字串，[`market_feed.py`](../app/backend/api/market_feed.py) 使用 |
+| `FEED_MONGO_DB` | 沿用 `MONGO_DB` | （選用）覆寫瀏覽頁讀取的資料庫名稱（collection：`news`、`AI_news_analysis`） |
+
+一般**不需要設定**，瀏覽頁直接用 `MONGO_URI` / `MONGO_DB`。只有要指向不同的叢集或改用唯讀帳號時才覆寫。兩者皆未設定時 `/api/feed/*` 回 503，只有這兩個頁面受影響。
+
 ---
 
 ## 六、Agent 模型與推理強度

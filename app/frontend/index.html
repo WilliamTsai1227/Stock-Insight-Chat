@@ -30,6 +30,7 @@
     <link rel="stylesheet" href="/css/index.css">
     <link rel="stylesheet" href="/css/deep-research.css">
     <link rel="stylesheet" href="/css/notes.css">
+    <link rel="stylesheet" href="/css/market-feed.css">
     <link rel="stylesheet" href="/css/portfolio.css">
     <!-- Google Fonts: Outfit & Inter -->
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
@@ -77,6 +78,16 @@
             <button id="notes-btn" class="new-chat-btn explore-btn">
                 <i data-lucide="notebook-pen"></i>
                 <span>筆記</span>
+            </button>
+
+            <!-- 新聞瀏覽／AI 分析瀏覽：直接讀 MongoDB（MONGO_URI） -->
+            <button id="news-feed-btn" class="new-chat-btn explore-btn">
+                <i data-lucide="newspaper"></i>
+                <span>新聞</span>
+            </button>
+            <button id="ai-feed-btn" class="new-chat-btn explore-btn">
+                <i data-lucide="sparkles"></i>
+                <span>AI 分析</span>
             </button>
 
             <!-- 投資組合：庫存／觀察清單，排程呼叫 Zentra 產生分析與調整建議 -->
@@ -344,6 +355,62 @@
                         選取訊息後就能整理成筆記。
                     </p>
                 </section>
+            </div>
+
+            <!-- 新聞瀏覽視圖：MongoDB news collection -->
+            <div id="news-feed-view" class="feed-view" data-feed="news">
+                <form class="feed-filters" data-role="filters">
+                    <label class="feed-field">
+                        <span>開始日期</span>
+                        <input type="date" name="start">
+                    </label>
+                    <label class="feed-field">
+                        <span>結束日期</span>
+                        <input type="date" name="end">
+                    </label>
+                    <label class="feed-field feed-field-grow">
+                        <span>關鍵字</span>
+                        <input type="search" name="keyword" maxlength="100" placeholder="搜尋新聞標題或內文">
+                    </label>
+                    <button type="submit" class="feed-search-btn"><i data-lucide="search"></i><span>搜尋</span></button>
+                </form>
+                <div class="feed-scroll" data-role="scroll">
+                    <div class="feed-list" data-role="list"></div>
+                    <p class="feed-status" data-role="status"></p>
+                    <div class="feed-sentinel" data-role="sentinel"></div>
+                </div>
+            </div>
+
+            <!-- AI 分析瀏覽視圖：MongoDB AI_news_analysis collection -->
+            <div id="ai-feed-view" class="feed-view" data-feed="ai">
+                <form class="feed-filters" data-role="filters">
+                    <label class="feed-field">
+                        <span>開始日期</span>
+                        <input type="date" name="start">
+                    </label>
+                    <label class="feed-field">
+                        <span>結束日期</span>
+                        <input type="date" name="end">
+                    </label>
+                    <label class="feed-field">
+                        <span>分析類型</span>
+                        <select name="is_summary">
+                            <option value="false">逐條分析</option>
+                            <option value="true">統整分析</option>
+                        </select>
+                    </label>
+                    <label class="feed-field feed-field-grow">
+                        <span>關鍵字</span>
+                        <input type="search" name="keyword" maxlength="100" placeholder="搜尋分析、重點新聞或產業">
+                    </label>
+                    <button type="submit" class="feed-search-btn"><i data-lucide="search"></i><span>搜尋</span></button>
+                </form>
+                <div class="feed-active-filter hidden" data-role="industry-chip"></div>
+                <div class="feed-scroll" data-role="scroll">
+                    <div class="feed-list" data-role="list"></div>
+                    <p class="feed-status" data-role="status"></p>
+                    <div class="feed-sentinel" data-role="sentinel"></div>
+                </div>
             </div>
 
             <!-- 投資組合視圖：庫存、觀察清單、排程、分析報告（portfolio.js） -->
@@ -869,6 +936,7 @@
     <script src="/js/index.js"></script>
     <script src="/js/deep-research.js"></script>
     <script src="/js/notes.js"></script>
+    <script src="/js/market-feed.js"></script>
     <script src="/js/portfolio.js"></script>
     <script>lucide.createIcons();</script>
 </body>

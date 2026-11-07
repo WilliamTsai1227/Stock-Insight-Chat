@@ -1,0 +1,350 @@
+/* ============================================================
+   新聞瀏覽／AI 分析瀏覽（Market Feed）
+   沿用 index.css 的設計 token，深淺主題自動跟著切換。
+   ============================================================ */
+
+.feed-view {
+    display: none;              /* 由 market-feed.js 切為 flex */
+    flex: 1;
+    min-height: 0;
+    flex-direction: column;
+    background: var(--content-surface-gradient);
+    color-scheme: dark;         /* 原生日期選擇器跟著深色 */
+}
+
+body.light-theme .feed-view {
+    color-scheme: light;
+}
+
+/* ── 篩選列 ─────────────────────────────────────────── */
+
+.feed-filters {
+    flex: none;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 0.75rem;
+    padding: 1rem 1.75rem 0.9rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.feed-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    min-width: 0;
+}
+
+.feed-field > span {
+    color: var(--text-dim);
+    font-size: 0.72rem;
+    letter-spacing: 0.04em;
+}
+
+.feed-field-grow {
+    flex: 1 1 220px;
+}
+
+.feed-field input,
+.feed-field select {
+    height: 36px;
+    padding: 0 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: var(--modal-input-bg);
+    color: var(--text-main);
+    font: inherit;
+    font-size: 0.85rem;
+    outline: none;
+    min-width: 0;
+}
+
+.feed-field input:focus,
+.feed-field select:focus {
+    border-color: rgba(var(--accent-rgb), 0.5);
+}
+
+.feed-search-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    height: 36px;
+    padding: 0 1rem;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: var(--card-bg);
+    color: var(--text-main);
+    font: inherit;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: 0.2s;
+}
+
+.feed-search-btn:hover {
+    border-color: rgba(var(--accent-rgb), 0.45);
+    color: var(--accent);
+}
+
+.feed-search-btn i {
+    width: 15px;
+    height: 15px;
+}
+
+/* 產業篩選標籤 */
+.feed-active-filter {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin: 0.75rem 1.75rem 0;
+    align-self: flex-start;
+    padding: 0.3rem 0.4rem 0.3rem 0.75rem;
+    border-radius: 999px;
+    background: var(--menu-option-selected-bg);
+    color: var(--text-main);
+    font-size: 0.8rem;
+}
+
+.feed-active-filter.hidden {
+    display: none;
+}
+
+.feed-chip-clear {
+    width: 22px;
+    height: 22px;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 1rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.feed-chip-clear:hover {
+    background: var(--surface-hover);
+    color: var(--text-main);
+}
+
+/* ── 列表 ───────────────────────────────────────────── */
+
+.feed-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 1.25rem 1.75rem 2rem;
+}
+
+.feed-scroll::-webkit-scrollbar { width: 6px; }
+.feed-scroll::-webkit-scrollbar-track { background: transparent; }
+.feed-scroll::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 4px;
+}
+
+.feed-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    max-width: 880px;
+    margin: 0 auto;
+}
+
+.feed-status {
+    max-width: 880px;
+    margin: 1.25rem auto 0;
+    color: var(--text-dim);
+    font-size: 0.82rem;
+    text-align: center;
+}
+
+.feed-status:empty {
+    display: none;
+}
+
+.feed-status.error {
+    color: #e5484d;
+}
+
+.feed-sentinel {
+    height: 1px;
+}
+
+/* ── 卡片 ───────────────────────────────────────────── */
+
+.feed-card {
+    display: block;
+    padding: 1.05rem 1.25rem;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--card-bg);
+    color: var(--text-main);
+    text-decoration: none;
+    transition: border-color 0.2s, background 0.2s;
+}
+
+a.feed-card:hover {
+    border-color: rgba(var(--accent-rgb), 0.4);
+    background: var(--surface-hover);
+}
+
+.feed-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.45rem;
+    color: var(--text-dim);
+    font-size: 0.74rem;
+}
+
+.feed-tag {
+    padding: 0.1rem 0.5rem;
+    border-radius: 999px;
+    background: var(--mode-btn-bg);
+    border: 1px solid var(--surface-border-subtle);
+    color: var(--text-main);
+}
+
+.feed-time {
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+}
+
+.feed-card-title {
+    margin: 0;
+    font-family: 'Outfit', 'Inter', sans-serif;
+    font-size: 1.02rem;
+    font-weight: 600;
+    line-height: 1.45;
+}
+
+.feed-card-body {
+    margin: 0.45rem 0 0;
+    color: var(--text-dim);
+    font-size: 0.86rem;
+    line-height: 1.65;
+}
+
+/* ── AI 分析卡片 ─────────────────────────────────────── */
+
+.ai-section {
+    margin-top: 1rem;
+}
+
+.ai-section-title {
+    margin: 0 0 0.4rem;
+    color: var(--text-dim);
+    font-size: 0.72rem;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+}
+
+.ai-text {
+    font-size: 0.88rem;
+    line-height: 1.7;
+}
+
+.ai-text p {
+    margin: 0 0 0.45rem;
+}
+
+.ai-text p:last-child {
+    margin-bottom: 0;
+}
+
+.feed-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+
+.feed-chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.35rem;
+    padding: 0.28rem 0.65rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-main);
+    font: inherit;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: 0.2s;
+}
+
+.feed-chip:hover {
+    border-color: rgba(var(--accent-rgb), 0.45);
+    background: var(--surface-hover);
+}
+
+.feed-chip-sub {
+    color: var(--text-dim);
+    font-size: 0.7rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.ai-source-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.ai-source-link {
+    display: block;
+    width: 100%;
+    padding: 0.35rem 0.5rem;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--text-main);
+    font: inherit;
+    font-size: 0.84rem;
+    line-height: 1.5;
+    text-align: left;
+    cursor: pointer;
+}
+
+.ai-source-link::before {
+    content: '↗ ';
+    color: var(--text-dim);
+}
+
+.ai-source-link:hover {
+    background: var(--surface-hover);
+    text-decoration: underline;
+}
+
+.ai-source-link:disabled {
+    cursor: default;
+    opacity: 0.6;
+    text-decoration: none;
+}
+
+/* ── 平板／手機 ─────────────────────────────────────── */
+
+@media (max-width: 1024px) {
+    .feed-filters {
+        padding: 0.85rem 1rem 0.75rem;
+        gap: 0.6rem;
+    }
+
+    .feed-field:not(.feed-field-grow) {
+        flex: 1 1 130px;
+    }
+
+    .feed-scroll {
+        padding: 1rem 1rem 1.5rem;
+    }
+
+    .feed-active-filter {
+        margin: 0.6rem 1rem 0;
+    }
+
+    .feed-card {
+        padding: 0.9rem 1rem;
+    }
+}
