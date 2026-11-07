@@ -283,7 +283,7 @@ def _schedule_row(row: Optional[asyncpg.Record]) -> Optional[dict[str, Any]]:
 
 
 def _service_state() -> dict[str, Any]:
-    return {"zentra_configured": zentra_configured(), "scheduler_running": scheduler.running}
+    return {"zentra_configured": zentra_configured(), "scheduler_running": scheduler.available}
 
 
 @router.get("/api/insights/schedule")
@@ -343,7 +343,7 @@ def _job_row(row: asyncpg.Record) -> dict[str, Any]:
 async def run_now(user_id: UUID = Depends(get_current_user_id), db: asyncpg.Connection = Depends(get_db)):
     if not zentra_configured():
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "分析服務（Zentra）尚未設定。")
-    if not scheduler.running:
+    if not scheduler.available:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "排程器沒有在執行，暫時無法分析。")
     has_items = await db.fetchval("SELECT EXISTS (SELECT 1 FROM portfolio_items WHERE user_id = $1)", user_id)
     if not has_items:

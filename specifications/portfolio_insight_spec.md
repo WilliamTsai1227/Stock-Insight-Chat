@@ -144,6 +144,10 @@ UPDATE insight_jobs SET status = 'RUNNING' …
    （每檔新聞要 3 次網路搜尋），不是 backend 或 Zentra。
 2. **多開 backend 實例**：認領用 `FOR UPDATE SKIP LOCKED`，多個實例同時跑不會搶到同一個 job，也不會重複執行。
    不想讓 API 實例跑分析的話，設 `INSIGHT_SCHEDULER_ENABLED=0`，另外開專門跑排程的實例。
+   這種實例收到「立即分析」時照樣接受，只把 job 寫進 DB（`QUEUED`），由跑排程器的實例認領
+   （`scheduler.available`）。**至少要有一台跑排程器**，否則 job 會一直停在 `QUEUED`。
+   多實例認領的正確性已實測：3 個排程器實例同時對 60 個到期排程認領，建立剛好 60 個 job、
+   每個只被執行一次（2026-11-07）。
 3. **錯開時間**：前端預設 14:30；使用者多時可以把預設時間分散，避免全部擠在同一分鐘。
 
 ### 保留期

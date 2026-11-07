@@ -73,8 +73,22 @@ class InsightScheduler:
 
     # ── 生命週期 ────────────────────────────────────────────────────
 
+    @property
+    def disabled_by_config(self) -> bool:
+        """這個實例刻意不跑排程器（INSIGHT_SCHEDULER_ENABLED=0）：由別台跑。"""
+        return os.getenv("INSIGHT_SCHEDULER_ENABLED", "1").lower() in ("0", "false", "no")
+
+    @property
+    def available(self) -> bool:
+        """排程器「應該有人在跑」：這台在跑，或這台刻意關掉、交給別台。
+
+        多實例部署時，API 實例設 INSIGHT_SCHEDULER_ENABLED=0；它們收到「立即分析」
+        只負責把 job 寫進 DB（QUEUED），由跑排程器的那台認領。
+        """
+        return self.running or self.disabled_by_config
+
     def start(self) -> None:
-        if os.getenv("INSIGHT_SCHEDULER_ENABLED", "1").lower() in ("0", "false", "no"):
+        if self.disabled_by_config:
             _log("scheduler disabled by INSIGHT_SCHEDULER_ENABLED")
             return
         if not configured():
