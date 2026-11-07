@@ -3,7 +3,7 @@
 本文件列出**程式實際會讀取的所有環境變數**、預設值與注意事項。
 
 > **權威來源**：以原始碼中的 `os.getenv(...)` 為準。本文件與其對齊；新增變數時請一併更新此表。  
-> 深入的 Flash／Router 調參說明見 [`readme_full_details.md`](./readme_full_details.md)；Agent 行為見 [`agent_spec.md`](./agent_spec.md)。
+> 深入的 Flash 調參說明見 [`agent_spec.md`](./agent_spec.md) §9；Agent 行為見 [`agent_spec.md`](./agent_spec.md)。
 
 ---
 
@@ -66,7 +66,7 @@ docker compose ... exec backend env | grep <變數名>               # 驗證讀
 | `GOOGLE_OAUTH_REDIRECT_URI` | 無預設（必填） | ✅ | Callback URI，須與 Google Console **完全一致**（含 protocol / port / path） |
 | `FRONTEND_URL` | `http://localhost` | ✅ | 前端根網址；登入後重導目標，同時作為 `/explore/*` 的 CSP `frame-ancestors` 白名單 |
 
-少了這組就無法登入。設定步驟與 Google Console 對應見 [`google_sso.md`](./google_sso.md)。
+少了這組就無法登入。設定步驟與 Google Console 對應見 [`auth_system_spec.md`](./auth_system_spec.md) §6。
 
 ---
 
@@ -196,7 +196,7 @@ docker compose ... exec backend env | grep <變數名>               # 驗證讀
 
 ## 九、Flash（快捷）模式
 
-僅在 `response_mode=flash` 時生效；思考模式不受這些變數影響。完整說明見 [`readme_full_details.md`](./readme_full_details.md)。
+僅在 `response_mode=flash` 時生效；思考模式不受這些變數影響。完整說明見 [`agent_spec.md`](./agent_spec.md) §9。
 
 | 變數 | 預設 | 說明 |
 | :--- | :--- | :--- |

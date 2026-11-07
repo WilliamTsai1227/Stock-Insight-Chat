@@ -12,7 +12,7 @@
 | **快捷模式（Flash）** | `chat_mode=stock_agent` + `response_mode=flash` | [`agent/flash_pipeline.py`](../app/backend/agent/flash_pipeline.py) 線性管線，**不走 LangGraph** | `FLASH_ANALYST_MODEL`（預設 `gpt-5-mini`） |
 | **一般對話** | `chat_mode=general` | [`agent/general_chat.py`](../app/backend/agent/general_chat.py) | `GENERAL_CHAT_MODEL`（預設 `gpt-4o-mini`） |
 
-Flash 模式預設**略過 Router LLM**（`FLASH_SKIP_ROUTER=1`），直接以使用者原文填檢索參數，省掉一次 LLM 往返；其可調變數見 [`env.md`](./env.md) §九與 [`readme_full_details.md`](./readme_full_details.md)。一般對話不做向量檢索，可選開啟網路搜尋（`GENERAL_CHAT_ENABLE_WEB_SEARCH`）。
+Flash 模式預設**略過 Router LLM**（`FLASH_SKIP_ROUTER=1`），直接以使用者原文填檢索參數，省掉一次 LLM 往返；其可調變數見 [`env.md`](./env.md) §九與本文件 §9。一般對話不做向量檢索，可選開啟網路搜尋（`GENERAL_CHAT_ENABLE_WEB_SEARCH`）。
 
 **§1 之後的內容只描述思考模式。**
 
@@ -220,3 +220,98 @@ ToolMessage 中的正文經 `_clip_for_llm(..., MAX_TOOL_ITEM_CHARS)`（預設�
 前三項都是**純 `.env` 變更**，不需重 build image；改完用 `up -d backend` 重建容器即可（`restart` 不會重讀 env）。
 
 診斷方法：OpenAI Platform → Logs，對照 Router 與 Analyst 兩筆的 tokens 與時間，先確認時間花在哪一段再動手。
+
+---
+
+## 9. 快捷模式（Flash）問句收成與雙軌檢索
+
+（原 `readme_full_details.md`）
+
+### 雙軌檢索策略（`FLASH_REWRITE_DUAL_SEARCH`）
+
+> 僅在 **`FLASH_LLM_QUERY_REWRITE=1`**（問句收成已開啟）時有意義；收成關閉時此變數不生效。
+
+| 值 | 模式 | 行為 |
+|----|------|------|
+| **`1`**（預設） | **雙軌／並行** | **同時**做：① 用**原文**搜向量庫 ② 用 `FLASH_REWRITE_MODEL`（預設 `gpt-4o-mini`）收成問句。若收成成功且結果與原文**字串不同**（各先 `.strip()` 比對），再以收成後的 `query` **搜第二次**；兩批結果經 `_merge_news_retrieved` **合併、去重**。牆鐘時間通常接近「較慢的那條路」，而不是「收成時間 + 兩次檢索」完全相加。 |
+| **`0`** | **單軌／循序** | **先**等收成完成，**只**用收成後的 `query` 搜**一次**（收成失敗／逾時／解析失敗則退回原文）。較省向量查詢次數，但無「原文並行保底」；牆鐘 ≈ 收成時間 + 一次檢索。 |
+
+**何時會跑第二次搜尋？**（雙軌 `=1` 時，三者須同時成立；實作見 `app/backend/agent/flash_pipeline.py`）
+
+1. 收成 LLM **成功回覆**（未逾時、未 API 錯誤）
+2. 從 JSON 解析出的 `query` **非空**
+3. 收成字串 **≠** 使用者原文（純字串相等比較，非語意相似度）
+
+若 LLM 回傳與原文相同、解析失敗或逾時，則**不**跑第二次，僅保留第一次（原文）搜尋結果 `r_orig` 作為保底。
+
+**雙軌流程圖**（`FLASH_LLM_QUERY_REWRITE=1` 且 `FLASH_REWRITE_DUAL_SEARCH=1`）：
+
+```
+使用者問句
+    │
+    ├─ 第 1 次搜尋（原文）─────────→ r_orig  [最多 FLASH_RETRIEVAL_TOP_K 篇，預設 10]
+    │
+    └─ 4o-mini 收成 → 若 query 與原文不同
+           │
+           └─ 第 2 次搜尋（收成 query）→ r_rw   [最多 FLASH_RETRIEVAL_TOP_K 篇]
+                    │
+                    ▼
+         _merge_news_retrieved(r_orig, r_rw, cap=FLASH_MERGED_RETRIEVE_CAP)
+                    │
+         ┌──────────┴──────────┐
+         │ 1. 先保留 r_orig 全部 │
+         │ 2. 再補 r_rw 新篇     │
+         │ 3. 依 mongo_id 去重   │
+         │ 4. 最多 cap 篇        │  ← 預設 max(TOP_K×2, 16)，TOP_K=10 時為 20
+         └──────────┬──────────┘
+                    ▼
+         build_flash_analyst_messages（每篇正文截 FLASH_REF_MAX_BODY_CHARS 字）
+                    ▼
+              FLASH_ANALYST_MODEL 作答（預設 gpt-5-mini）
+```
+
+**合併去重重點**（`_merge_news_retrieved`，`app/backend/agent/flash_pipeline.py`）：
+
+| 問題 | 答案 |
+|------|------|
+| 第一次結果會被採納嗎？ | **會**，且排在前面、優先保留 |
+| 第二次結果呢？ | **會**，只補第一次沒有的新聞 |
+| 兩次都搜到同一篇？ | **只留第一次那份**（依 `mongo_id` 去重；無 `mongo_id` 時退而用 `title` + `publishAt`） |
+| 會重新依分數排序嗎？ | **不會**，維持「第一次順序 + 第二次新增」 |
+| 最多幾篇？ | `FLASH_MERGED_RETRIEVE_CAP`（預設 `max(FLASH_RETRIEVAL_TOP_K×2, 16)`） |
+
+> **設計取捨**：雙軌的本質是 **第一次當主結果 + 第二次當補充召回**，不是「第二次取代第一次」。若收成 query 幾乎每次都與原文不同，牆鐘時間通常**不會**比單軌（收成 → 只搜一次）更快，但會多一次向量查詢；換取的是原文保底與更廣的召回。想壓低成本可設 `FLASH_REWRITE_DUAL_SEARCH=0`。
+
+### 快捷模式（`response_mode: flash`）相關 `.env` 變數（選用）
+
+下列變數**僅影響快捷模式**；程式內皆已有預設值，**不必**為了啟用快捷而強制寫入 `.env`。只有當你要**覆寫**預設（換模型、調速度／品質權衡、改檢索區間等）時，再在專案根目錄的 `.env` 中新增即可。修改後請重啟後端（或重建容器）讓環境變數生效。
+
+**內建預設（與程式一致）** — 若你希望 `.env` 與目前程式預設對齊，可照下表填寫：
+
+| 變數 | 建議填入（= 目前程式預設） | 簡短說明 |
+|------|---------------------------|----------|
+| `FLASH_SKIP_ROUTER` | `1` | `1`＝略過 Router LLM（較快）；`0`＝啟動 Router 協助改寫檢索關鍵字（較慢） |
+| `FLASH_ANALYST_MODEL` | `gpt-5-mini` | 快捷模式 Analyst 使用的模型 |
+| `FLASH_ANALYST_MAX_TOKENS` | `5000` | 對應 **`max_completion_tokens`**。`gpt-5-mini` 等會先耗用推理 token，設太小會**只剩標題／半句可見正文**。**不設定**＝用程式預設 `5000`；設為**空字串**＝不傳上限 |
+| `FLASH_RETRIEVAL_TOP_K` | `10` | **`search_news`（快捷）** 每輪取回筆數；思考模式不依此變數 |
+| `FLASH_REF_MAX_BODY_CHARS` | `2200` | 每段「參考正文」注入 Analyst【完整參考資料】前的截斷上限；字數愈少通常愈快 |
+| `FLASH_DATE_RANGE_DAYS` | `80` | 快捷兩工具預設 `start_date`／`end_date` 的回溯天數；不寫入時同樣為 `80` |
+| `FLASH_LLM_QUERY_REWRITE` | `0` | `1`＝檢索前以小模型收成 query；預設關閉 |
+| `FLASH_REWRITE_DUAL_SEARCH` | `1` | `1`＝並行／雙軌搜尋＋合併去重（較不保證最便宜，但不把延遲變成「改寫＋檢索」完全相加） |
+| `FLASH_REWRITE_MODEL` | `gpt-4o-mini` | 收成用模型 |
+| `FLASH_REWRITE_MAX_COMPLETION_TOKENS` | `256` | 收成回覆 token 上限 |
+| `FLASH_REWRITE_TIMEOUT_SEC` | `12` | 收成逾時（秒） |
+| `FLASH_MERGED_RETRIEVE_CAP` | `max(FLASH_RETRIEVAL_TOP_K×2,16)` | 雙軌合併後參考上限 |
+
+> **為什麼回答只有一兩行？**  
+> `.env` 若仍是 **`FLASH_ANALYST_MAX_TOKENS=900`**（或其他過小數值），在 **`gpt-5-mini`** 上很常發生：**`max_completion_tokens` 多半先被內部推理用掉**，對使用者可見的段落幾乎寫不完，看起來像只有標題＋半截句子。請改 **`2800` 或以上**、或**刪除此變數**讓程式用預設 `5000`（設成空字串則完全不傳上限）。
+>
+> 注意專案根目錄 `.env.example` 的註解範例寫的是 `2800`，比程式預設保守；兩者都可用，但別誤以為 `2800` 是預設值。
+
+**什麼時候才需要在 `.env` 加上述變數？**
+
+- **想換模型**：例如 `FLASH_ANALYST_MODEL=gpt-4o-mini`（以你帳號／供應商實際可用模型為準）。
+- **想要品質、可接受較慢**：例如 `FLASH_SKIP_ROUTER=0`、將 `FLASH_ANALYST_MAX_TOKENS` 調大、將 `FLASH_RETRIEVAL_TOP_K` 調大。
+- **想再壓低延遲**：例如略降 `FLASH_RETRIEVAL_TOP_K`、`FLASH_REF_MAX_BODY_CHARS`。若曾開 **`FLASH_LLM_QUERY_REWRITE=1`**，可改 **`FLASH_REWRITE_DUAL_SEARCH=0`**（只搜一次較便宜）或將 **`FLASH_MERGED_RETRIEVE_CAP`** 調小。（**請勿對 `gpt-5-mini`** 將 `FLASH_ANALYST_MAX_TOKENS` 設得過低，否則可見正文極易被截斷。）
+
+**結論**：不必為了「有預設值」而把整張表複製進 `.env`；依需求只覆寫少數鍵即可。其餘 Router／歷史載入相關變數仍見前文「可調整的環境變數」表格。

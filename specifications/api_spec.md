@@ -44,7 +44,7 @@
 
 > **沒有 `PATCH /api/project`。** 專案目前不支援改名；[`project.py`](../app/backend/api/project.py) 只實作 POST / GET all / GET / DELETE。
 >
-> 檔案模組（`/api/files/*`）為 **stub**，S3 上傳與檢索尚未完成，見 [`feature_mapping.md`](./feature_mapping.md)。
+> 檔案模組（`/api/files/*`）為 **stub**，S3 上傳與檢索尚未完成。
 >
 > 探索代理不出現在 Swagger（`include_in_schema=False`）；`KINETIC_UPSTREAM` 未設定時整組回 404。
 
@@ -395,7 +395,7 @@ RT Rotation：換取新的 Access Token + 新的 Refresh Token。
 
 ## 6. 檔案模組（Files）— stub
 
-> ⚠️ 端點已存在但**尚未完整實作**（S3 上傳與後續檢索未完成），見 [`feature_mapping.md`](./feature_mapping.md)。
+> ⚠️ 端點已存在但**尚未完整實作**（S3 上傳與後續檢索未完成）。
 
 ### `POST /api/files/upload`
 
@@ -433,7 +433,7 @@ backend 內建的反向代理（[`explore.py`](../app/backend/api/explore.py)）
 **MVP 不落地任何資料**：session 只放在 backend 記憶體（`SessionStore`，TTL 由
 `DEEP_SEARCH_SESSION_TTL_MINUTES` 控制，預設 120 分鐘），前端重新整理即失去 `session_id`；
 上傳的文件只在研究期間存在於 OpenAI 的臨時 vector store，研究結束（含失敗）立刻刪除。
-完整設計見 [`deep_search.md`](./deep_search.md) §21。
+完整設計見 [`deep_research_spec.md`](./deep_research_spec.md)。
 
 **唯一的例外是 token 用量**：深度研究與聊天吃同一份月配額。`POST /runs` 與
 `POST /runs/{sid}/artifacts` 都會先做配額 pre-flight（已達上限回 **429**，body 與聊天相同：

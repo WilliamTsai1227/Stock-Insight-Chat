@@ -200,7 +200,7 @@ erDiagram
 
 ### 2.2 users (使用者)
 
-會員系統核心表。**僅支援 Google SSO 登入**（無密碼欄位）；`google_sub`（Google OIDC subject）為身分主鍵，登入時以 `WHERE google_sub = $1` 查找。詳見 [`google_sso.md`](./google_sso.md)。
+會員系統核心表。**僅支援 Google SSO 登入**（無密碼欄位）；`google_sub`（Google OIDC subject）為身分主鍵，登入時以 `WHERE google_sub = $1` 查找。詳見 [`auth_system_spec.md`](./auth_system_spec.md) §6。
 
 | 欄位名稱 | 資料型別 | 限制 | 說明 |
 | :--- | :--- | :--- | :--- |

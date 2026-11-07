@@ -23,7 +23,7 @@ ON CONFLICT (name) DO UPDATE SET
 
 -- 3. 建立 users 表 (會員系統核心)
 --    僅支援 Google SSO 登入；google_sub 為 Google OIDC subject，不可為 NULL。
---    詳見 specifications/google_sso.md
+--    詳見 specifications/auth_system_spec.md §6
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email VARCHAR(255) UNIQUE NOT NULL,

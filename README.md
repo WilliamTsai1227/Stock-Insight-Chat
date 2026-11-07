@@ -197,13 +197,14 @@ python test/prompt_injection_test.py     # Prompt Injection 安全測試
 
 | 文件 | 內容 |
 | :--- | :--- |
-| [specifications/readme_full_details.md](specifications/readme_full_details.md) | **完整版 README**：所有優化細節、環境變數全表、維運 SQL、Flash 模式調參 |
+| [specifications/core_technologies.md](specifications/core_technologies.md) | **核心技術**：設計取捨、面試可講的重點與追問 |
 | [specifications/agent_spec.md](specifications/agent_spec.md) | Agent 架構與 LangGraph 狀態圖 |
 | [specifications/api_spec.md](specifications/api_spec.md) | API 完整規格與 SSE 事件 |
 | [specifications/database_spec.md](specifications/database_spec.md) | PostgreSQL Schema 與 ERD |
 | [specifications/tools_spec.md](specifications/tools_spec.md) | RAG 工具與 Qdrant 檢索細節 |
 | [specifications/auth_system_spec.md](specifications/auth_system_spec.md) | JWT / SSO 認證設計 |
-| [specifications/aws_production_deploy.md](specifications/aws_production_deploy.md) | AWS 生產部署（S3 + EC2 + Lambda） |
+| [specifications/portfolio_insight_spec.md](specifications/portfolio_insight_spec.md) | 投資組合排程分析（Zentra MCP） |
+| [specifications/ec2_deploy.md](specifications/ec2_deploy.md) | 正式環境部署（S3 + EC2 + Lambda） |
 
 ---
 *Last Update: 2026-07-19*

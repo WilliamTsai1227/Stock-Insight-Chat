@@ -4,7 +4,6 @@
 
 | 主題 | 另見 |
 |------|------|
-| 後端 log 除錯、Token、`build --no-cache` 細節 | [`maintenance_queries_spec.md`](./maintenance_queries_spec.md) §0 |
 | 進 PostgreSQL、schema migration | [`sql_dev_handbook.md`](./sql_dev_handbook.md) |
 | `.env` 變數說明 | [`env.md`](./env.md) |
 
@@ -172,8 +171,6 @@ docker compose -f ./deploy/docker-compose.yml build --no-cache backend
 docker compose -f ./deploy/docker-compose.yml up -d backend
 ```
 
-細節與 OpenAI 套件對照見 [`maintenance_queries_spec.md`](./maintenance_queries_spec.md) §0-0、§0-5。
-
 ---
 
 ## 6. 查看日誌（Logs）
@@ -212,7 +209,13 @@ docker ps --format '{{.Names}}\t{{.Image}}'
 docker logs -f --tail 300 <container_name>
 ```
 
-後端除錯關鍵字（`[TOKEN]`、`Agent 執行失敗` 等）見 [`maintenance_queries_spec.md`](./maintenance_queries_spec.md) §0-4。
+後端除錯常見 log 關鍵字（可用 `grep` 過濾）：
+
+- `[TOKEN]`、`[TOKEN-DBG]`：Token 統計與寫入 `token_usage_logs`
+- `[TOKEN-PARSE-DEBUG]`：設 `TOKEN_PARSE_DEBUG=1`（或 `zero`）才會輸出 LangChain 回傳結構摘要
+- `[MSG]`：`messages` 寫入失敗
+- `[INSIGHT]`：投資組合排程器（認領、開始、收屍）
+- `Agent 執行失敗`：SSE 錯誤或例外堆疊
 
 ---
 

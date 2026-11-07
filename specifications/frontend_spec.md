@@ -93,7 +93,7 @@ window.API_BACKEND_PORT         // 本機 dev 的 backend port（預設 8000）
 ## 7. 特色實作
 
 *   **Stock Ticker Highlighting**: 自動偵測內容中的 4 位數字股票代碼，包裝成 `.stock-ticker` 高亮標籤。
-*   **並行對話 / Parked staging**: 對話離開視圖時封存其 DOM，上限 `MAX_PARKED_STAGING_CHATS`（依 Map 插入序 FIFO 剔除最舊，並 `abort` 對應 fetch）；刪除專案成功後對其底下 chat id 呼叫 `evictParkedPane`，避免 CASCADE 後殘留。細節見 [`todo.md`](./todo.md)。
+*   **並行對話 / Parked staging**: 對話離開視圖時封存其 DOM，上限 `MAX_PARKED_STAGING_CHATS`（依 Map 插入序 FIFO 剔除最舊，並 `abort` 對應 fetch）；刪除專案成功後對其底下 chat id 呼叫 `evictParkedPane`，避免 CASCADE 後殘留。細節見 §10。
 
 ## 8. PWA（加到主畫面 / 獨立視窗）
 
@@ -175,3 +175,36 @@ iOS 沒有安裝提示 API，只能自己講。`pwa.js` 會在**同時**滿足�
 Smart Mode 下刻意保留全部本機工具，只把 MCP 收斂成被點名的那幾個：
 語意是「MCP 就用這個」，而不是「整輪只准用這個」，才不會讓 `@` 一個外部工具
 就把股市新聞檢索一起關掉。
+
+---
+
+## 10. 並行對話與 Parked staging
+
+（原 `todo.md`）
+
+### CASCADE 後清 parked｜重新載入是否足够？
+
+- **會。** 整頁重新載入後，記憶體中的 `Map`、進行中的 `fetch`、`#stream-staging` 底下的 DOM 都會重置，不存在「孤兒 parked」殘留在上一輪 SPA 生命的問題。
+- **不必 F5：** `confirmDeleteProject` 在呼叫 DELETE **前**快取 `(state.chats[project.id] || []).map(...)` 的 chat id；**成功後**對每個 id 呼叫 `evictParkedPane`（`abort` 對應串流、`streamingChatIds` 與 parked wrapper 清除）。若 `currentChatId` 落在被刪專案的 chat 清單内，並清空並回到空白聊天區，避免 CASCADE 後仍留 staged DOM。
+
+### Staging 數量上限（產品防呆）
+
+- **`MAX_PARKED_STAGING_CHATS = 8`（可調）。** 每多 park 一段即檢查；超過時對 **`parkedPaneByChatId.keys().next()`**（Map **插入順序**裡最先進來的）反覆剔除，並 **`abort` 該對話的 SSE**、呼叫 `updateSendButtonForStreamingState()`。
+- 此為 **FIFO**（最先被停進 staging 的最先 eviction），較贴切「封存時間最久的先釋放」；若需要嚴格 **LRU**（每次回到／unpark 某對話就視為「最近使用」，應延後剔除），需在「再接回該對話」時對 Map 做一次 **delete + set** 讓鍵順序排到最後；**目前程式未做 LRU**，僅 FIFO。
+
+### 多對話切換／並行串流／畫面是否各自獨立？
+
+- **設計上：** 每則對話的活躍區塊是同一棵 DOM 子上 **.closure 鎖住的 `msgDiv`／`bubble`／`toolsContainer`**，SSE loop 永遠寫同一批節點；離開視圖時 **`parkViewportFor` 將整個 `#chat-messages` 內容移到 `#stream-staging`**（CSS 隱藏仍掛在 document），故背景串流仍會更新 **該對話自己的** 子樹，不會寫到別人的節點。
+- **`navigateToChat`：** 先對「上一則」`maybeParkViewportForLeavingChat`（正由 **含 await fetch 與 reader** 的 `streamingChatIds` 驅動），再切 `currentChatId`；若目標在 parked 有封存則 **unpark** 接回，否則 **GET 歷史**。
+- **已補競態（實作於 `index.js`）：**
+  1. **在 `POST /chat/messages` 的 `await authFetch` 之前就** 把 `streamTargetChatId` 加入 `streamingChatIds`，確保「fetch 尚未回來就切換」也會 park，不被 `loadChatHistoryIntoView` 清掉半截 UI。
+  2. **`chat_id` POST body** 改用 **`streamTargetChatId`**，避免 await 間使用者換對話而把訊息掛錯後端對話。
+  3. **`loadChatHistoryIntoView`** 若回應晚到且 `state.currentChatId` 已不再等於請求的 `chatId`，**不寫入主視窗**，避免歷史畫面互蓋。
+- **仍請注意：** 同一則對話並未在 UI 強制禁止「換離後再對同一對話發第二則」（後端若限制併發需另議）；FIFO 超限會 **強制中止**最舊 parked 的請求／畫面。
+
+### 已知邊際情況與後續優化（待辦）
+
+- [ ] **scrollToBottom 與 parked 背景串流**：`scrollToBottom()` 目前只對 `#chat-messages`（前景主欄）捲動。對話 **parked** 後 SSE 若在背景繼續跑，程式仍會呼叫 `scrollToBottom()`，對 **隱藏中的 parked 樹**沒有助捲，卻可能讓 **前景**聊天區 **偶發輕微波動**。可選優化：`scrollToBottom` 帶「目標 chatId」或与 `currentChatId`/`streamTargetChatId` 比對後再捲，或對 parked wrapper 另行捲動（若仍需預渲染捲軸）。
+- [ ] **`MAX_PARKED_STAGING_CHATS` 超限與 UX**：超限時 **FIFO 踢最舊並 `abort`** 為刻意取捨，不是無限並行。可選：**Toast／站內提示**「封存上限已回收最舊對話」，或讓使用者自行選擇要關閉哪一則 streamed 對話後再開始新的。
+- [ ] **Parked 改為 LRU eviction**：目前是 Map **FIFO**。**LRU**：在 **`unparkViewportFor`**（或每次「接回」該 parked 對話）對 `parkedPaneByChatId` 做 **`delete(chatId)` 再 `set(chatId, wrapper)`**，讓鍵順序排到「最後」以延後被踢。**小改動**即可接在現有 eviction 後面。
+- **架構備註（低優／資訊性）**：`index.html` 僅 **`#chat-messages`**，`#stream-staging` 由 **`index.js`** 動態插入；`index.css` 對 `.stream-staging` **off-screen** 隱藏。此結構 **不會**多重聊天區 **`id`** 混在一起，對「渲染錯區」並無結構性風險，通常 **不需**為此再改骨架。
