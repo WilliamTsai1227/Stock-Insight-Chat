@@ -8,6 +8,8 @@ from .explore import router as explore_router
 from .deep_research import router as deep_research_router
 from .mcp import router as mcp_router
 from .notes import router as notes_router
+from .market_feed import router as market_feed_router
+from .portfolio import router as portfolio_router
 
 
 api_router = APIRouter()
@@ -38,5 +40,11 @@ api_router.include_router(mcp_router)
 
 # 8. 筆記（把對話整理成筆記）
 api_router.include_router(notes_router)
+
+# 9. 新聞瀏覽／AI 分析瀏覽（MongoDB，沿用 MONGO_URI，可用 FEED_MONGO_URI 覆寫）
+api_router.include_router(market_feed_router)
+
+# 投資組合排程分析（庫存／觀察清單 → Zentra stock-suite）
+api_router.include_router(portfolio_router)
 
 __all__ = ["api_router"]

@@ -3,7 +3,6 @@
 > **適用情境**：單台 EC2 首次建站；**不在 EC2 上 git clone / docker build**，改由本機或 CI build 後 push 至 **Docker Hub**，EC2 只負責 `pull` + `docker compose up`。
 >
 > 已建好站、只是要發新版 → 見 [`release_handbook.md`](./release_handbook.md)。  
-> 完整 AWS 架構參考（VPC、RDS、未來遷移 ECS）見 [`aws_production_deploy.md`](./aws_production_deploy.md)。  
 > 本機 Docker 維運見 [`docker_ops_handbook.md`](./docker_ops_handbook.md)。  
 > 環境變數詳細說明見 [`env.md`](./env.md)。
 
@@ -177,7 +176,7 @@ docker push ${DOCKERHUB_USER}/kinetic-charts:${KINETIC_TAG}
 123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/insight-chat-backend:1.0.0
 ```
 
-EC2 需先 `aws ecr get-login-password | docker login ...`。詳見 [`aws_production_deploy.md`](./aws_production_deploy.md) §9。
+EC2 需先 `aws ecr get-login-password --region <region> | docker login --username AWS --password-stdin <account>.dkr.ecr.<region>.amazonaws.com`。
 
 ---
 
@@ -248,7 +247,7 @@ docker compose version
 
 > ⚠️ 兩份 env 的 `DATABASE_URL` **必須指向不同 database**，混用會讓 kinetic 在 chat 的 schema 上建表。
 
-詳見 [`aws_production_deploy.md`](./aws_production_deploy.md) §8、[`sql_dev_handbook.md`](./sql_dev_handbook.md)。
+詳見 [`sql_dev_handbook.md`](./sql_dev_handbook.md)。
 
 ### 5.5 Qdrant 初始化
 
@@ -518,4 +517,4 @@ docker compose -f docker-compose.prod.yml exec backend env | grep <變數名>
 ## 附錄：與 ECS 方案的關係
 
 本指南為 **方案 A（單 EC2 + compose pull）**，適合快速 MVP。  
-EC2 單點故障、需自行 patch OS；穩定後建議遷移至 **ECS Fargate + ECR**，見 [`aws_production_deploy.md`](./aws_production_deploy.md) §4、§12 Phase 2。
+EC2 單點故障、需自行 patch OS；穩定後可考慮遷移至 **ECS Fargate + ECR**（目前沒有規劃文件；舊的規劃稿可從 git 歷史的 `specifications/aws_production_deploy.md` 取回）。

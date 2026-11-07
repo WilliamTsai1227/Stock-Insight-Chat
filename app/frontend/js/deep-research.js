@@ -71,6 +71,8 @@ function showDeepResearchView() {
     }
     if (typeof hideExploreView === 'function') hideExploreView();
     if (typeof hideNotesView === 'function') hideNotesView();
+    if (typeof hideFeedViews === 'function') hideFeedViews();
+    if (typeof hidePortfolioView === 'function') hidePortfolioView();
     if (typeof exitNoteSelectMode === 'function') exitNoteSelectMode();
 
     drEl('chat-messages').style.display = 'none';

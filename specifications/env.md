@@ -3,7 +3,7 @@
 本文件列出**程式實際會讀取的所有環境變數**、預設值與注意事項。
 
 > **權威來源**：以原始碼中的 `os.getenv(...)` 為準。本文件與其對齊；新增變數時請一併更新此表。  
-> 深入的 Flash／Router 調參說明見 [`readme_full_details.md`](./readme_full_details.md)；Agent 行為見 [`agent_spec.md`](./agent_spec.md)。
+> 深入的 Flash 調參說明見 [`agent_spec.md`](./agent_spec.md) §9；Agent 行為見 [`agent_spec.md`](./agent_spec.md)。
 
 ---
 
@@ -66,7 +66,7 @@ docker compose ... exec backend env | grep <變數名>               # 驗證讀
 | `GOOGLE_OAUTH_REDIRECT_URI` | 無預設（必填） | ✅ | Callback URI，須與 Google Console **完全一致**（含 protocol / port / path） |
 | `FRONTEND_URL` | `http://localhost` | ✅ | 前端根網址；登入後重導目標，同時作為 `/explore/*` 的 CSP `frame-ancestors` 白名單 |
 
-少了這組就無法登入。設定步驟與 Google Console 對應見 [`google_sso.md`](./google_sso.md)。
+少了這組就無法登入。設定步驟與 Google Console 對應見 [`auth_system_spec.md`](./auth_system_spec.md) §6。
 
 ---
 
@@ -94,6 +94,15 @@ docker compose ... exec backend env | grep <變數名>               # 驗證讀
 | `MONGO_DB` | `stock_insight` | MongoDB 資料庫名稱 |
 
 > ⚠️ `MONGO_URI` 與 `MONGODB_URL` 是**兩個不同的變數名指向同一個 MongoDB**（[`news.py`](../app/backend/tools/news.py) 讀前者、[`ai_analysis.py`](../app/backend/tools/ai_analysis.py) 讀後者）。正式環境**兩個都要設**，且值要相同，否則其中一個工具會連到 `localhost` 而失敗。
+
+### 新聞瀏覽／AI 分析瀏覽（側欄「新聞」「AI 分析」）
+
+| 變數 | 預設 | 說明 |
+| :--- | :--- | :--- |
+| `FEED_MONGO_URI` | 沿用 `MONGO_URI` | （選用）覆寫瀏覽頁的 MongoDB 連線字串，[`market_feed.py`](../app/backend/api/market_feed.py) 使用 |
+| `FEED_MONGO_DB` | 沿用 `MONGO_DB` | （選用）覆寫瀏覽頁讀取的資料庫名稱（collection：`news`、`AI_news_analysis`） |
+
+一般**不需要設定**，瀏覽頁直接用 `MONGO_URI` / `MONGO_DB`。只有要指向不同的叢集或改用唯讀帳號時才覆寫。兩者皆未設定時 `/api/feed/*` 回 503，只有這兩個頁面受影響。
 
 ---
 
@@ -187,7 +196,7 @@ docker compose ... exec backend env | grep <變數名>               # 驗證讀
 
 ## 九、Flash（快捷）模式
 
-僅在 `response_mode=flash` 時生效；思考模式不受這些變數影響。完整說明見 [`readme_full_details.md`](./readme_full_details.md)。
+僅在 `response_mode=flash` 時生效；思考模式不受這些變數影響。完整說明見 [`agent_spec.md`](./agent_spec.md) §9。
 
 | 變數 | 預設 | 說明 |
 | :--- | :--- | :--- |
@@ -281,6 +290,23 @@ docker compose ... exec backend env | grep <變數名>               # 驗證讀
 
 ---
 
+## 十二之一、投資組合排程分析（Zentra）
+
+| 變數 | 預設 | 說明 |
+| :--- | :--- | :--- |
+| `ZENTRA_MCP_URL` | — | Zentra 的 MCP 端點。**允許 http 與私有 IP**（同 VPC 內網），例如 `http://10.0.3.7:8000/mcp` |
+| `ZENTRA_MCP_KEY` | — | Zentra 發的 `zmcp_live_…`，只勾選 stock-suite 五個 Agent |
+| `ZENTRA_API_URL` | MCP 網址去掉 `/mcp` | 輪詢 Run 結果用的 REST 根網址 |
+| `INSIGHT_MAX_CONCURRENCY` | 8 | 一個 job 內同時呼叫幾個個股 tool |
+| `INSIGHT_MAX_RUNNING_JOBS` | 4 | 一個 backend 同時跑幾位使用者的分析，其餘在 DB 排隊 |
+| `INSIGHT_SCHEDULER_ENABLED` | 1 | `0` 關閉排程器 |
+
+兩個必填變數沒設定時排程器不啟動，其他功能不受影響。完整清單（逾時、保留期等）見
+[`portfolio_insight_spec.md` §3](./portfolio_insight_spec.md#3-設定)。
+**不要**把 Zentra 加進 `MCP_SERVERS_JSON`，那會讓聊天的 LLM 也能呼叫這些 tool。
+
+---
+
 ## 十三、除錯
 
 | 變數 | 預設 | 說明 |
@@ -326,6 +352,10 @@ TAVILY_API_KEY=tvly-...
 
 # ── 深度研究 ──────────────────────────────────────────
 DEEP_SEARCH_MODEL=gpt-5.6-luna
+
+# ── 投資組合排程分析（Zentra，同 VPC 內網）──────────
+ZENTRA_MCP_URL=http://10.0.3.7:8000/mcp
+ZENTRA_MCP_KEY=zmcp_live_...
 
 # ── 延遲調校（可選；不設則用程式預設）────────────────
 ROUTER_REASONING_EFFORT=minimal

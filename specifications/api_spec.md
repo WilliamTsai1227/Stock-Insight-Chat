@@ -44,7 +44,7 @@
 
 > **沒有 `PATCH /api/project`。** 專案目前不支援改名；[`project.py`](../app/backend/api/project.py) 只實作 POST / GET all / GET / DELETE。
 >
-> 檔案模組（`/api/files/*`）為 **stub**，S3 上傳與檢索尚未完成，見 [`feature_mapping.md`](./feature_mapping.md)。
+> 檔案模組（`/api/files/*`）為 **stub**，S3 上傳與檢索尚未完成。
 >
 > 探索代理不出現在 Swagger（`include_in_schema=False`）；`KINETIC_UPSTREAM` 未設定時整組回 404。
 
@@ -395,7 +395,7 @@ RT Rotation：換取新的 Access Token + 新的 Refresh Token。
 
 ## 6. 檔案模組（Files）— stub
 
-> ⚠️ 端點已存在但**尚未完整實作**（S3 上傳與後續檢索未完成），見 [`feature_mapping.md`](./feature_mapping.md)。
+> ⚠️ 端點已存在但**尚未完整實作**（S3 上傳與後續檢索未完成）。
 
 ### `POST /api/files/upload`
 
@@ -433,7 +433,7 @@ backend 內建的反向代理（[`explore.py`](../app/backend/api/explore.py)）
 **MVP 不落地任何資料**：session 只放在 backend 記憶體（`SessionStore`，TTL 由
 `DEEP_SEARCH_SESSION_TTL_MINUTES` 控制，預設 120 分鐘），前端重新整理即失去 `session_id`；
 上傳的文件只在研究期間存在於 OpenAI 的臨時 vector store，研究結束（含失敗）立刻刪除。
-完整設計見 [`deep_search.md`](./deep_search.md) §21。
+完整設計見 [`deep_research_spec.md`](./deep_research_spec.md)。
 
 **唯一的例外是 token 用量**：深度研究與聊天吃同一份月配額。`POST /runs` 與
 `POST /runs/{sid}/artifacts` 都會先做配額 pre-flight（已達上限回 **429**，body 與聊天相同：
@@ -565,6 +565,62 @@ Body `{"kind": "report" | "deck", "theme": "consulting", "length": 12}`
 ### `DELETE /api/deep-research/runs/{session_id}`
 
 主動釋放記憶體 session；不呼叫也會由 TTL 清掉。
+
+---
+
+## 8.5 新聞瀏覽／AI 分析瀏覽（Market Feed）
+
+實作：[`app/backend/api/market_feed.py`](../app/backend/api/market_feed.py)。從原 stock_insight 專案移植，直接讀 MongoDB（預設沿用 `MONGO_URI` / `MONGO_DB`，可用 `FEED_MONGO_URI` / `FEED_MONGO_DB` 覆寫）。三個端點皆需 `Authorization: Bearer <access_token>`；連線字串未設定時回 `503`，Mongo 連線失敗回 `502`。
+
+### `GET /api/feed/news`
+
+| 參數 | 型別 | 說明 |
+| :--- | :--- | :--- |
+| `keyword` | string? | 關鍵字（≤100 字）。優先走 `$text`；collection 沒有 text index 時退回標題／內文 regex |
+| `start_time` / `end_time` | int? | Unix 秒，篩 `publishAt` |
+| `page` | int | 從 1 開始，每頁 20 筆，上限 500 |
+
+回應：`{ "page": 1, "nextPage": 2 | null, "data": [{ title, content(前 150 字), publishAt, category, source, url, ... }] }`
+
+### `GET /api/feed/news/{news_id}`
+
+`news_id` 為 ObjectId 字串。回應 `{ "data": { "url": "...", "title": "..." } }`；格式錯誤 `400`、不存在 `404`。
+
+### `GET /api/feed/ai-analysis`
+
+| 參數 | 型別 | 說明 |
+| :--- | :--- | :--- |
+| `keyword` | string? | 比對 `summary` / `important_news` / `potential_stocks_and_industries` / `source_news.title`（escape 後 regex） |
+| `industry` | string? | 比對 `industry_list` 任一元素 |
+| `is_summary` | bool? | `false` 逐條分析、`true` 統整分析 |
+| `start_time` / `end_time` | int? | Unix 秒 |
+| `page` | int | 每頁 15 筆 |
+
+回應格式同上，`data` 為 `AI_news_analysis` 原始文件（`_id` 等 ObjectId 已轉字串）。
+
+---
+
+## 8.6 投資組合排程分析（Portfolio Insight）
+
+> 流程、排程語意、Zentra 契約見 [`portfolio_insight_spec.md`](./portfolio_insight_spec.md)。全部需要登入，資料只看得到自己的。
+
+| 方法 | 路徑 | 說明 |
+| :--- | :--- | :--- |
+| `GET` | `/api/portfolio/items` | `{holdings[], watchlist[], limit_per_list}` |
+| `POST` | `/api/portfolio/items` | `{list_type: HOLDING\|WATCHLIST, market: TW\|US, symbol, name, cost?, shares?}` → `201`。庫存必填 `cost`、`shares`（`422`）；同市場同代碼已存在（不論在哪個清單）→ `409`；超過 30 檔 → `409` |
+| `PATCH` | `/api/portfolio/items/{id}` | `{list_type?, name?, cost?, shares?}`。市場與代碼不能改。改成 `HOLDING` 時仍要有成本與股數 |
+| `DELETE` | `/api/portfolio/items/{id}` | |
+| `GET` | `/api/portfolio/summary` | 庫存總覽（「庫存」頁的總現值與甜甜圈圖）：`total_value_twd`、`total_cost_twd`、`unrealized_pnl_twd/pct`、`day_change_pct`（對昨收）、`market_split_pct{TW,US}`、`usd_twd`、`holdings[]`（各檔 `price`、`value_twd`、`weight_pct`、`pnl_twd`、`day_change_pct`）、`unpriced[]`（抓不到報價、未計入的代碼）。報價來自 Yahoo，快取 `QUOTE_CACHE_SECONDS`（預設 60） |
+| `GET` | `/api/insights/schedule` | `{schedule \| null, zentra_configured, scheduler_running}` |
+| `PUT` | `/api/insights/schedule` | `{enabled, frequency: DAILY\|WEEKDAYS\|WEEKLY\|MONTHLY, run_time: "HH:MM"（台北）, weekday?（1–7）, month_day?（1–28）, risk_tolerance?, cash_twd?}`，回傳含 `next_run_at` |
+| `POST` | `/api/insights/jobs` | 立即分析一次 → `202`。已有進行中的 → `409`；清單是空的 → `422`；Zentra 未設定或排程器沒跑 → `503` |
+| `GET` | `/api/insights/jobs?limit=20` | 最近的分析紀錄（不含結果） |
+| `GET` | `/api/insights/jobs/{id}` | 單次分析：job 欄位 + `portfolio_output`（portfolio-advisor 完整輸出）+ `results[]`（每檔 × 每個 tool 的完整輸出，K 線圖以 `has_chart` 表示） |
+| `GET` | `/api/insights/results/{id}/chart` | K 線圖 `image/png`。超過保留期或不是 stock-chart → `404` |
+
+`results[].output` 與 `portfolio_output` 的結構就是 Zentra 的輸出信封
+（`tool`、`as_of`、`security`、`data`、`analysis`、`warnings`、`disclaimer`），
+欄位定義見 Zentra repo 的 `examples/stock-suite/README.md`。
 
 ---
 

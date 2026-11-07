@@ -40,6 +40,8 @@ function showNotesView() {
     }
     if (typeof hideExploreView === 'function') hideExploreView();
     if (typeof hideDeepResearchView === 'function') hideDeepResearchView();
+    if (typeof hideFeedViews === 'function') hideFeedViews();
+    if (typeof hidePortfolioView === 'function') hidePortfolioView();
     exitNoteSelectMode();
     closeNoteEditor();
 
