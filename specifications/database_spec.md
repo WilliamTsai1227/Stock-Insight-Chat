@@ -589,6 +589,10 @@ API 見 [`api/notes.py`](../app/backend/api/notes.py)。
 | ux_note_pages_user_chat | (user_id, source_chat_id) WHERE source_chat_id IS NOT NULL | 一則對話對應一頁（唯一）；整理時找回同一頁 |
 | idx_notes_page / idx_notes_user | (page_id, created_at DESC) · (user_id, created_at DESC) | 某頁的筆記、我的所有筆記 |
 | idx_portfolio_items_user | (user_id, list_type, created_at) | 投資組合清單 |
+| uq_portfolio_items_symbol | UNIQUE (user_id, market, symbol) | 同一檔只能在一個清單；新增時撞到即回 409 |
+| uq_insight_jobs_scheduled | UNIQUE (user_id, scheduled_for) WHERE trigger = 'SCHEDULED' | 同一個排程時間點只產生一個 job（排程器重複認領也不會跑兩次） |
+| uq_insight_jobs_active | UNIQUE (user_id) WHERE status IN ('QUEUED','RUNNING') | 同一位使用者同時最多一個進行中的 job |
+| uq_insight_results_cell | UNIQUE (job_id, market, symbol, tool) | 一次分析內每檔 × 每個 tool 只寫一列 |
 | idx_insight_schedules_due | (next_run_at) WHERE enabled AND next_run_at IS NOT NULL | 排程器每輪找到期的排程 |
 | idx_insight_jobs_user | (user_id, created_at DESC) | 分析紀錄列表 |
 | idx_insight_jobs_queued | (created_at) WHERE status = 'QUEUED' | 排程器認領排隊中的 job |

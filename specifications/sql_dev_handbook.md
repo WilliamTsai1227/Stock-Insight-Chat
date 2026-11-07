@@ -184,8 +184,8 @@ COMMIT;
 | `V006__quota_reset_logs.sql` | 新增 `quota_reset_logs` 表 |
 | `V007__user_feedback.sql` | 新增 `user_feedback` 表 |
 | `V008__user_feedback_tokens_granted.sql` | `user_feedback.tokens_granted` |
-| `V009__notes.sql` | 新增 `note_pages`、`notes`（筆記功能）。⚠️ 2026-11-07 查核：**正式 RDS 尚未套用** |
-| `V010__note_pages_source_chat.sql` | `note_pages.source_chat_id` + 唯一索引（須在 V009 之後）。⚠️ 2026-11-07 查核：**正式 RDS 尚未套用** |
+| `V009__notes.sql` | 新增 `note_pages`、`notes`（筆記功能）。2026-11-07 已補套用正式 RDS |
+| `V010__note_pages_source_chat.sql` | `note_pages.source_chat_id` + 唯一索引（須在 V009 之後）。2026-11-07 已補套用正式 RDS |
 | `V011__portfolio_insight.sql` | 投資組合排程分析四張表（2026-11-07 已套用正式 RDS） |
 
 ### 4.3 對既有資料庫執行 migration
@@ -324,3 +324,40 @@ UPDATE chats SET title = '測試標題' WHERE id = '...';
 | `ALTER TABLE ... ADD CONSTRAINT` 失敗 | 舊資料不符合新約束 | 先 `SELECT` 找出異常列並修補或刪除 |
 | API 仍照 `created_at` 排序 | 只改了 DB，沒改 Python | 檢查 `app/backend/api/*.py` 的 SQL |
 | 後端啟動報 `column "updated_at" does not exist` | migration 未套用到目前連線的 DB | 對 **同一個** `Insight` 執行 §4.3 |
+
+---
+
+## 5. 三方 schema 比對（正式 RDS／本機 compose／規格）
+
+`init_db.sql` + `migrations/` 是規格的唯一來源。三邊應該**完全一致**，懷疑不一致時這樣比：
+
+```bash
+# A. 規格基準：用 init_db.sql 建一個全新的資料庫
+docker run -d --name schema-ref -e POSTGRES_PASSWORD=x -e POSTGRES_DB=Insight postgres:16-alpine
+docker exec -i schema-ref psql -U postgres -d Insight -q < app/backend/database/init_db.sql
+
+# 三邊各輸出一份「排序過、與建立順序無關」的結構清單
+SNAP=app/backend/database/schema_snapshot.sql
+docker exec -i schema-ref  psql -U postgres -d Insight -At < $SNAP > /tmp/ref.txt
+docker exec -i deploy-db-1 psql -U postgres -d Insight -At < $SNAP > /tmp/local.txt
+docker run --rm -i postgres:18-alpine psql "$(grep '^DATABASE_URL=' .env | cut -d= -f2- | sed 's#+asyncpg##')?sslmode=require" -At < $SNAP > /tmp/prod.txt
+
+diff /tmp/ref.txt /tmp/prod.txt; diff /tmp/ref.txt /tmp/local.txt
+docker rm -f schema-ref
+```
+
+`schema_snapshot.sql` 輸出表、欄位（型別、NOT NULL、預設值）、約束、索引、函式、觸發器、extension，
+每項一行並排序。不直接 diff `pg_dump` 是因為後補的欄位（`ALTER TABLE ADD COLUMN`）在 dump 裡排在最後，
+會和 `init_db.sql` 的欄位順序不同，產生大量假差異。
+
+**已知、可忽略的差異**：正式 RDS 是 PostgreSQL 18，pgcrypto 多了 `fips_mode()` 函式；本機是 16，沒有這個函式。
+
+### 2026-11-07 比對紀錄
+
+| 對象 | 結果 | 處理 |
+| :--- | :--- | :--- |
+| 正式 RDS | 缺 V009、V010（筆記） | 已套用 → 與規格一致 |
+| 本機 compose | 缺 V006、V007、V008（`quota_reset_logs`、`user_feedback`）；`users.google_sub` 停在 [`google_sso.md`](./google_sso.md) 情境 B 的過渡態（nullable + 部分唯一索引 `ux_users_google_sub`） | 已套用 V006–V008；本機測試帳號 `mcp-test@local.dev` 補上佔位 `google_sub = 'local-dev:mcp-test'` 後，改回規格的 `NOT NULL` + `users_google_sub_key` → 與規格一致 |
+| `database_spec.md` | §2 欄位名稱、型別、NOT NULL 與實際一致；§3 漏列 4 個 `uq_*` 唯一索引 | 已補 |
+
+比對後三邊共 359 項結構完全相同（`fips_mode()` 除外）。
