@@ -126,46 +126,55 @@ async def chat_deep_research(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"研究題目請控制在 {QUERY_MAX_CHARS} 字以內。")
 
     user_key = str(current_user_id)
-    try:
-        # 2. 每人同時只能跑一個研究（與深度研究頁共用同一把鎖）
-        if user_key in _active_runs:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                "您已有一個深度研究正在執行，請等它完成後再開始下一個。",
-            )
-        # 3. 配額 pre-flight：一次研究動輒數十萬 token，超額就連檔案都不讀
-        await assert_preflight_llm_quota(current_user_id)
-        # 4. 讀檔與驗證（格式錯誤要回一般的 4xx，而不是包在 SSE 裡）
-        uploads = await read_uploads(files or [])
-    except HTTPException:
-        # 這一輪還沒寫進任何訊息；剛建立的新對話若因此是空的，刪掉免得側欄留下孤兒
+    # 2. 每人同時只能跑一個研究（與深度研究頁共用同一把鎖）。
+    #    檢查與佔位之間**不能有 await**：否則同時送來的多個請求會在後面的
+    #    配額檢查／讀檔期間全部通過檢查，一次跑好幾個研究，配額也被超用好幾倍。
+    if user_key in _active_runs:
         await _delete_chat_if_no_messages(db, chat_id, current_user_id)
-        raise
-    chosen_model = resolve_model(model)
-    attachments = [
-        {"name": u.filename, "kind": u.kind, "size": len(u.content)} for u in uploads
-    ]
-
-    # 5. 寫入 user 訊息並取上下文
-    try:
-        user_message_id = await _insert_user_message(
-            db,
-            chat_id,
-            clean_query,
-            metadata={"response_mode": RESPONSE_MODE, "attachments": attachments},
-        )
-        prior_rows = await fetch_prior_context_for_agent(
-            db, chat_id=chat_id, user_message_id=user_message_id
-        )
-    except asyncpg.PostgresError as exc:
         raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR, f"Failed to persist user message: {exc}"
+            status.HTTP_409_CONFLICT,
+            "您已有一個深度研究正在執行，請等它完成後再開始下一個。",
         )
+    _active_runs.add(user_key)
+
+    try:
+        try:
+            # 3. 配額 pre-flight：一次研究動輒數十萬 token，超額就連檔案都不讀
+            await assert_preflight_llm_quota(current_user_id)
+            # 4. 讀檔與驗證（格式錯誤要回一般的 4xx，而不是包在 SSE 裡）
+            uploads = await read_uploads(files or [])
+        except HTTPException:
+            # 這一輪還沒寫進任何訊息；剛建立的新對話若因此是空的，刪掉免得側欄留下孤兒
+            await _delete_chat_if_no_messages(db, chat_id, current_user_id)
+            raise
+        chosen_model = resolve_model(model)
+        attachments = [
+            {"name": u.filename, "kind": u.kind, "size": len(u.content)} for u in uploads
+        ]
+
+        # 5. 寫入 user 訊息並取上下文
+        try:
+            user_message_id = await _insert_user_message(
+                db,
+                chat_id,
+                clean_query,
+                metadata={"response_mode": RESPONSE_MODE, "attachments": attachments},
+            )
+            prior_rows = await fetch_prior_context_for_agent(
+                db, chat_id=chat_id, user_message_id=user_message_id
+            )
+        except asyncpg.PostgresError as exc:
+            raise HTTPException(
+                status.HTTP_500_INTERNAL_SERVER_ERROR, f"Failed to persist user message: {exc}"
+            )
+    except BaseException:
+        # 還沒交給背景任務：佔住的名額要在這裡還回去，否則使用者會被永久鎖住
+        _active_runs.discard(user_key)
+        raise
     history = _history_from_rows(prior_rows)
 
     chat_id_str = str(chat_id)
     event_queue: asyncio.Queue = asyncio.Queue()
-    _active_runs.add(user_key)
 
     async def runner() -> None:
         started = time.monotonic()
@@ -277,7 +286,12 @@ async def chat_deep_research(
             if title_task is not None and not title_task.done():
                 title_task.cancel()
             if isinstance(exc, TimeoutError):
-                reason = f"研究超過 {_RUN_TIMEOUT_SECONDS // 60} 分鐘仍未完成，已中止。"
+                limit_text = (
+                    f"{_RUN_TIMEOUT_SECONDS // 60} 分鐘"
+                    if _RUN_TIMEOUT_SECONDS >= 60 and _RUN_TIMEOUT_SECONDS % 60 == 0
+                    else f"{_RUN_TIMEOUT_SECONDS} 秒"
+                )
+                reason = f"研究超過 {limit_text}仍未完成，已中止。"
             elif isinstance(exc, HTTPException):
                 reason = str(exc.detail)
             else:
