@@ -23,6 +23,7 @@ from app.backend.module.token_usage import record_token_usage
 
 # token_usage_logs.caller（VARCHAR(50)）：用來把深度研究的花費從聊天中分離出來
 CALLER_RESEARCH = "deep_research"
+CALLER_CHAT_RESEARCH = "chat_deep_research"   # 在對話中執行的深度研究
 _CALLER_BY_KIND = {
     "report": "deep_research_report",
     "deck": "deep_research_deck",
@@ -82,15 +83,17 @@ async def record_agent_usage(
     usage: Optional[AgentUsage],
     caller: str,
     session_id: Optional[str] = None,
-) -> None:
+    chat_id: Optional[UUID] = None,
+) -> Optional[UUID]:
     """
     把一次 Agents SDK 執行的用量寫進 `user_usage_quotas` 與 `token_usage_logs`。
 
     沒有用量（模型沒回 usage、或還沒送出任何請求就失敗）時直接跳過。
     `record_token_usage` 內部已吞掉所有 DB 例外，計費失敗不會影響已完成的研究。
+    在對話中執行時帶 `chat_id`，回傳的 log id 讓呼叫端綁到 assistant 訊息上。
     """
     if usage is None or usage.total_tokens <= 0:
-        return
+        return None
 
     print(
         f"[DEEP-SEARCH] usage caller={caller} session={session_id} model={model} "
@@ -98,9 +101,9 @@ async def record_agent_usage(
         f"completion={usage.completion_tokens}",
         flush=True,
     )
-    await record_token_usage(
+    return await record_token_usage(
         user_id=user_id,
-        chat_id=None,
+        chat_id=chat_id,
         message_id=None,
         model_name=model,
         prompt_tokens=usage.prompt_tokens,

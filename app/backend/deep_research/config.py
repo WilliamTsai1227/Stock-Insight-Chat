@@ -145,7 +145,34 @@ MAX_FILES = _env_int("DEEP_SEARCH_MAX_FILES", 10)
 MAX_FILE_MB = _env_int("DEEP_SEARCH_MAX_FILE_MB", 20)
 MAX_FILE_BYTES = MAX_FILE_MB * 1024 * 1024
 MAX_IMAGES = _env_int("DEEP_SEARCH_MAX_IMAGES", 4)
+# 圖片會整張轉成 base64 放進請求（體積再 +33%），上限比一般檔案低
+MAX_IMAGE_MB = min(_env_int("DEEP_SEARCH_MAX_IMAGE_MB", 10), MAX_FILE_MB)
+MAX_IMAGE_BYTES = MAX_IMAGE_MB * 1024 * 1024
+# 單次請求所有檔案加總：檔案會被讀進記憶體，而 backend 容器只有 640m，
+# 只限單檔的話 10 × 20MB = 200MB 一次就能把它打到 OOM
+MAX_TOTAL_MB = max(MAX_FILE_MB, _env_int("DEEP_SEARCH_MAX_TOTAL_MB", 50))
+MAX_TOTAL_BYTES = MAX_TOTAL_MB * 1024 * 1024
+# 圖片像素上限（解壓縮炸彈：一張幾 KB 的 PNG 可以宣告數十億像素）
+MAX_IMAGE_PIXELS = _env_int("DEEP_SEARCH_MAX_IMAGE_PIXELS", 40_000_000)
+# Office 檔（docx/pptx/xlsx 本質是 zip）解壓後總量與成員數上限（zip bomb）
+MAX_ZIP_UNCOMPRESSED_MB = _env_int("DEEP_SEARCH_MAX_ZIP_UNCOMPRESSED_MB", 200)
+MAX_ZIP_MEMBERS = _env_int("DEEP_SEARCH_MAX_ZIP_MEMBERS", 5000)
+# 顯示用檔名長度上限（檔名會進 prompt 與畫面）
+FILENAME_MAX_CHARS = 100
 QUERY_MAX_CHARS = _env_int("DEEP_SEARCH_QUERY_MAX_CHARS", 4000)
+
+# ─────────────────────────────────────────────────────────────
+# 在對話中使用深度研究時，帶入的上下文預算
+# ─────────────────────────────────────────────────────────────
+# 研究本身會把每輪 web search 結果塞回 prompt，前面再疊一長串歷史很容易爆 context，
+# 也會讓單次成本失控。因此歷史另有一份比一般對話更緊的預算：
+#   - 每則 assistant 回覆只取開頭（舊的研究報告動輒上萬字，主題與結論多在前段）
+#   - 總字數超過預算時，從最舊的訊息開始捨棄
+CHAT_HISTORY_MAX_CHARS = _env_int("DEEP_SEARCH_CHAT_HISTORY_MAX_CHARS", 12000)
+CHAT_HISTORY_ASSISTANT_MAX_CHARS = _env_int(
+    "DEEP_SEARCH_CHAT_HISTORY_ASSISTANT_MAX_CHARS", 3000
+)
+CHAT_HISTORY_USER_MAX_CHARS = _env_int("DEEP_SEARCH_CHAT_HISTORY_USER_MAX_CHARS", 2000)
 
 # 試算表轉成 Markdown 後直接塞進 prompt 的字數上限（超過即截斷）
 SPREADSHEET_MAX_CHARS = _env_int("DEEP_SEARCH_SPREADSHEET_MAX_CHARS", 12000)
@@ -284,8 +311,31 @@ def public_config() -> Dict[str, Any]:
         "models": available_models(),
         "max_files": MAX_FILES,
         "max_file_mb": MAX_FILE_MB,
+        "max_image_mb": MAX_IMAGE_MB,
+        "max_total_mb": MAX_TOTAL_MB,
         "max_images": MAX_IMAGES,
         "query_max_chars": QUERY_MAX_CHARS,
         "accepted_extensions": sorted(ACCEPTED_EXTENSIONS),
+        # 前端「迴紋針」說明面板用：每一類檔案怎麼被讀、接受哪些副檔名
+        "file_groups": [
+            {
+                "kind": "document",
+                "label": "文件",
+                "how": "建立臨時索引，研究時逐段檢索",
+                "extensions": sorted(FILE_SEARCH_EXTENSIONS),
+            },
+            {
+                "kind": "spreadsheet",
+                "label": "試算表",
+                "how": "讀成表格（每張表最多前 200 列）",
+                "extensions": sorted(SPREADSHEET_EXTENSIONS),
+            },
+            {
+                "kind": "image",
+                "label": "圖片",
+                "how": "直接交給模型看圖",
+                "extensions": sorted(IMAGE_EXTENSIONS),
+            },
+        ],
         "length_specs": LENGTH_SPECS,
     }

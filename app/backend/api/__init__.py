@@ -10,6 +10,7 @@ from .mcp import router as mcp_router
 from .notes import router as notes_router
 from .market_feed import router as market_feed_router
 from .portfolio import router as portfolio_router
+from .chat_deep_research import router as chat_deep_research_router
 
 
 api_router = APIRouter()
@@ -46,5 +47,8 @@ api_router.include_router(market_feed_router)
 
 # 投資組合排程分析（庫存／觀察清單 → Zentra stock-suite）
 api_router.include_router(portfolio_router)
+
+# 對話中的深度研究（聊天模式第三個選項，可上傳檔案）
+api_router.include_router(chat_deep_research_router)
 
 __all__ = ["api_router"]

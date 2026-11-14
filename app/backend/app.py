@@ -62,6 +62,18 @@ _ALLOWED_ORIGINS = [
     if origin.strip()
 ]
 
+# 上傳端點的請求大小上限。要比 CORS 先加：後加的在外層，
+# 這樣 413 回應也會帶上 CORS header，前端才讀得到錯誤訊息。
+from app.backend.deep_research.config import MAX_TOTAL_BYTES as _UPLOAD_MAX_BYTES
+from app.backend.module.upload_limit import UploadSizeLimitMiddleware
+
+app.add_middleware(
+    UploadSizeLimitMiddleware,
+    paths=["/api/deep-research/runs", "/api/chat/deep-research"],
+    # 檔案總量上限 + 2MB 給 multipart 邊界與文字欄位
+    max_bytes=_UPLOAD_MAX_BYTES + 2 * 1024 * 1024,
+)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_ALLOWED_ORIGINS,

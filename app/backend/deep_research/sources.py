@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import csv
 import io
 import os
@@ -26,12 +27,18 @@ from fastapi import HTTPException, UploadFile, status
 
 from .config import (
     ACCEPTED_EXTENSIONS,
+    FILENAME_MAX_CHARS,
     IMAGE_EXTENSIONS,
     LEGACY_EXTENSION_HINTS,
     MAX_FILE_BYTES,
-    MAX_FILE_MB,
     MAX_FILES,
+    MAX_IMAGE_BYTES,
+    MAX_IMAGE_PIXELS,
     MAX_IMAGES,
+    MAX_TOTAL_BYTES,
+    MAX_TOTAL_MB,
+    MAX_ZIP_MEMBERS,
+    MAX_ZIP_UNCOMPRESSED_MB,
     SPREADSHEET_EXTENSIONS,
     SPREADSHEET_MAX_CHARS,
     SPREADSHEET_TOTAL_MAX_CHARS,
@@ -86,58 +93,197 @@ class RawUpload:
         return "document"
 
 
+def _bad_request(detail: str, code: int = status.HTTP_400_BAD_REQUEST) -> HTTPException:
+    return HTTPException(status_code=code, detail=detail)
+
+
+# 檔名裡不該出現的字元：控制字元、零寬字元、雙向覆寫（RLO 可以把
+# 「報告‮fdp.exe」顯示成「報告exe.pdf」）。檔名會進 prompt 與畫面，一律剔除。
+_FILENAME_STRIP_CATEGORIES = {"Cc", "Cf", "Cs", "Co", "Cn"}
+
+
+def sanitize_filename(raw: str) -> str:
+    """
+    把瀏覽器送來的檔名收斂成可安全顯示、可放進 prompt 的字串。
+
+    - 去掉路徑（`../../etc/passwd`、`C:\\x\\a.pdf` → 只留最後一段）
+    - 去掉控制／零寬／雙向覆寫字元
+    - 過長時截斷主檔名、保留副檔名
+    """
+    import unicodedata
+
+    name = (raw or "").replace("\\", "/").split("/")[-1]
+    name = "".join(
+        ch for ch in name if unicodedata.category(ch) not in _FILENAME_STRIP_CATEGORIES
+    )
+    name = " ".join(name.split()).rstrip(" .")
+    # 不用 os.path.splitext：它把 ".pdf" 當成沒有副檔名的隱藏檔
+    dot = name.rfind(".")
+    tail = name[dot + 1:] if dot >= 0 else ""
+    if tail and len(tail) <= 10 and tail.isalnum():
+        stem, ext = name[:dot], "." + tail.lower()
+    else:
+        stem, ext = name, ""
+    stem = stem.strip(" .") or "未命名檔案"
+    room = max(1, FILENAME_MAX_CHARS - len(ext))
+    return f"{stem[:room]}{ext}"
+
+
+async def _read_limited(upload: UploadFile, limit: int, display: str) -> bytes:
+    """分段讀取，一超過上限就停：不必先把整個超大檔案讀進記憶體才發現太大。"""
+    chunks: List[bytes] = []
+    total = 0
+    while True:
+        chunk = await upload.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            raise _bad_request(
+                f"檔案 {display} 超過 {limit // (1024 * 1024)} MB 上限。",
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+# 各格式的檔頭（magic bytes）。副檔名可以亂改，檔頭才是實際內容 ——
+# 把執行檔改名成 .pdf、把 HTML 改名成 .png 都在這裡擋下。
+_OFFICE_REQUIRED_MEMBER = {
+    ".docx": "word/document.xml",
+    ".pptx": "ppt/presentation.xml",
+    ".xlsx": "xl/workbook.xml",
+    ".xlsm": "xl/workbook.xml",
+}
+_TEXT_EXTENSIONS = {".txt", ".md", ".json", ".html", ".csv"}
+_IMAGE_FORMATS = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".gif": "GIF", ".webp": "WEBP"}
+
+
+def _check_office_zip(ext: str, content: bytes, display: str) -> None:
+    import zipfile
+
+    if not content.startswith(b"PK\x03\x04"):
+        raise _bad_request(f"{display} 不是有效的 {ext} 檔（內容與副檔名不符）。")
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            members = archive.infolist()
+            if len(members) > MAX_ZIP_MEMBERS:
+                raise _bad_request(f"{display} 內部結構異常（檔案數過多），已拒絕。")
+            uncompressed = sum(m.file_size for m in members)
+            if uncompressed > MAX_ZIP_UNCOMPRESSED_MB * 1024 * 1024:
+                raise _bad_request(
+                    f"{display} 解壓後超過 {MAX_ZIP_UNCOMPRESSED_MB} MB，疑似壓縮炸彈，已拒絕。"
+                )
+            names = {m.filename for m in members}
+    except zipfile.BadZipFile:
+        raise _bad_request(f"{display} 檔案已損毀或不是有效的 {ext} 檔。")
+    if "[Content_Types].xml" not in names or _OFFICE_REQUIRED_MEMBER[ext] not in names:
+        raise _bad_request(f"{display} 不是有效的 {ext} 檔（內容與副檔名不符）。")
+
+
+def _check_image(ext: str, content: bytes, display: str) -> None:
+    import warnings
+
+    from PIL import Image
+
+    try:
+        with warnings.catch_warnings():
+            # 像素上限由下方自行判斷，不要讓 Pillow 的 DecompressionBombWarning 洗 log
+            warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(content)) as img:
+                fmt = img.format
+                width, height = img.size
+                img.verify()      # 只驗結構，不解碼整張圖
+    except Image.DecompressionBombError:
+        raise _bad_request(f"圖片 {display} 解析度過大，已拒絕。")
+    except Exception:  # noqa: BLE001 — 打不開就是壞檔或偽裝檔
+        raise _bad_request(f"{display} 不是有效的圖片檔（內容與副檔名不符或已損毀）。")
+
+    if fmt != _IMAGE_FORMATS[ext]:
+        raise _bad_request(f"{display} 的實際格式是 {fmt}，與副檔名 {ext} 不符。")
+    if width * height > MAX_IMAGE_PIXELS:
+        raise _bad_request(
+            f"圖片 {display} 解析度過大（{width}×{height}），請縮小後再上傳。"
+        )
+
+
+def validate_content(ext: str, content: bytes, display: str) -> None:
+    """依副檔名檢查實際內容；不合格直接拋 400。CPU 工作，呼叫端放到 thread 執行。"""
+    if ext == ".pdf":
+        # PDF 規格允許 %PDF- 前面有少量垃圾位元組，但必須在前 1KB 內
+        if b"%PDF-" not in content[:1024]:
+            raise _bad_request(f"{display} 不是有效的 PDF 檔（內容與副檔名不符）。")
+    elif ext in _OFFICE_REQUIRED_MEMBER:
+        _check_office_zip(ext, content, display)
+    elif ext in _IMAGE_FORMATS:
+        _check_image(ext, content, display)
+    elif ext in _TEXT_EXTENSIONS:
+        # 純文字不該有 NUL：有的話幾乎可以確定是改了副檔名的二進位檔
+        if b"\x00" in content:
+            raise _bad_request(f"{display} 看起來不是純文字檔（含二進位內容）。")
+
+
 async def read_uploads(files: List[UploadFile]) -> List[RawUpload]:
-    """把 UploadFile 讀進記憶體並做格式／大小驗證，任何一個不合格就整批拒絕。"""
+    """
+    把 UploadFile 讀進記憶體並做驗證，任何一個不合格就整批拒絕。
+
+    檢查順序由便宜到昂貴：數量 → 副檔名 → 大小（邊讀邊算）→ 總量 → 實際內容。
+    """
     usable = [f for f in files if f and f.filename]
     if len(usable) > MAX_FILES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"一次最多上傳 {MAX_FILES} 個檔案（收到 {len(usable)} 個）。",
-        )
+        raise _bad_request(f"一次最多上傳 {MAX_FILES} 個檔案（收到 {len(usable)} 個）。")
 
     result: List[RawUpload] = []
     image_count = 0
+    total_bytes = 0
+    seen_names: set[str] = set()
 
-    for upload in usable:
-        ext = _ext_of(upload.filename)
+    try:
+        for upload in usable:
+            display = sanitize_filename(upload.filename)
+            ext = _ext_of(display)
 
-        if ext in LEGACY_EXTENSION_HINTS:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=LEGACY_EXTENSION_HINTS[ext],
-            )
-        if ext not in ACCEPTED_EXTENSIONS:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    f"不支援的檔案格式：{upload.filename}。"
+            if ext in LEGACY_EXTENSION_HINTS:
+                raise _bad_request(LEGACY_EXTENSION_HINTS[ext])
+            if ext not in ACCEPTED_EXTENSIONS:
+                raise _bad_request(
+                    f"不支援的檔案格式：{display}。"
                     f"可接受 {'、'.join(sorted(ACCEPTED_EXTENSIONS))}。"
-                ),
-            )
-
-        content = await upload.read()
-        await upload.close()
-
-        if not content:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"檔案 {upload.filename} 是空的。",
-            )
-        if len(content) > MAX_FILE_BYTES:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"檔案 {upload.filename} 超過 {MAX_FILE_MB} MB 上限。",
-            )
-
-        if ext in IMAGE_EXTENSIONS:
-            image_count += 1
-            if image_count > MAX_IMAGES:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"一次最多上傳 {MAX_IMAGES} 張圖片。",
                 )
 
-        result.append(RawUpload(filename=upload.filename, ext=ext, content=content))
+            is_image = ext in IMAGE_EXTENSIONS
+            if is_image:
+                image_count += 1
+                if image_count > MAX_IMAGES:
+                    raise _bad_request(f"一次最多上傳 {MAX_IMAGES} 張圖片。")
+
+            limit = MAX_IMAGE_BYTES if is_image else MAX_FILE_BYTES
+            content = await _read_limited(upload, limit, display)
+            if not content:
+                raise _bad_request(f"檔案 {display} 是空的。")
+
+            total_bytes += len(content)
+            if total_bytes > MAX_TOTAL_BYTES:
+                raise _bad_request(
+                    f"所有檔案加總超過 {MAX_TOTAL_MB} MB 上限。",
+                    status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                )
+
+            await asyncio.to_thread(validate_content, ext, content, display)
+
+            # 同名檔案加上序號，避免 prompt 與來源清單裡分不清
+            name, n = display, 2
+            while name in seen_names:
+                stem, e = os.path.splitext(display)
+                name = f"{stem} ({n}){e}"
+                n += 1
+            seen_names.add(name)
+
+            result.append(RawUpload(filename=name, ext=ext, content=content))
+    finally:
+        for upload in usable:
+            with contextlib.suppress(Exception):
+                await upload.close()
 
     return result
 
