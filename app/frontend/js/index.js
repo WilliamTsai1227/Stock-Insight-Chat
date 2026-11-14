@@ -78,8 +78,11 @@ const RESPONSE_MODE_META = {
         subtitle: '搜尋執行時間較短，回覆較簡潔',
     },
 };
-/** @type {'general' | 'stock_agent'} */
+/** @type {'general' | 'stock_agent' | 'deep_research'} */
 let chatMode = 'general';
+
+/** 合法的聊天模式（localStorage 與選單點擊都要過這一關） */
+const CHAT_MODES = ['general', 'stock_agent', 'deep_research'];
 /** @type {'thinking' | 'flash'} */
 let chatResponseMode = 'thinking';
 
@@ -335,6 +338,7 @@ async function navigateToChat(chatId, options = {}) {
 const CHAT_INPUT_PLACEHOLDER = {
     general: '問我任何事…',
     stock_agent: '問問台積電的供應商風險…',
+    deep_research: '想深入研究什麼？可以附上檔案一起分析…',
 };
 
 /** 歡迎畫面依模式顯示的建議問題（點擊即送出） */
@@ -351,6 +355,11 @@ const SUGGESTED_PROMPTS = {
         '半導體產業目前的供應鏈風險有哪些？',
         '幫我搜尋聯發科最近一週的重要新聞',
         '分析台股加權指數近期的走勢與市場情緒',
+    ],
+    deep_research: [
+        '比較台積電、三星、英特爾在先進製程的競爭態勢',
+        '研究 AI 伺服器供應鏈中台灣廠商的受惠程度',
+        '整理全球電動車電池技術路線的最新進展',
     ],
 };
 
@@ -719,8 +728,9 @@ function syncResponseModeMenuSelection() {
 // ── Chat Mode（一般對話 / 股市 Agent）──────────────────────────────────────
 
 const CHAT_MODE_META = {
-    general:     { label: '一般對話' },
-    stock_agent: { label: '股市 Agent' },
+    general:       { label: '一般對話' },
+    stock_agent:   { label: '股市 Agent' },
+    deep_research: { label: '深度研究' },
 };
 
 function applyChatModeLabel() {
@@ -740,14 +750,15 @@ function syncChatModeMenuSelection() {
 
 /** 套用 chatMode：同步 response-mode 反灰、工具鎖定、placeholder */
 function applyChatModeUI() {
-    const isGeneral = chatMode === 'general';
+    // 思考／快捷只對股市 Agent 有意義；一般對話與深度研究都反灰
+    const lockResponseMode = chatMode !== 'stock_agent';
 
-    // response-mode wrap：一般對話反灰（mode-locked），不可點擊
+    // response-mode wrap：反灰（mode-locked），不可點擊
     const rmWrap = document.querySelector('.response-mode-wrap');
     if (rmWrap) {
-        rmWrap.classList.toggle('mode-locked', isGeneral);
-        // 若切到一般對話，把已展開的 response-mode 選單收起
-        if (isGeneral) {
+        rmWrap.classList.toggle('mode-locked', lockResponseMode);
+        // 若切到被鎖定的模式，把已展開的 response-mode 選單收起
+        if (lockResponseMode) {
             const rmMenu = document.getElementById('response-mode-menu');
             const rmBtn  = document.getElementById('response-mode-btn');
             if (rmMenu) rmMenu.classList.add('hidden');
@@ -770,7 +781,11 @@ function applyChatModeUI() {
 
     applyChatModeLabel();
     syncChatModeMenuSelection();
-    applyGeneralModelVisibility();   // 模型選擇器只在一般對話出現
+    // 模型選擇器：一般對話與深度研究各有自己的清單，切模式時要換內容
+    renderGeneralModelMenu();
+    applyGeneralModelLabel();
+    applyGeneralModelVisibility();
+    applyChatAttachVisibility();     // 迴紋針只在深度研究出現
     refreshWelcomeHeroIfVisible();
 
     try { localStorage.setItem(CHAT_MODE_STORAGE_KEY, chatMode); } catch (_) {}
@@ -796,7 +811,9 @@ function renderWelcomeHero(title) {
     subtitle.className = 'welcome-subtitle';
     subtitle.textContent = chatMode === 'general'
         ? '試試這些問題，或直接輸入你想問的'
-        : '試試這些分析方向，或直接輸入你的問題';
+        : chatMode === 'deep_research'
+            ? '深度研究會多輪查證網路與你附上的檔案，約需 1–5 分鐘'
+            : '試試這些分析方向，或直接輸入你的問題';
     hero.appendChild(subtitle);
 
     const suggestionsWrap = document.createElement('div');
@@ -848,6 +865,293 @@ let generalModel = null;
 
 function generalModelList() {
     return (generalModelCatalog && generalModelCatalog.models) || [];
+}
+
+// ── 深度研究的模型與檔案設定 ──────────────────────────────────────────────
+// 由 GET /api/deep-research/config 決定（後端白名單）；切到深度研究模式時，
+// 模型選擇器改顯示這份清單，送出時 model 也改帶這裡選的值。
+const DR_MODEL_STORAGE_KEY = 'stock_insight_dr_model';
+
+/** @type {null | {default_model:string, models:{id:string,label:string,description:string}[], max_files:number, max_file_mb:number, max_image_mb:number, max_total_mb:number, max_images:number, accepted_extensions:string[], file_groups:{kind:string,label:string,how:string,extensions:string[]}[]}} */
+let drChatConfig = null;
+let drModel = null;
+
+function drModelList() {
+    return (drChatConfig && drChatConfig.models) || [];
+}
+
+
+// ── 深度研究：附加檔案（迴紋針）──────────────────────────────────────────
+// 只有深度研究模式能附檔。前端先擋一輪格式／大小／數量（體感），
+// 真正的檢查在後端 read_uploads()：檔頭、zip bomb、圖片像素、總量都在那裡。
+
+/** @type {File[]} */
+let chatAttachments = [];
+
+const ATTACH_KIND_ICON = { document: 'file-text', spreadsheet: 'sheet', image: 'image' };
+
+function attachExtOf(name) {
+    const m = /\.[^.]+$/.exec(name || '');
+    return m ? m[0].toLowerCase() : '';
+}
+
+function attachKindOf(name) {
+    const ext = attachExtOf(name);
+    const groups = (drChatConfig && drChatConfig.file_groups) || [];
+    const g = groups.find((x) => x.extensions.includes(ext));
+    return g ? g.kind : 'document';
+}
+
+function formatBytes(n) {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+    return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** 說明面板：每一類檔案的副檔名、怎麼讀，以及數量與大小上限（全部來自後端設定） */
+function renderChatAttachHelp() {
+    const list = document.getElementById('chat-attach-groups');
+    const limits = document.getElementById('chat-attach-limits');
+    const input = document.getElementById('chat-attach-input');
+    if (!list || !drChatConfig) return;
+
+    list.textContent = '';
+    (drChatConfig.file_groups || []).forEach((g) => {
+        const li = document.createElement('li');
+        const icon = document.createElement('i');
+        icon.setAttribute('data-lucide', ATTACH_KIND_ICON[g.kind] || 'file');
+        const body = document.createElement('div');
+        const title = document.createElement('strong');
+        title.textContent = g.label;
+        const how = document.createElement('span');
+        how.className = 'chat-attach-how';
+        how.textContent = g.how;
+        const exts = document.createElement('span');
+        exts.className = 'chat-attach-exts';
+        exts.textContent = g.extensions.map((e) => e.replace('.', '').toUpperCase()).join('・');
+        body.append(title, how, exts);
+        li.append(icon, body);
+        list.appendChild(li);
+    });
+
+    if (limits) {
+        const c = drChatConfig;
+        limits.textContent =
+            `最多 ${c.max_files} 個檔案（圖片最多 ${c.max_images} 張）・` +
+            `單檔 ${c.max_file_mb} MB、圖片 ${c.max_image_mb} MB・合計 ${c.max_total_mb} MB`;
+    }
+    if (input) input.accept = (drChatConfig.accepted_extensions || []).join(',');
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+}
+
+function closeChatAttachPopover() {
+    const pop = document.getElementById('chat-attach-popover');
+    const btn = document.getElementById('chat-attach-btn');
+    if (pop) pop.classList.add('hidden');
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+}
+
+/** 迴紋針與附件列只在深度研究模式顯示；其他模式不會送出附件 */
+function applyChatAttachVisibility() {
+    const show = chatMode === 'deep_research';
+    const wrap = document.getElementById('chat-attach-wrap');
+    if (wrap) wrap.classList.toggle('hidden', !show);
+    if (!show) closeChatAttachPopover();
+    renderChatAttachList();
+}
+
+/** 前端預檢；回傳不合格的原因（null = 可加入）。後端仍會再驗一次。 */
+function checkAttachCandidate(file, pending) {
+    const c = drChatConfig;
+    if (!c) return '深度研究設定尚未載入，請稍候再試';
+    const ext = attachExtOf(file.name);
+    if (!c.accepted_extensions.includes(ext)) return `${file.name}：不支援的格式`;
+    const isImage = attachKindOf(file.name) === 'image';
+    const limitMb = isImage ? c.max_image_mb : c.max_file_mb;
+    if (file.size === 0) return `${file.name}：檔案是空的`;
+    if (file.size > limitMb * 1024 * 1024) return `${file.name}：超過 ${limitMb} MB`;
+    if (pending.length >= c.max_files) return `最多只能附 ${c.max_files} 個檔案`;
+    if (isImage && pending.filter((f) => attachKindOf(f.name) === 'image').length >= c.max_images) {
+        return `圖片最多 ${c.max_images} 張`;
+    }
+    const total = pending.reduce((sum, f) => sum + f.size, 0) + file.size;
+    if (total > c.max_total_mb * 1024 * 1024) return `檔案合計超過 ${c.max_total_mb} MB`;
+    if (pending.some((f) => f.name === file.name && f.size === file.size)) return `${file.name}：已經附加過了`;
+    return null;
+}
+
+function addChatAttachments(fileList) {
+    const errors = [];
+    Array.from(fileList || []).forEach((file) => {
+        const err = checkAttachCandidate(file, chatAttachments);
+        if (err) errors.push(err);
+        else chatAttachments.push(file);
+    });
+    if (errors.length) showToast(errors.slice(0, 3).join('\n'), 'error');
+    renderChatAttachList();
+}
+
+function renderChatAttachList() {
+    const list = document.getElementById('chat-attach-list');
+    const badge = document.getElementById('chat-attach-badge');
+    const show = chatMode === 'deep_research' && chatAttachments.length > 0;
+    if (badge) {
+        badge.textContent = String(chatAttachments.length);
+        badge.classList.toggle('hidden', !show);
+    }
+    if (!list) return;
+    list.classList.toggle('hidden', !show);
+    list.textContent = '';
+    if (!show) return;
+
+    chatAttachments.forEach((file, idx) => {
+        const li = document.createElement('li');
+        li.className = 'chat-attach-chip';
+        const icon = document.createElement('i');
+        icon.setAttribute('data-lucide', ATTACH_KIND_ICON[attachKindOf(file.name)] || 'file');
+        const name = document.createElement('span');
+        name.className = 'chat-attach-name';
+        name.textContent = file.name;
+        name.title = file.name;
+        const size = document.createElement('span');
+        size.className = 'chat-attach-size';
+        size.textContent = formatBytes(file.size);
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'chat-attach-remove';
+        remove.setAttribute('aria-label', `移除 ${file.name}`);
+        remove.textContent = '×';
+        remove.addEventListener('click', () => {
+            chatAttachments.splice(idx, 1);
+            renderChatAttachList();
+        });
+        li.append(icon, name, size, remove);
+        list.appendChild(li);
+    });
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+}
+
+function clearChatAttachments() {
+    chatAttachments = [];
+    const input = document.getElementById('chat-attach-input');
+    if (input) input.value = '';
+    renderChatAttachList();
+}
+
+/** 使用者訊息下方的附件標籤（送出當下與重新載入歷史都用這支） */
+function appendAttachmentChips(msgDiv, attachments) {
+    if (!msgDiv || !Array.isArray(attachments) || !attachments.length) return;
+    const wrap = document.createElement('ul');
+    wrap.className = 'chat-attach-list chat-attach-list--sent';
+    wrap.setAttribute('aria-label', '附加的檔案');
+    attachments.forEach((a) => {
+        const name = typeof a === 'string' ? a : (a && a.name) || '';
+        if (!name) return;
+        const li = document.createElement('li');
+        li.className = 'chat-attach-chip';
+        const icon = document.createElement('i');
+        icon.setAttribute('data-lucide', ATTACH_KIND_ICON[(a && a.kind) || attachKindOf(name)] || 'file');
+        const label = document.createElement('span');
+        label.className = 'chat-attach-name';
+        label.textContent = name;
+        label.title = name;
+        li.append(icon, label);
+        wrap.appendChild(li);
+    });
+    const bubble = msgDiv.querySelector('.bubble');
+    if (bubble && bubble.nextSibling) msgDiv.insertBefore(wrap, bubble.nextSibling);
+    else msgDiv.appendChild(wrap);
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+}
+
+function initChatAttachments() {
+    const btn = document.getElementById('chat-attach-btn');
+    const pop = document.getElementById('chat-attach-popover');
+    const pick = document.getElementById('chat-attach-pick');
+    const input = document.getElementById('chat-attach-input');
+    if (!btn || !pop || !input) return;
+
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const willOpen = pop.classList.contains('hidden');
+        pop.classList.toggle('hidden', !willOpen);
+        btn.setAttribute('aria-expanded', String(willOpen));
+    });
+    pop.addEventListener('click', (e) => e.stopPropagation());
+    pop.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { closeChatAttachPopover(); btn.focus(); }
+    });
+    if (pick) pick.addEventListener('click', () => input.click());
+    input.addEventListener('change', () => {
+        addChatAttachments(input.files);
+        input.value = '';
+        closeChatAttachPopover();
+    });
+
+    // 拖放到輸入框（只在深度研究模式接受）
+    const box = document.querySelector('.chat-input-area .input-container');
+    if (box) {
+        box.addEventListener('dragover', (e) => {
+            if (chatMode !== 'deep_research' || !e.dataTransfer || !Array.from(e.dataTransfer.types).includes('Files')) return;
+            e.preventDefault();
+            box.classList.add('drag-over');
+        });
+        box.addEventListener('dragleave', () => box.classList.remove('drag-over'));
+        box.addEventListener('drop', (e) => {
+            box.classList.remove('drag-over');
+            if (chatMode !== 'deep_research' || !e.dataTransfer || !e.dataTransfer.files.length) return;
+            e.preventDefault();
+            addChatAttachments(e.dataTransfer.files);
+        });
+    }
+    applyChatAttachVisibility();
+}
+
+/** 目前模式對應的模型清單／選中值（股市 Agent 不開放切換，回空清單） */
+function modelListForMode() {
+    if (chatMode === 'general') return generalModelList();
+    if (chatMode === 'deep_research') return drModelList();
+    return [];
+}
+
+function selectedModelForMode() {
+    if (chatMode === 'general') return generalModel;
+    if (chatMode === 'deep_research') return drModel;
+    return null;
+}
+
+function setModelForMode(id) {
+    if (chatMode === 'deep_research') {
+        drModel = id;
+        try { localStorage.setItem(DR_MODEL_STORAGE_KEY, id); } catch (_) {}
+    } else {
+        generalModel = id;
+        try { localStorage.setItem(GENERAL_MODEL_STORAGE_KEY, id); } catch (_) {}
+    }
+}
+
+async function loadDeepResearchChatConfig() {
+    try {
+        const res = await authFetch(`${state.apiBase}/deep-research/config`);
+        if (!res || !res.ok) return;
+        const json = await res.json();
+        drChatConfig = json.data;
+
+        let saved = null;
+        try { saved = localStorage.getItem(DR_MODEL_STORAGE_KEY); } catch (_) {}
+        const models = drModelList();
+        const wanted = saved || drChatConfig.default_model;
+        drModel = models.some((m) => m.id === wanted) ? wanted : (models[0] && models[0].id) || null;
+
+        renderChatAttachHelp();
+        if (chatMode === 'deep_research') {
+            renderGeneralModelMenu();
+            applyGeneralModelLabel();
+            applyGeneralModelVisibility();
+        }
+    } catch (err) {
+        console.error('[DeepResearch] 設定載入失敗：', err);
+    }
 }
 
 /** 把想用的模型收斂成清單內的 id；清單還沒載到時回 null（送出時就不帶 model）。 */
@@ -1118,7 +1422,7 @@ function renderGeneralModelMenu() {
     if (!menu) return;
 
     menu.textContent = '';
-    generalModelList().forEach((model) => {
+    modelListForMode().forEach((model) => {
         const li = document.createElement('li');
         li.className = 'chat-mode-option';
         li.setAttribute('role', 'option');
@@ -1135,8 +1439,7 @@ function renderGeneralModelMenu() {
 
         li.append(title, desc);
         li.addEventListener('click', () => {
-            generalModel = model.id;
-            try { localStorage.setItem(GENERAL_MODEL_STORAGE_KEY, generalModel); } catch (_) {}
+            setModelForMode(model.id);
             applyGeneralModelLabel();
             syncGeneralModelMenuSelection();
             menu.classList.add('hidden');
@@ -1152,22 +1455,26 @@ function syncGeneralModelMenuSelection() {
     const menu = document.getElementById('general-model-menu');
     if (!menu) return;
     menu.querySelectorAll('.chat-mode-option').forEach((li) => {
-        li.classList.toggle('selected', li.dataset.value === generalModel);
+        li.classList.toggle('selected', li.dataset.value === selectedModelForMode());
     });
 }
 
 function applyGeneralModelLabel() {
     const label = document.getElementById('general-model-label');
     if (!label) return;
-    const found = generalModelList().find((m) => m.id === generalModel);
+    const found = modelListForMode().find((m) => m.id === selectedModelForMode());
     label.textContent = found ? found.label : '模型';
+    const btn = document.getElementById('general-model-btn');
+    if (btn) {
+        btn.title = chatMode === 'deep_research' ? '深度研究使用的模型' : '選擇一般對話使用的模型';
+    }
 }
 
-/** 只有「一般對話」且清單載得到時才顯示這個選擇器。 */
+/** 一般對話／深度研究且清單載得到時才顯示這個選擇器（股市 Agent 的模型寫死在後端）。 */
 function applyGeneralModelVisibility() {
     const wrap = document.getElementById('general-model-wrap');
     if (!wrap) return;
-    const show = chatMode === 'general' && generalModelList().length > 0;
+    const show = modelListForMode().length > 0;
     wrap.classList.toggle('hidden', !show);
     if (!show) {
         const menu = document.getElementById('general-model-menu');
@@ -1196,7 +1503,7 @@ function initGeneralModelSelector() {
 function initChatModeSelector() {
     try {
         const s = localStorage.getItem(CHAT_MODE_STORAGE_KEY);
-        if (s === 'general' || s === 'stock_agent') chatMode = s;
+        if (CHAT_MODES.includes(s)) chatMode = s;
     } catch (_) {}
 
     const btn  = document.getElementById('chat-mode-btn');
@@ -1218,7 +1525,7 @@ function initChatModeSelector() {
     menu.querySelectorAll('.chat-mode-option').forEach((li) => {
         li.addEventListener('click', () => {
             const v = li.getAttribute('data-value');
-            if (v !== 'general' && v !== 'stock_agent') return;
+            if (!CHAT_MODES.includes(v)) return;
             chatMode = v;
             applyChatModeUI();
             menu.classList.add('hidden');
@@ -1228,6 +1535,7 @@ function initChatModeSelector() {
 
     applyChatModeUI();
     initGeneralModelSelector();
+    initChatAttachments();
 }
 
 /** 快捷模式僅檢索新聞向量庫，與「工具權限」無關；反灰並關閉選單。 */
@@ -1236,8 +1544,8 @@ function syncToolSettingsWithResponseMode() {
     const popover = document.getElementById('tool-popover');
     const wrap = document.querySelector('.chat-input-area .tool-settings');
 
-    // 一般對話 或 flash 模式都鎖定工具
-    const lock = chatMode === 'general' || chatResponseMode === 'flash';
+    // 只有「股市 Agent + 思考」能調工具；一般對話、深度研究、flash 都鎖定
+    const lock = chatMode !== 'stock_agent' || chatResponseMode === 'flash';
     if (wrap) wrap.classList.toggle('tool-settings--flash-lock', lock);
 
     if (toggle) {
@@ -1248,6 +1556,8 @@ function syncToolSettingsWithResponseMode() {
             'title',
             chatMode === 'general'
                 ? '一般對話不使用工具'
+                : chatMode === 'deep_research'
+                    ? '深度研究固定使用網路搜尋與你附上的檔案'
                 : chatResponseMode === 'flash'
                     ? '快捷模式僅檢索新聞，無須調整工具'
                     : '切換工具權限'
@@ -1320,6 +1630,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         loadRecentChatsFromServer(),
         refreshUserQuotaFromServer(),
         loadGeneralChatModels(),
+        loadDeepResearchChatConfig(),
         loadMcpTools(),
     ]);
     updateSendButtonForStreamingState();
@@ -1382,7 +1693,7 @@ function initEventListeners() {
     const toolPopover = document.getElementById('tool-popover');
     if (toolToggle && toolPopover) {
         toolToggle.onclick = (e) => {
-            if (chatMode === 'general' || chatResponseMode === 'flash') {
+            if (chatMode !== 'stock_agent' || chatResponseMode === 'flash') {
                 e.preventDefault();
                 e.stopPropagation();
                 return;
@@ -1407,6 +1718,7 @@ function initEventListeners() {
         const gb = document.getElementById('general-model-btn');
         if (gm) gm.classList.add('hidden');
         if (gb) gb.setAttribute('aria-expanded', 'false');
+        closeChatAttachPopover();
     });
     if (toolPopover) {
         toolPopover.onclick = (e) => e.stopPropagation();
@@ -3024,7 +3336,9 @@ async function loadChatHistoryIntoView(chatId) {
         msgs.forEach(m => {
             const role = m.role || '';
             if (role === 'user') {
-                addMessageToUI('user', m.content || '', { skipScroll: true, messageId: m.id });
+                const userEl = addMessageToUI('user', m.content || '', { skipScroll: true, messageId: m.id });
+                const atts = m.metadata && Array.isArray(m.metadata.attachments) ? m.metadata.attachments : [];
+                appendAttachmentChips(userEl, atts);
             } else if (role === 'assistant') {
                 appendAssistantHistoryMessage(m);
             }
@@ -3336,6 +3650,9 @@ async function sendMessage() {
     inputEl.placeholder = '等待回覆中...';
 
     const query = inputEl.value.trim();
+    // 鎖定送出當下的模式與附件：等待建立 chat 的期間使用者可能切換模式
+    const sendMode = chatMode;
+    const sendAttachments = sendMode === 'deep_research' ? chatAttachments.slice() : [];
     if (!query) {
         sendBtn.disabled = false;
         inputEl.disabled = false;
@@ -3376,6 +3693,10 @@ async function sendMessage() {
     // 顯示使用者訊息（先記錄送出前是否已有歷史，供 429 判斷是否清除側欄孤兒 chat）
     const chatHadPriorMessages = !!document.querySelector('#chat-messages .message');
     const userMsgEl = addMessageToUI('user', query);
+    appendAttachmentChips(
+        userMsgEl,
+        sendAttachments.map((f) => ({ name: f.name, kind: attachKindOf(f.name) }))
+    );
     inputEl.value = '';
     inputEl.style.height = 'auto';
 
@@ -3466,7 +3787,11 @@ async function sendMessage() {
 
     // 建立 AI 訊息容器（先放到畫面上，後續逐步填入）
     // 依模式決定等待提示文字：一般對話用「思考中...」，股市 Agent 用「正在分析問題...」
-    const initPlaceholderText = chatMode === 'general' ? '思考中...' : '正在分析問題...';
+    const initPlaceholderText = sendMode === 'general'
+        ? '思考中...'
+        : sendMode === 'deep_research'
+            ? '深度研究準備中…（約需 1–5 分鐘，可先離開此頁，完成後會存進對話）'
+            : '正在分析問題...';
     const { msgDiv, toolsContainer, bubble, streamCursor, initialPlaceholder } = createStreamingMessageUI(initPlaceholderText);
     const container = document.getElementById('chat-messages');
     const welcome = container.querySelector('.welcome-hero');
@@ -3537,20 +3862,35 @@ async function sendMessage() {
         // 並在 AT 即將過期（≤ 90s）時先靜默換 Token 再送請求（機制 B）。
         // AT 已過期且換 Token 失敗時回傳 undefined 並導向登入頁，
         // 此時直接 return 以結束函式，finally 區塊仍會負責解鎖 UI。
-        const response = await authFetch(`${state.apiBase}/chat/messages`, {
-            method: 'POST',
-            signal: streamAbortCtrl.signal,
-            body: JSON.stringify({
-                query,
-                chat_id: streamTargetChatId,   // 與發送瞬間鎖定，勿用 state.currentChatId（使用者可能 await 時已換對話）
-                // null = Smart Mode；array（即使為空）= 嚴格手動白名單。
-                agent_config: { enabled_tools: (isAuto && !mentionedMcpTools.length) ? null : enabled_tools },
-                chat_mode: chatMode,
-                response_mode: chatResponseMode === 'flash' ? 'flash' : 'thinking',
-                // 只有一般對話吃這個欄位；清單沒載到時不帶，後端用預設模型
-                ...(chatMode === 'general' && generalModel ? { model: generalModel } : {}),
-            })
-        });
+        let response;
+        if (sendMode === 'deep_research') {
+            // 深度研究走 multipart（要帶檔案）；authFetch 遇到 FormData 不會強加 JSON header
+            const form = new FormData();
+            form.append('chat_id', streamTargetChatId);
+            form.append('query', query);
+            if (drModel) form.append('model', drModel);
+            sendAttachments.forEach((file) => form.append('files', file, file.name));
+            response = await authFetch(`${state.apiBase}/chat/deep-research`, {
+                method: 'POST',
+                signal: streamAbortCtrl.signal,
+                body: form,
+            });
+        } else {
+            response = await authFetch(`${state.apiBase}/chat/messages`, {
+                method: 'POST',
+                signal: streamAbortCtrl.signal,
+                body: JSON.stringify({
+                    query,
+                    chat_id: streamTargetChatId,   // 與發送瞬間鎖定，勿用 state.currentChatId（使用者可能 await 時已換對話）
+                    // null = Smart Mode；array（即使為空）= 嚴格手動白名單。
+                    agent_config: { enabled_tools: (isAuto && !mentionedMcpTools.length) ? null : enabled_tools },
+                    chat_mode: sendMode,
+                    response_mode: chatResponseMode === 'flash' ? 'flash' : 'thinking',
+                    // 只有一般對話吃這個欄位；清單沒載到時不帶，後端用預設模型
+                    ...(sendMode === 'general' && generalModel ? { model: generalModel } : {}),
+                })
+            });
+        }
 
         if (!response) return;  // authFetch 已處理 401 → 跳轉 /login
         if (!response.ok) {
@@ -3571,6 +3911,9 @@ async function sendMessage() {
             throw err;
         }
         if (!response.body) throw new Error('瀏覽器不支援 Streaming');
+
+        // 後端已收下檔案（驗證通過），附件列可以清掉了；驗證失敗時保留，方便使用者改完重送
+        if (sendMode === 'deep_research') clearChatAttachments();
 
         newChatComposeLock = false;
         updateSendButtonForStreamingState();
@@ -3602,6 +3945,13 @@ async function sendMessage() {
                     case 'thinking': {
                         const txt = initialPlaceholder.querySelector('span:last-child');
                         if (txt) txt.textContent = payload.text || '思考中...';
+                        break;
+                    }
+
+                    // 深度研究：個別檔案處理失敗等提醒（研究照常進行）
+                    case 'notice': {
+                        const msgs = Array.isArray(payload.messages) ? payload.messages : [];
+                        if (msgs.length) showToast(msgs.join('\n'), 'info');
                         break;
                     }
 
@@ -3789,6 +4139,14 @@ async function sendMessage() {
                     : '伺服器連線失敗，請檢查 Docker 是否啟動。';
             bubble.textContent = msg;
             showToast(msg, 'error');
+            // 深度研究在驗證階段被拒（檔案不合格、已有研究在跑…）時後端不會寫入訊息，
+            // 空的新對話已被後端刪除，側欄也要同步拿掉
+            const rejectedBeforeSave = err && err.httpStatus >= 400 && err.httpStatus < 500;
+            if (sendMode === 'deep_research' && rejectedBeforeSave && (wasNewChatThisSend || !chatHadPriorMessages)) {
+                removeChatFromSidebarState(streamTargetChatId);
+                // 那則對話已不存在，下一次送出要重新建立
+                if (String(state.currentChatId) === String(streamTargetChatId)) state.currentChatId = null;
+            }
         }
     } finally {
         try {
@@ -3888,6 +4246,8 @@ const TOOL_DISPLAY_NAMES = {
     search_market_ai_analysis:  '搜尋 AI 市場分析',
     get_market_recommendations: '提取潛力標的',
     tavily_global_search:         '網路搜尋',
+    dr_web_search:              '網路搜尋',
+    dr_file_search:             '檢索你附上的檔案',
 };
 
 function formatToolName(tool) {

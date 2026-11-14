@@ -280,6 +280,7 @@ async def _insert_user_message(
     db: asyncpg.Connection,
     chat_id: UUID,
     content: str,
+    metadata: Optional[Dict[str, Any]] = None,
 ) -> UUID:
     """
     在 agent 跑之前同步寫入 user 訊息，回傳新插入的 message id。
@@ -308,13 +309,14 @@ async def _insert_user_message(
         )
         row = await db.fetchrow(
             """
-            INSERT INTO messages (chat_id, parent_id, role, content)
-            VALUES ($1, $2, 'user', $3)
+            INSERT INTO messages (chat_id, parent_id, role, content, metadata)
+            VALUES ($1, $2, 'user', $3, $4)
             RETURNING id
             """,
             chat_id,
             prev_id,
             content,
+            json.dumps(metadata, ensure_ascii=False) if metadata is not None else None,
         )
         await db.execute(
             "UPDATE chats SET updated_at = NOW() WHERE id = $1",

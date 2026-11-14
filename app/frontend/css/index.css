@@ -3468,3 +3468,169 @@ body.light-theme .pv-file-status {
         padding-right: max(0.85rem, env(safe-area-inset-right, 0px));
     }
 }
+
+/* ── 深度研究：附加檔案（迴紋針、說明面板、附件標籤）──────────────── */
+.chat-attach-wrap { position: relative; flex-shrink: 0; }
+.chat-attach-wrap.hidden { display: none; }
+
+.chat-attach-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 999px;
+}
+.chat-attach-btn i { width: 17px; height: 17px; }
+.chat-attach-btn[aria-expanded="true"] { color: var(--accent); background: var(--surface-hover); }
+
+.chat-attach-badge {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 0.65rem;
+    font-weight: 700;
+    line-height: 16px;
+    text-align: center;
+}
+.chat-attach-badge.hidden { display: none; }
+
+.chat-attach-popover {
+    position: absolute;
+    bottom: calc(100% + 10px);
+    left: 0;
+    width: min(340px, 86vw);
+    padding: 14px;
+    background: var(--popover-bg);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.chat-attach-popover.hidden { display: none; }
+.chat-attach-popover h5 {
+    margin: 0;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-main);
+}
+
+.chat-attach-groups {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.chat-attach-groups li {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: var(--surface-hover);
+}
+.chat-attach-groups li > i { width: 16px; height: 16px; margin-top: 2px; color: var(--accent); flex-shrink: 0; }
+.chat-attach-groups li > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.chat-attach-groups strong { font-size: 0.82rem; color: var(--text-main); }
+.chat-attach-how { font-size: 0.75rem; color: var(--text-dim); }
+.chat-attach-exts {
+    font-size: 0.72rem;
+    color: var(--text-main);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 0.02em;
+}
+
+.chat-attach-limits { margin: 0; font-size: 0.74rem; color: var(--text-dim); line-height: 1.5; }
+.chat-attach-privacy {
+    margin: 0;
+    display: flex;
+    gap: 6px;
+    align-items: flex-start;
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    line-height: 1.5;
+}
+.chat-attach-privacy i { width: 14px; height: 14px; flex-shrink: 0; margin-top: 1px; }
+
+.chat-attach-pick {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 8px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--accent);
+    background: transparent;
+    color: var(--accent);
+    font: inherit;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: 0.2s;
+}
+.chat-attach-pick:hover { background: var(--accent); color: #fff; }
+.chat-attach-pick i { width: 15px; height: 15px; }
+.chat-attach-tip { margin: 0; font-size: 0.7rem; color: var(--text-dim); text-align: center; }
+
+/* 已選的附件（輸入框上方）與已送出的附件（使用者訊息下方） */
+.chat-attach-list {
+    list-style: none;
+    margin: 0 0 8px;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.chat-attach-list.hidden { display: none; }
+.chat-attach-list--sent { margin: 6px 0 0; justify-content: flex-end; }
+
+.chat-attach-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    padding: 4px 6px 4px 9px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-hover);
+    font-size: 0.76rem;
+    color: var(--text-main);
+}
+.chat-attach-list--sent .chat-attach-chip { padding-right: 10px; }
+.chat-attach-chip i { width: 13px; height: 13px; color: var(--text-dim); flex-shrink: 0; }
+.chat-attach-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
+.chat-attach-size { color: var(--text-dim); font-size: 0.7rem; flex-shrink: 0; }
+.chat-attach-remove {
+    width: 18px;
+    height: 18px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 0.95rem;
+    line-height: 1;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.chat-attach-remove:hover { background: var(--border); color: var(--text-main); }
+
+.input-container.drag-over {
+    border-color: var(--accent);
+    border-style: dashed;
+}
+
+@media (max-width: 480px) {
+    .chat-attach-name { max-width: 140px; }
+}

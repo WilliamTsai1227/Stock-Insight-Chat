@@ -591,6 +591,8 @@
                             <button type="button" id="note-select-confirm" class="notes-primary-btn">整理成筆記</button>
                         </div>
                     </div>
+                    <!-- 深度研究：已選的附件（送出前可移除） -->
+                    <ul id="chat-attach-list" class="chat-attach-list hidden" aria-label="已附加的檔案"></ul>
                     <!-- 上方：使用者輸入 -->
                     <div class="input-top-row">
                         <textarea id="user-input" placeholder="問我任何事…" rows="1" maxlength="2000"></textarea>
@@ -630,12 +632,39 @@
                                         <span class="chat-mode-option-title">股市 Agent</span>
                                         <span class="chat-mode-option-desc">使用工具搜尋分析股市資料</span>
                                     </li>
+                                    <li tabindex="0" role="option" data-value="deep_research" class="chat-mode-option">
+                                        <span class="chat-mode-option-title">深度研究</span>
+                                        <span class="chat-mode-option-desc">多輪網路查證、可附檔案，產出研究報告（約 1–5 分鐘）</span>
+                                    </li>
                                 </ul>
+                            </div>
+                            <!-- 附加檔案：只有深度研究模式可用 -->
+                            <div class="chat-attach-wrap hidden" id="chat-attach-wrap">
+                                <button type="button" id="chat-attach-btn" class="tool-btn chat-attach-btn"
+                                        aria-haspopup="dialog" aria-expanded="false" aria-controls="chat-attach-popover"
+                                        title="附加檔案（深度研究）">
+                                    <i data-lucide="paperclip"></i>
+                                    <span id="chat-attach-badge" class="chat-attach-badge hidden"></span>
+                                </button>
+                                <div id="chat-attach-popover" class="chat-attach-popover hidden" role="dialog" aria-labelledby="chat-attach-title">
+                                    <h5 id="chat-attach-title">附加檔案給深度研究</h5>
+                                    <ul id="chat-attach-groups" class="chat-attach-groups"></ul>
+                                    <p id="chat-attach-limits" class="chat-attach-limits"></p>
+                                    <p class="chat-attach-privacy">
+                                        <i data-lucide="shield-check"></i>
+                                        <span>檔案只用於這次研究，研究結束即從 OpenAI 刪除，伺服器不保存檔案內容。</span>
+                                    </p>
+                                    <button type="button" id="chat-attach-pick" class="chat-attach-pick">
+                                        <i data-lucide="upload"></i><span>選擇檔案</span>
+                                    </button>
+                                    <p class="chat-attach-tip">也可以直接把檔案拖進輸入框</p>
+                                </div>
+                                <input type="file" id="chat-attach-input" multiple hidden>
                             </div>
                             <!-- 一般對話的模型選擇（股市 Agent 的模型不開放切換，故僅 general 模式顯示） -->
                             <div class="chat-mode-wrap general-model-wrap hidden" id="general-model-wrap">
                                 <button type="button" id="general-model-btn" class="chat-mode-btn"
-                                        aria-haspopup="listbox" aria-expanded="false" title="選擇一般對話使用的模型">
+                                        aria-haspopup="listbox" aria-expanded="false" title="選擇模型">
                                     <i data-lucide="cpu" class="general-model-icon"></i>
                                     <span id="general-model-label">模型</span>
                                     <i data-lucide="chevron-up" class="chat-mode-chevron"></i>
