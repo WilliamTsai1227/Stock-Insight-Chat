@@ -216,6 +216,9 @@ async def portfolio_summary(user_id: UUID = Depends(get_current_user_id),
             "id": str(h["id"]), "market": h["market"], "symbol": h["symbol"], "name": h["name"],
             "shares": shares, "cost": cost, "currency": "TWD" if h["market"] == "TW" else "USD",
             "price": q.price if q else None, "previous_close": q.previous_close if q else None,
+            # 這檔報價的最後成交時間（UTC ISO）；與整份總覽的 as_of（抓取時間）不同
+            "quote_time": (datetime.fromtimestamp(q.as_of, timezone.utc).isoformat()
+                           if q and q.as_of else None),
             "value_twd": None, "cost_twd": None, "pnl_twd": None, "pnl_pct": None,
             "day_change_pct": None, "weight_pct": None,
         }

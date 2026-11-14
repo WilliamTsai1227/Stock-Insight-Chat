@@ -30,7 +30,7 @@ class Quote:
     price: float
     previous_close: Optional[float]
     currency: Optional[str]
-    as_of: Optional[int]          # epoch 秒（最後一根 K 棒）
+    as_of: Optional[int]          # epoch 秒：最後成交時間（regularMarketTime），沒有才退回最後一根 K 棒
 
 
 _cache: dict[str, tuple[float, Optional[Quote]]] = {}
@@ -58,7 +58,8 @@ def _parse(payload: dict, yahoo_symbol: str) -> Optional[Quote]:
     previous = closes[-2] if len(closes) >= 2 else meta.get("chartPreviousClose")
     return Quote(yahoo_symbol=yahoo_symbol, price=float(price),
                  previous_close=float(previous) if previous else None,
-                 currency=meta.get("currency"), as_of=stamps[-1] if stamps else None)
+                 currency=meta.get("currency"),
+                 as_of=meta.get("regularMarketTime") or (stamps[-1] if stamps else None))
 
 
 async def _fetch(client: httpx.AsyncClient, yahoo_symbol: str) -> Optional[Quote]:

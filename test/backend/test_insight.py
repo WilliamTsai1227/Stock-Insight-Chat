@@ -255,3 +255,13 @@ def test_quote_parse_uses_previous_daily_close():
 def test_quote_parse_empty_result():
     from app.backend.insight.quotes import _parse
     assert _parse({"chart": {"result": None}}, "X") is None
+
+
+def test_quote_parse_prefers_regular_market_time():
+    from app.backend.insight.quotes import _parse
+    base = {"timestamp": [100, 200], "indicators": {"quote": [{"close": [10.0, 11.0]}]}}
+    with_time = _parse({"chart": {"result": [{**base, "meta": {"regularMarketPrice": 11.0,
+                                                               "regularMarketTime": 1731565800}}]}}, "X")
+    assert with_time.as_of == 1731565800
+    without = _parse({"chart": {"result": [{**base, "meta": {"regularMarketPrice": 11.0}}]}}, "X")
+    assert without.as_of == 200
