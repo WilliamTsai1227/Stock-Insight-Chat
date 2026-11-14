@@ -20,6 +20,9 @@ const pfState = {
     jobId: null,
     pollTimer: null,
     chartUrls: [],
+    quotes: new Map(),          // 庫存 id → summary 的單檔報價與報酬（/portfolio/summary）
+    usdTwd: null,               // summary 回傳的 USD/TWD 匯率
+    detail: null,               // 明細 Modal 目前顯示的 { item, ccy }
 };
 
 const pfEl = (id) => document.getElementById(id);
@@ -139,6 +142,7 @@ async function loadPortfolioItems() {
         const data = await pfApi('/portfolio/items');
         pfState.items = { HOLDING: data.holdings, WATCHLIST: data.watchlist };
         pfState.limit = data.limit_per_list;
+        pfState.quotes = new Map();
         renderPortfolioItems();
         loadPortfolioSummary();
     } catch (err) {
@@ -163,7 +167,7 @@ function renderPortfolioItems() {
     const head = pfEl('pf-item-head');
     head.replaceChildren();
     const headRow = pfNode('tr');
-    const cols = isHolding ? ['市場', '代碼', '名稱', '成本價', '股數', ''] : ['市場', '代碼', '名稱', ''];
+    const cols = isHolding ? ['市場', '代碼', '名稱', '成本價', '股數', '佔比', '報酬率', ''] : ['市場', '代碼', '名稱', ''];
     cols.forEach((c) => headRow.appendChild(pfNode('th', null, c)));
     head.appendChild(headRow);
 
@@ -177,6 +181,24 @@ function renderPortfolioItems() {
         if (isHolding) {
             row.appendChild(pfNode('td', 'pf-num', pfNum(item.cost, 4)));
             row.appendChild(pfNode('td', 'pf-num', pfNum(item.shares, 4)));
+            const quote = pfState.quotes.get(item.id);
+            // 佔比 = 這檔現值 / 庫存總現值；報價還沒回來或抓不到時顯示 —
+            const weight = quote?.weight_pct;
+            row.appendChild(pfNode('td', 'pf-num', pfHas(weight) ? `${pfNum(weight)}%` : '—'));
+            // 報酬率 = 現價 / 成本價 - 1
+            const pnlPct = quote?.pnl_pct;
+            row.appendChild(pfNode('td', `pf-num ${pfHas(pnlPct) ? pfTrendClass(pnlPct) : 'pf-flat'}`,
+                                   pfHas(pnlPct) ? pfSignPct(pnlPct) : '—'));
+            // 整列可點開明細（鍵盤 Enter / 空白鍵也可）
+            row.classList.add('pf-row-click');
+            row.tabIndex = 0;
+            row.setAttribute('aria-label', `${item.name} ${item.symbol} 明細`);
+            row.addEventListener('click', () => openPortfolioDetail(item));
+            row.addEventListener('keydown', (e) => {
+                if (e.target !== row || (e.key !== 'Enter' && e.key !== ' ')) return;
+                e.preventDefault();
+                openPortfolioDetail(item);
+            });
         }
         const actions = pfNode('td', 'pf-row-actions');
         const edit = pfNode('button', 'pf-text-btn', '編輯');
@@ -189,6 +211,9 @@ function renderPortfolioItems() {
         del.type = 'button';
         del.addEventListener('click', () => deletePortfolioItem(item));
         actions.append(edit, move, del);
+        // 操作按鈕不要觸發整列的「開明細」
+        actions.addEventListener('click', (e) => e.stopPropagation());
+        actions.addEventListener('keydown', (e) => e.stopPropagation());
         row.appendChild(actions);
         body.appendChild(row);
     });
@@ -314,6 +339,113 @@ function pfTrendClass(value) {
     return value > 0 ? 'pf-up' : 'pf-down';
 }
 
+// ── 單檔明細 Modal ──────────────────────────────────────────
+
+const pfHas = (v) => v !== null && v !== undefined && !Number.isNaN(Number(v));
+
+/** 報價時間：一律以台北時間顯示並註明 */
+function pfQuoteTime(iso) {
+    if (!iso) return '';
+    const t = new Date(iso).toLocaleString('zh-TW', {
+        timeZone: 'Asia/Taipei', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', hour12: false,
+    });
+    return `報價時間 ${t}（台北時間）`;
+}
+
+function openPortfolioDetail(item) {
+    pfState.detail = { item, ccy: item.market === 'US' ? 'USD' : 'TWD' };
+    renderPortfolioDetail();
+    pfEl('pf-detail-modal').classList.add('show');
+}
+
+function setPortfolioDetailCcy(ccy) {
+    if (!pfState.detail) return;
+    pfState.detail.ccy = ccy;
+    renderPortfolioDetail();
+}
+
+function renderPortfolioDetail() {
+    const { item, ccy } = pfState.detail;
+    const quote = pfState.quotes.get(item.id);
+    const isUS = item.market === 'US';
+    const fx = pfState.usdTwd;
+    // 美股切台幣才乘匯率；沒有匯率時只能顯示美金
+    const toTwd = isUS && ccy === 'TWD';
+    const rate = toTwd ? fx : 1;
+    const priceDigits = ccy === 'USD' ? 2 : (toTwd ? 2 : 4);
+    const moneyDigits = ccy === 'USD' ? 2 : 0;
+
+    const title = pfEl('pf-detail-title');
+    title.replaceChildren(document.createTextNode(item.name),
+                          pfNode('span', 'pf-detail-sub', `${item.symbol}・${isUS ? '美股' : '台股'}`));
+
+    const seg = pfEl('pf-detail-ccy');
+    seg.classList.toggle('hidden', !isUS);
+    pfEl('pf-detail-ccy-fixed').classList.toggle('hidden', isUS);
+    seg.querySelectorAll('button').forEach((btn) => {
+        btn.setAttribute('aria-pressed', String(btn.dataset.ccy === ccy));
+        btn.disabled = btn.dataset.ccy === 'TWD' && !pfHas(fx);
+    });
+
+    const cost = Number(item.cost);
+    const shares = Number(item.shares);
+    const price = quote?.price;
+    const hasPrice = pfHas(price) && pfHas(rate);
+    const basis = pfHas(rate) ? cost * shares * rate : null;
+    const value = hasPrice ? price * shares * rate : null;
+    const pnl = hasPrice ? value - basis : null;
+    const pnlPct = quote?.pnl_pct;
+    const unit = ccy === 'USD' ? 'USD' : 'TWD';
+    const money = (v, digits = moneyDigits) => (pfHas(v) ? `${pfNum(v, digits)} ${unit}` : '—');
+
+    const rows = [
+        ['成交均價', money(pfHas(rate) ? cost * rate : null, priceDigits)],
+        ['現價', hasPrice ? money(price * rate, priceDigits) : '—',
+         hasPrice ? pfQuoteTime(quote.quote_time || null) : (quote ? '抓不到報價' : '報價載入中…')],
+        ['股數', pfNum(shares, 4)],
+        ['付出成本', money(basis)],
+        ['現值', money(value)],
+        ['預估損益', pfHas(pnl) ? `${pnl > 0 ? '+' : ''}${money(pnl)}` : '—', '', pfHas(pnl) ? pfTrendClass(pnl) : ''],
+        ['報酬率', pfHas(pnlPct) ? pfSignPct(pnlPct) : '—', '', pfHas(pnlPct) ? pfTrendClass(pnlPct) : ''],
+        ['佔整體庫存', pfHas(quote?.weight_pct) ? `${pfNum(quote.weight_pct)}%` : '—'],
+    ];
+
+    const dl = pfEl('pf-detail-rows');
+    dl.replaceChildren();
+    rows.forEach(([label, text, sub, cls]) => {
+        const row = pfNode('div', `pf-detail-row${label === '預估損益' || label === '報酬率' ? ' strong' : ''}`);
+        const dd = pfNode('dd', cls || null, text);
+        if (sub) dd.appendChild(pfNode('small', null, sub));
+        row.append(pfNode('dt', null, label), dd);
+        dl.appendChild(row);
+    });
+
+    pfEl('pf-detail-note').textContent = toTwd
+        ? `台幣金額以目前匯率 USD/TWD ${pfNum(fx, 3)} 換算（成本也用目前匯率，不是買進當時的匯率）。`
+        : (isUS && !pfHas(fx) ? '目前抓不到匯率，只能以美金顯示。' : '');
+}
+
+function closePortfolioDetail() {
+    pfState.detail = null;
+}
+
+pfEl('pf-detail-ccy')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-ccy]');
+    if (btn && !btn.disabled) setPortfolioDetailCcy(btn.dataset.ccy);
+});
+// 共用的 closeAllModals 只移除 .show；用 MutationObserver 同步清掉明細狀態
+(() => {
+    const modal = pfEl('pf-detail-modal');
+    if (!modal) return;
+    new MutationObserver(() => {
+        if (!modal.classList.contains('show')) closePortfolioDetail();
+    }).observe(modal, { attributes: true, attributeFilter: ['class'] });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && modal.classList.contains('show')) closeAllModals();
+    });
+})();
+
 async function loadPortfolioSummary() {
     if (!(pfState.items.HOLDING || []).length) return;
     pfEl('pf-ov-asof').textContent = '更新報價中…';
@@ -364,10 +496,16 @@ function pfSegments(holdings) {
 }
 
 function renderPortfolioSummary(data) {
+    pfState.quotes = new Map(data.holdings.map((h) => [h.id, h]));
+    pfState.usdTwd = data.usd_twd;
+    if (pfState.tab === 'HOLDING') renderPortfolioItems();
+    if (pfState.detail) renderPortfolioDetail();
+
     pfEl('pf-ov-value').textContent = pfNum(data.total_value_twd, 0);
-    const day = pfEl('pf-ov-day');
-    day.textContent = data.day_change_pct === null ? '' : `(${pfSignPct(data.day_change_pct)})`;
-    day.className = `pf-ov-day ${pfTrendClass(data.day_change_pct)}`;
+    // 總現值旁顯示總報酬率（今日漲跌在甜甜圈中央）
+    const total = pfEl('pf-ov-day');
+    total.textContent = data.unrealized_pnl_pct === null ? '' : `總報酬 ${pfSignPct(data.unrealized_pnl_pct)}`;
+    total.className = `pf-ov-day ${pfTrendClass(data.unrealized_pnl_pct)}`;
     pfEl('pf-ov-cost').textContent = pfNum(data.total_cost_twd, 0);
     const pnl = pfEl('pf-ov-pnl');
     const pnlSign = data.unrealized_pnl_twd > 0 ? '+' : '';

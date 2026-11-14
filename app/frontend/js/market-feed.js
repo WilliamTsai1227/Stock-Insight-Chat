@@ -417,6 +417,9 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
+        // 刷新：用目前的篩選條件從第一頁重新載入（結束日期留空時會抓到最新一筆）
+        feedPart(kind, 'refresh')?.addEventListener('click', () => applyFeedFilters(kind));
+
         const scroll = feedPart(kind, 'scroll');
         const sentinel = feedPart(kind, 'sentinel');
         if (scroll && sentinel && 'IntersectionObserver' in window) {

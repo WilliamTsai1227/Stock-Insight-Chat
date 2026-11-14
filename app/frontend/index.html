@@ -373,6 +373,7 @@
                         <input type="search" name="keyword" maxlength="100" placeholder="搜尋新聞標題或內文">
                     </label>
                     <button type="submit" class="feed-search-btn"><i data-lucide="search"></i><span>搜尋</span></button>
+                    <button type="button" class="feed-search-btn" data-role="refresh" title="重新載入最新資料"><i data-lucide="rotate-cw"></i><span>刷新</span></button>
                 </form>
                 <div class="feed-scroll" data-role="scroll">
                     <div class="feed-list" data-role="list"></div>
@@ -404,6 +405,7 @@
                         <input type="search" name="keyword" maxlength="100" placeholder="搜尋分析、重點新聞或產業">
                     </label>
                     <button type="submit" class="feed-search-btn"><i data-lucide="search"></i><span>搜尋</span></button>
+                    <button type="button" class="feed-search-btn" data-role="refresh" title="重新載入最新資料"><i data-lucide="rotate-cw"></i><span>刷新</span></button>
                 </form>
                 <div class="feed-active-filter hidden" data-role="industry-chip"></div>
                 <div class="feed-scroll" data-role="scroll">
@@ -697,6 +699,28 @@
                 <button class="modal-btn secondary" onclick="closeCreateProjectModal()">取消</button>
                 <button class="modal-btn primary" id="create-project-submit-btn"
                         onclick="submitCreateProject()" disabled>建立專案</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 投資組合：單檔庫存明細 Modal（點庫存表格的某一列開啟） -->
+    <div class="modal-overlay" id="pf-detail-modal">
+        <div class="modal-card pf-detail-card" role="dialog" aria-modal="true" aria-labelledby="pf-detail-title">
+            <div class="modal-header">
+                <h3 id="pf-detail-title"></h3>
+                <button class="modal-close" type="button" onclick="closeAllModals()" aria-label="關閉"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <div class="pf-detail-ccy-row">
+                    <span class="info-label">顯示幣別</span>
+                    <div id="pf-detail-ccy" class="pf-seg" role="group" aria-label="顯示幣別">
+                        <button type="button" data-ccy="USD">美金 USD</button>
+                        <button type="button" data-ccy="TWD">台幣 TWD</button>
+                    </div>
+                    <span id="pf-detail-ccy-fixed" class="info-value">台幣 TWD</span>
+                </div>
+                <dl id="pf-detail-rows" class="pf-detail-rows"></dl>
+                <p id="pf-detail-note" class="pf-hint"></p>
             </div>
         </div>
     </div>
