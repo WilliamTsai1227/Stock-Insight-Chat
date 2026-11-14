@@ -1,5 +1,5 @@
 /**
- * PWA 支援：註冊 Service Worker、同步狀態列顏色、iOS「加入主畫面」提示。
+ * PWA 支援：同步狀態列顏色、iOS「加入主畫面」提示。
  *
  * 這支檔案在 index.html 與 login.html 都會載入，不依賴其他前端模組，
  * 也不依賴 lucide（提示列的圖示直接內嵌 SVG，載入順序無關）。
@@ -62,22 +62,6 @@
         return isIOS() &&
             /Safari/.test(navigator.userAgent) &&
             !/CriOS|FxiOS|EdgiOS|OPiOS|Chrome/.test(navigator.userAgent);
-    }
-
-    // ── Service Worker ─────────────────────────────────────────
-    function registerServiceWorker() {
-        if (!('serviceWorker' in navigator)) return;
-        // file:// 或 http://（非 localhost）不允許註冊，直接跳過免得 console 噴錯
-        if (location.protocol !== 'https:' &&
-            location.hostname !== 'localhost' &&
-            location.hostname !== '127.0.0.1') {
-            return;
-        }
-        window.addEventListener('load', function () {
-            navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(function (err) {
-                console.warn('[PWA] Service Worker 註冊失敗：', err);
-            });
-        });
     }
 
     // ── iOS「加入主畫面」提示（僅 login 頁；body 需帶 data-pwa-install-hint）──
@@ -163,7 +147,6 @@
         maybeShowHint();
     }
 
-    registerServiceWorker();
 
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);
