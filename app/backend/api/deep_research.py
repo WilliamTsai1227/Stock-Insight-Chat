@@ -178,26 +178,32 @@ async def create_research_run(
         )
 
     user_key = str(user_id)
+    # 檢查與佔位之間不能有 await，否則同時送來的請求會一起通過檢查（見 chat_deep_research）
     if user_key in _active_runs:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="您已有一個研究任務正在執行，請等它完成後再開始下一個。",
         )
-
-    # Token 配額 pre-flight：已達上限直接 429，不進 OpenAI。
-    # 一次深度研究比一輪聊天貴上兩個數量級，因此擋在最前面 ——
-    # 連檔案都還沒讀，使用者也不會白等一個注定要失敗的上傳。
-    await assert_preflight_llm_quota(user_id)
-
-    # 讀檔與格式驗證放在 handler：格式錯誤要回正常的 4xx，而不是包在 SSE 裡
-    uploads = await read_uploads(files or [])
-
-    chosen_model = resolve_model(model)
-    session = await session_store.create(
-        user_id=user_key, model=chosen_model, query=cleaned_query
-    )
-    session.source_names = [u.filename for u in uploads]
     _active_runs.add(user_key)
+
+    try:
+        # Token 配額 pre-flight：已達上限直接 429，不進 OpenAI。
+        # 一次深度研究比一輪聊天貴上兩個數量級，因此擋在最前面 ——
+        # 連檔案都還沒讀，使用者也不會白等一個注定要失敗的上傳。
+        await assert_preflight_llm_quota(user_id)
+
+        # 讀檔與格式驗證放在 handler：格式錯誤要回正常的 4xx，而不是包在 SSE 裡
+        uploads = await read_uploads(files or [])
+
+        chosen_model = resolve_model(model)
+        session = await session_store.create(
+            user_id=user_key, model=chosen_model, query=cleaned_query
+        )
+        session.source_names = [u.filename for u in uploads]
+    except BaseException:
+        # 還沒交給 SSE 生產者：佔住的名額要在這裡還回去
+        _active_runs.discard(user_key)
+        raise
 
     usage = AgentUsage()
 
