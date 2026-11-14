@@ -21,6 +21,12 @@ const notesState = {
     selecting: false,
     /** @type {Set<string>} 已勾選的 message id */
     selected: new Set(),
+    /**
+     * 選取模式的用途：'note' 整理成筆記；'artifact' 產生報告／簡報（最多 5 則）。
+     * 兩者共用同一套勾選 UI，只差上限與確認後做什麼。
+     * @type {'note' | 'artifact'}
+     */
+    purpose: 'note',
     loaded: false,
     /** @type {object|null} 編輯中的筆記；null = 新增模式 */
     editing: null,
@@ -429,8 +435,19 @@ async function syncMessageIds() {
     }
 }
 
-async function enterNoteSelectMode() {
-    if (notesState.selecting) return;
+/** 產生報告／簡報最多選幾則（與後端 chat_artifacts.MAX_MESSAGES 一致） */
+const ARTIFACT_MAX_MESSAGES = 5;
+
+const SELECT_PURPOSE_META = {
+    note: { btnId: 'note-select-btn', confirm: '整理成筆記', busyHint: '等這則回覆產生完再整理成筆記' },
+    artifact: { btnId: 'chat-artifact-btn', confirm: '下一步：產生報告／簡報', busyHint: '等這則回覆產生完再產生報告／簡報' },
+};
+
+async function enterNoteSelectMode(purpose = 'note') {
+    if (notesState.selecting) {
+        if (notesState.purpose === purpose) return;
+        exitNoteSelectMode();      // 從另一種用途切過來：清空重選
+    }
 
     const container = noteEl('chat-messages');
     if (!container || container.style.display === 'none') {
@@ -443,7 +460,7 @@ async function enterNoteSelectMode() {
     }
     if (typeof streamingChatIds !== 'undefined' &&
         streamingChatIds.has(state.currentChatId)) {
-        showToast('等這則回覆產生完再整理成筆記', 'info');
+        showToast(SELECT_PURPOSE_META[purpose].busyHint, 'info');
         return;
     }
 
@@ -454,6 +471,7 @@ async function enterNoteSelectMode() {
     }
 
     notesState.selecting = true;
+    notesState.purpose = purpose;
     notesState.selected.clear();
     container.classList.add('note-selecting');
 
@@ -472,7 +490,10 @@ async function enterNoteSelectMode() {
     });
 
     noteEl('note-select-bar').classList.remove('hidden');
-    noteEl('note-select-btn').classList.add('active');
+    const purposeBtn = noteEl(SELECT_PURPOSE_META[purpose].btnId);
+    if (purposeBtn) purposeBtn.classList.add('active');
+    const confirmBtn = noteEl('note-select-confirm');
+    if (confirmBtn) confirmBtn.textContent = SELECT_PURPOSE_META[purpose].confirm;
     updateNoteSelectCount();
     if (typeof lucide !== 'undefined') lucide.createIcons();
 }
@@ -495,7 +516,10 @@ function exitNoteSelectMode() {
         if (pick) pick.remove();
     });
     noteEl('note-select-bar').classList.add('hidden');
-    noteEl('note-select-btn').classList.remove('active');
+    Object.values(SELECT_PURPOSE_META).forEach((m) => {
+        const b = noteEl(m.btnId);
+        if (b) b.classList.remove('active');
+    });
 }
 
 function toggleMessageSelection(el) {
@@ -505,6 +529,10 @@ function toggleMessageSelection(el) {
         notesState.selected.delete(id);
         el.classList.remove('note-picked');
     } else {
+        if (notesState.purpose === 'artifact' && notesState.selected.size >= ARTIFACT_MAX_MESSAGES) {
+            showToast(`產生報告／簡報最多選 ${ARTIFACT_MAX_MESSAGES} 則訊息`, 'info');
+            return;
+        }
         notesState.selected.add(id);
         el.classList.add('note-picked');
     }
@@ -513,9 +541,28 @@ function toggleMessageSelection(el) {
 
 function updateNoteSelectCount() {
     const label = noteEl('note-select-count');
-    if (label) label.textContent = `已選 ${notesState.selected.size} 則`;
+    if (label) {
+        label.textContent = notesState.purpose === 'artifact'
+            ? `已選 ${notesState.selected.size}／${ARTIFACT_MAX_MESSAGES} 則`
+            : `已選 ${notesState.selected.size} 則`;
+    }
     const confirm = noteEl('note-select-confirm');
     if (confirm) confirm.disabled = notesState.selected.size === 0;
+}
+
+/** 選取列的「確認」：依用途分流 */
+function confirmNoteSelection() {
+    if (notesState.purpose === 'artifact') {
+        const ordered = Array.from(document.querySelectorAll('#chat-messages .message'))
+            .map((el) => el.dataset.messageId)
+            .filter((id) => id && notesState.selected.has(id));
+        if (!ordered.length) return;
+        const chatId = state.currentChatId;
+        exitNoteSelectMode();
+        if (typeof openChatArtifactDialog === 'function') openChatArtifactDialog(chatId, ordered);
+        return;
+    }
+    confirmGenerateNote();
 }
 
 async function confirmGenerateNote() {
@@ -569,13 +616,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const notesBtn = noteEl('notes-btn');
     if (notesBtn) notesBtn.addEventListener('click', showNotesView);
 
-    const selectBtn = noteEl('note-select-btn');
-    if (selectBtn) {
-        selectBtn.addEventListener('click', () => {
-            if (notesState.selecting) exitNoteSelectMode();
-            else enterNoteSelectMode();
+    // 兩顆按鈕共用選取模式：再按一次同一顆＝離開，按另一顆＝切換用途
+    Object.entries(SELECT_PURPOSE_META).forEach(([purpose, meta]) => {
+        const btn = noteEl(meta.btnId);
+        if (!btn) return;
+        btn.addEventListener('click', () => {
+            if (notesState.selecting && notesState.purpose === purpose) exitNoteSelectMode();
+            else enterNoteSelectMode(purpose);
         });
-    }
+    });
 
     const bind = (id, fn) => {
         const el = noteEl(id);
@@ -590,7 +639,7 @@ document.addEventListener('DOMContentLoaded', () => {
     bind('note-page-rename', renameNotePage);
     bind('note-page-delete', deleteNotePage);
     bind('note-select-cancel', exitNoteSelectMode);
-    bind('note-select-confirm', confirmGenerateNote);
+    bind('note-select-confirm', confirmNoteSelection);
 
     document.addEventListener('keydown', (e) => {
         if (e.key !== 'Escape') return;

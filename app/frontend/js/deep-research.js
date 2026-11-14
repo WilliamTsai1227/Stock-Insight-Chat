@@ -52,6 +52,11 @@ const drState = {
     lengthByKind: {},
     /** 預覽視窗目前顯示的 kind；null 表示關閉中 */
     previewKind: null,
+    /**
+     * 預覽視窗目前的內容來源；深度研究頁與對話（產生報告／簡報）共用同一個視窗。
+     * @type {null | {title: string, htmlUrl: string, primaryLabel: string, onDownload: () => void}}
+     */
+    previewSource: null,
     initialized: false,
 };
 
@@ -1210,7 +1215,7 @@ function initDrPreviewModal() {
     const download = drEl('dr-preview-download');
     if (download) {
         download.addEventListener('click', () => {
-            if (drState.previewKind) drDownloadArtifact(drState.previewKind);
+            if (drState.previewSource) drState.previewSource.onDownload();
         });
     }
 
@@ -1218,16 +1223,58 @@ function initDrPreviewModal() {
     if (newtab) {
         newtab.addEventListener('click', () => {
             // 預覽視窗裡開的一定是 HTML，新分頁自然也開同一份
-            const format = drArtifactFormat(drState.previewKind, 'html');
-            if (format && format.blobUrl) {
-                window.open(format.blobUrl, '_blank', 'noopener');
+            if (drState.previewSource && drState.previewSource.htmlUrl) {
+                window.open(drState.previewSource.htmlUrl, '_blank', 'noopener');
             }
         });
     }
 
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && drState.previewKind) drClosePreview();
+        if (e.key === 'Escape' && drState.previewSource) drClosePreview();
     });
+}
+
+/**
+ * 在共用預覽視窗開一份 HTML 產出。
+ * @param {{title: string, htmlUrl: string, primaryLabel: string, onDownload: () => void}} source
+ */
+function openArtifactPreview(source) {
+    initDrPreviewModal();
+    const modal = drEl('dr-preview-modal');
+    const frame = drEl('dr-preview-frame');
+    if (!modal || !frame || !source || !source.htmlUrl) return;
+
+    drState.previewSource = source;
+    drEl('dr-preview-title').textContent = source.title || '預覽';
+
+    // 預覽視窗的下載鍵給的是主要格式（Word / PowerPoint）——
+    // 使用者在這裡看完 HTML 後要帶走的是能編輯的那一份，所以把它寫在按鈕上
+    const downloadBtn = drEl('dr-preview-download');
+    const span = downloadBtn && downloadBtn.querySelector('span');
+    if (span) span.textContent = source.primaryLabel ? `下載 ${source.primaryLabel}` : '下載';
+
+    frame.src = source.htmlUrl;
+    modal.classList.add('show');
+    document.body.style.overflow = 'hidden';
+
+    // 焦點交給 iframe，簡報才收得到方向鍵；順便讓 Esc 在裡面也能關。
+    // blob: 繼承本頁 origin，所以拿得到 contentDocument。
+    frame.addEventListener(
+        'load',
+        () => {
+            try {
+                frame.contentWindow.focus();
+                frame.contentDocument.addEventListener('keydown', (e) => {
+                    if (e.key === 'Escape') drClosePreview();
+                });
+            } catch {
+                /* 取不到就算了，右上角還有關閉鈕 */
+            }
+        },
+        { once: true }
+    );
+
+    if (window.lucide) lucide.createIcons({ el: modal });
 }
 
 async function drPreviewArtifact(kind) {
@@ -1242,41 +1289,14 @@ async function drPreviewArtifact(kind) {
         const url = await drFetchArtifactBlobUrl(kind, 'html');
         if (!url) return;
 
-        drState.previewKind = kind;
-        drEl('dr-preview-title').textContent =
-            format.filename || DR_SKILL_META[kind].label;
-
-        // 預覽視窗的下載鍵給的是主要格式（Word / PowerPoint）——
-        // 使用者在這裡看完 HTML 後要帶走的是能編輯的那一份，所以把它寫在按鈕上
         const primary = drArtifactFormat(kind);
-        const downloadLabel = drEl('dr-preview-download');
-        if (primary && downloadLabel) {
-            const span = downloadLabel.querySelector('span');
-            if (span) span.textContent = `下載 ${primary.label}`;
-        }
-
-        frame.src = url;
-        modal.classList.add('show');
-        document.body.style.overflow = 'hidden';
-
-        // 焦點交給 iframe，簡報才收得到方向鍵；順便讓 Esc 在裡面也能關。
-        // blob: 繼承本頁 origin，所以拿得到 contentDocument。
-        frame.addEventListener(
-            'load',
-            () => {
-                try {
-                    frame.contentWindow.focus();
-                    frame.contentDocument.addEventListener('keydown', (e) => {
-                        if (e.key === 'Escape') drClosePreview();
-                    });
-                } catch {
-                    /* 取不到就算了，右上角還有關閉鈕 */
-                }
-            },
-            { once: true }
-        );
-
-        if (window.lucide) lucide.createIcons({ el: modal });
+        drState.previewKind = kind;
+        openArtifactPreview({
+            title: format.filename || DR_SKILL_META[kind].label,
+            htmlUrl: url,
+            primaryLabel: primary ? primary.label : '',
+            onDownload: () => drDownloadArtifact(kind),
+        });
     } catch (err) {
         showToast(`預覽失敗：${err && err.message ? err.message : err}`, 'error');
     }
@@ -1290,6 +1310,7 @@ function drClosePreview() {
     modal.classList.remove('show');
     document.body.style.overflow = '';
     drState.previewKind = null;
+    drState.previewSource = null;
     // 清掉 src，否則簡報的 rAF／事件監聽會在關閉後繼續跑
     if (frame) frame.removeAttribute('src');
 }

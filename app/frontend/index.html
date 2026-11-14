@@ -146,6 +146,10 @@
                     <button type="button" id="note-select-btn" class="icon-btn" aria-label="整理成筆記" title="整理成筆記">
                         <i data-lucide="notebook-pen"></i>
                     </button>
+                    <!-- 進入選取模式：勾選最多 5 則訊息產生報告／簡報 -->
+                    <button type="button" id="chat-artifact-btn" class="icon-btn" aria-label="產生報告或簡報" title="選取訊息產生報告／簡報">
+                        <i data-lucide="presentation"></i>
+                    </button>
                     <button type="button" id="theme-toggle-btn" class="icon-btn theme-toggle-btn" aria-label="切換淺色／深色模式" title="切換主題">
                         <i data-lucide="contrast"></i>
                     </button>
@@ -754,6 +758,27 @@
         </div>
     </div>
 
+    <!-- 從對話訊息產生報告／簡報 -->
+    <div class="modal-overlay" id="chat-artifact-modal">
+        <div class="modal-card chat-artifact-card" role="dialog" aria-modal="true" aria-labelledby="chat-artifact-title">
+            <div class="modal-header">
+                <h3 id="chat-artifact-title"><i data-lucide="presentation"></i> 產生報告／簡報</h3>
+                <button class="modal-close" type="button" id="chat-artifact-close" aria-label="關閉"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <p id="chat-artifact-source" class="chat-artifact-source"></p>
+                <div id="chat-artifact-kinds" class="chat-artifact-kinds" role="radiogroup" aria-label="產出類型"></div>
+                <div id="chat-artifact-options" class="chat-artifact-options"></div>
+                <div id="chat-artifact-status" class="chat-artifact-status hidden" role="status"></div>
+                <div id="chat-artifact-result" class="chat-artifact-result hidden"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="modal-btn secondary" type="button" id="chat-artifact-cancel">關閉</button>
+                <button class="modal-btn primary" type="button" id="chat-artifact-submit">產生</button>
+            </div>
+        </div>
+    </div>
+
     <!-- 個人資料 Modal -->
     <div class="modal-overlay" id="profile-modal">
         <div class="modal-card">
@@ -988,6 +1013,7 @@
     <script src="/js/auth.js"></script>
     <script src="/js/index.js"></script>
     <script src="/js/deep-research.js"></script>
+    <script src="/js/chat-artifacts.js"></script>
     <script src="/js/notes.js"></script>
     <script src="/js/market-feed.js"></script>
     <script src="/js/portfolio.js"></script>

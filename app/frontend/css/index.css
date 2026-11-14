@@ -3634,3 +3634,79 @@ body.light-theme .pv-file-status {
 @media (max-width: 480px) {
     .chat-attach-name { max-width: 140px; }
 }
+
+/* ── 從對話訊息產生報告／簡報 ─────────────────────────────── */
+.chat-artifact-card { width: min(560px, 94vw); }
+.chat-artifact-card .modal-body { display: flex; flex-direction: column; gap: 14px; }
+.chat-artifact-source { margin: 0; font-size: 0.8rem; color: var(--text-dim); line-height: 1.6; }
+
+.chat-artifact-kinds { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.chat-artifact-kind {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: transparent;
+    color: var(--text-main);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: 0.2s;
+}
+.chat-artifact-kind:hover { border-color: rgba(var(--accent-rgb), 0.45); }
+.chat-artifact-kind[aria-checked="true"] {
+    border-color: var(--accent);
+    background: rgba(var(--accent-rgb), 0.08);
+}
+.chat-artifact-kind-head { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; }
+.chat-artifact-kind-head i { width: 16px; height: 16px; color: var(--accent); }
+.chat-artifact-kind-desc { font-size: 0.74rem; color: var(--text-dim); line-height: 1.55; }
+
+.chat-artifact-options { display: flex; flex-direction: column; gap: 12px; }
+
+.chat-artifact-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.82rem;
+    color: var(--text-dim);
+}
+.chat-artifact-status.hidden,
+.chat-artifact-result.hidden { display: none; }
+
+.chat-artifact-result,
+.chat-artifact-msg > div {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.chat-artifact-result {
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface-hover);
+}
+.chat-artifact-result-head { display: flex; align-items: center; gap: 8px; font-size: 0.86rem; color: var(--text-main); }
+.chat-artifact-result-head i { width: 16px; height: 16px; color: var(--accent); flex-shrink: 0; }
+.chat-artifact-result-head strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-artifact-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* 對話中的產出卡片（不存進紀錄） */
+.chat-artifact-msg {
+    align-self: flex-start;
+    max-width: min(560px, 92%);
+    margin: 4px 0 12px;
+    padding: 14px;
+    border: 1px dashed rgba(var(--accent-rgb), 0.45);
+    border-radius: 14px;
+    background: var(--bubble-ai);
+}
+.chat-artifact-note { margin: 8px 0 0; font-size: 0.72rem; color: var(--text-dim); }
+
+#chat-artifact-btn.active { color: var(--accent); }
+
+@media (max-width: 480px) {
+    .chat-artifact-kinds { grid-template-columns: 1fr; }
+}
