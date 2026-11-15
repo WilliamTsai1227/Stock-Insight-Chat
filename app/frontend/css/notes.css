@@ -394,3 +394,105 @@
 @media (max-width: 1024px) {
     .note-editor { margin: 1rem 1rem 0; }
 }
+
+/* 手機：左右兩欄改成上下堆疊，筆記頁清單變成頂端一條可橫向滑動的分頁列 */
+@media (max-width: 640px) {
+    .notes-view {
+        flex-direction: column;
+    }
+
+    .notes-pages {
+        width: auto;
+        flex: none;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+        flex-direction: row;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 0.85rem;
+    }
+
+    .notes-pages-head {
+        flex: none;
+        padding: 0;
+        margin: 0;
+    }
+
+    .notes-pages-head > span {
+        display: none;          /* 「筆記頁」標題在橫列裡多餘，只留新增鈕 */
+    }
+
+    .notes-page-list {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: row;
+        gap: 6px;
+        padding: 0;
+        overflow-x: auto;
+        overflow-y: hidden;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+    }
+
+    .notes-page-list::-webkit-scrollbar { display: none; }
+
+    .notes-page-item {
+        flex: none;
+        max-width: 60vw;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 6px 12px;
+        min-height: 36px;
+    }
+
+    .notes-main-head {
+        flex-wrap: wrap;
+        row-gap: 8px;
+    }
+
+    .notes-main-head h3 {
+        flex: 1 1 100%;
+    }
+
+    .notes-main-actions {
+        flex: 1 1 100%;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+}
+
+@media (pointer: coarse) {
+    .notes-text-btn,
+    .notes-primary-btn {
+        min-height: 36px;
+    }
+
+    .notes-icon-btn {
+        min-width: 36px;
+        min-height: 36px;
+    }
+
+    .note-pick {
+        width: 30px;
+        height: 30px;
+    }
+}
+
+@media (pointer: coarse) {
+    .note-pick {
+        width: 32px;
+        height: 32px;
+    }
+}
+
+/* 手機：筆記裡的表格改為橫向捲動，不要把欄位擠到逐字換行 */
+@media (max-width: 640px) {
+    .note-card-body table {
+        display: block;
+        max-width: 100%;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        white-space: nowrap;
+    }
+}

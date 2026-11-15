@@ -614,7 +614,13 @@ async function confirmGenerateNote() {
 
 document.addEventListener('DOMContentLoaded', () => {
     const notesBtn = noteEl('notes-btn');
-    if (notesBtn) notesBtn.addEventListener('click', showNotesView);
+    if (notesBtn) {
+        notesBtn.addEventListener('click', () => {
+            showNotesView();
+            // 與其他側欄項目一致：手機抽屜點完要收起來，否則會蓋住剛開的頁面
+            if (typeof closeSidebarDrawer === 'function') closeSidebarDrawer();
+        });
+    }
 
     // 兩顆按鈕共用選取模式：再按一次同一顆＝離開，按另一顆＝切換用途
     Object.entries(SELECT_PURPOSE_META).forEach(([purpose, meta]) => {

@@ -56,6 +56,8 @@
                 </div>
             </div>
 
+            <!-- 導覽按鈕：桌機為單欄；手機抽屜排成兩欄，讓「最近」對話不被擠出畫面 -->
+            <nav class="sidebar-nav" aria-label="主要功能">
             <!-- 新對話 -->
             <button id="new-chat-btn" class="new-chat-btn">
                 <i data-lucide="plus"></i>
@@ -95,6 +97,7 @@
                 <i data-lucide="briefcase"></i>
                 <span>投資組合</span>
             </button>
+            </nav>
 
             <!-- 可捲動列表區 -->
             <div class="sidebar-scroll">
@@ -377,7 +380,7 @@
                         <input type="search" name="keyword" maxlength="100" placeholder="搜尋新聞標題或內文">
                     </label>
                     <button type="submit" class="feed-search-btn"><i data-lucide="search"></i><span>搜尋</span></button>
-                    <button type="button" class="feed-search-btn" data-role="refresh" title="重新載入最新資料"><i data-lucide="rotate-cw"></i><span>刷新</span></button>
+                    <button type="button" class="feed-search-btn" data-role="refresh" title="重新載入最新資料" aria-label="刷新"><i data-lucide="rotate-cw"></i><span>刷新</span></button>
                 </form>
                 <div class="feed-scroll" data-role="scroll">
                     <div class="feed-list" data-role="list"></div>
@@ -409,7 +412,7 @@
                         <input type="search" name="keyword" maxlength="100" placeholder="搜尋分析、重點新聞或產業">
                     </label>
                     <button type="submit" class="feed-search-btn"><i data-lucide="search"></i><span>搜尋</span></button>
-                    <button type="button" class="feed-search-btn" data-role="refresh" title="重新載入最新資料"><i data-lucide="rotate-cw"></i><span>刷新</span></button>
+                    <button type="button" class="feed-search-btn" data-role="refresh" title="重新載入最新資料" aria-label="刷新"><i data-lucide="rotate-cw"></i><span>刷新</span></button>
                 </form>
                 <div class="feed-active-filter hidden" data-role="industry-chip"></div>
                 <div class="feed-scroll" data-role="scroll">

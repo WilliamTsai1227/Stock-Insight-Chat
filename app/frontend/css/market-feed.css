@@ -348,3 +348,24 @@ a.feed-card:hover {
         padding: 0.9rem 1rem;
     }
 }
+
+/* 直立手機：「刷新」只留圖示，和搜尋鈕排在同一列 */
+@media (max-width: 480px) {
+    .feed-search-btn[data-role="refresh"] {
+        padding: 0 0.7rem;
+    }
+
+    .feed-search-btn[data-role="refresh"] span {
+        display: none;
+    }
+}
+
+@media (pointer: coarse) {
+    .feed-search-btn {
+        min-height: 40px;
+    }
+
+    .feed-chip {
+        min-height: 32px;
+    }
+}
