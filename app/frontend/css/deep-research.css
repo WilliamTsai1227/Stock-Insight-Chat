@@ -671,3 +671,8 @@
     .dr-preview-actions .dr-ghost-btn span { display: none; }
     .dr-preview-actions .dr-ghost-btn { padding: 0.42rem 0.55rem; }
 }
+
+/* 支援格式清單很長（.csv、.docx、…），手機上要能在任何位置換行 */
+.dr-dz-hint {
+    overflow-wrap: anywhere;
+}

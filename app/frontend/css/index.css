@@ -3708,5 +3708,351 @@ body.light-theme .pv-file-status {
 #chat-artifact-btn.active { color: var(--accent); }
 
 @media (max-width: 480px) {
-    .chat-artifact-kinds { grid-template-columns: 1fr; }
+    /* 手機：兩張類型卡並排、只留圖示與名稱，視窗不必捲動就看得到「產生」 */
+    .chat-artifact-kinds { grid-template-columns: 1fr 1fr; gap: 8px; }
+    .chat-artifact-kind { padding: 10px; min-height: 48px; justify-content: center; }
+    .chat-artifact-kind-desc { display: none; }
+    .chat-artifact-card .modal-body { gap: 12px; }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   手機與觸控優化
+   - 觸控裝置（pointer: coarse）的可點區域至少約 36px
+   - 手機輸入框字級 16px：低於這個值 iOS Safari 會在聚焦時自動放大整頁
+   - 彈出選單在手機改以輸入框為定位基準，避免從按鈕位置往右溢出螢幕
+   ═══════════════════════════════════════════════════════════ */
+
+.sidebar-nav {
+    display: flex;
+    flex-direction: column;
+}
+
+/* 抽屜模式（平板與手機）：導覽排成兩欄，「最近」對話才有空間顯示 */
+@media (max-width: 1024px) {
+    .sidebar-nav {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+        margin-bottom: 0.85rem;
+    }
+
+    .sidebar-nav .new-chat-btn {
+        margin-bottom: 0;
+        min-height: 42px;
+        padding: 0.5rem 0.7rem;
+        font-size: 0.86rem;
+        min-width: 0;
+    }
+
+    .sidebar-nav #new-chat-btn {
+        grid-column: 1 / -1;
+    }
+
+    .sidebar-nav .new-chat-btn svg {
+        width: 17px;
+        height: 17px;
+        flex-shrink: 0;
+    }
+
+    .sidebar-nav .new-chat-btn span {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .sidebar-header {
+        margin-bottom: 0.6rem;
+    }
+}
+
+/* 所有手機寬度：輸入框 16px，避免 iOS 聚焦時放大 */
+@media (max-width: 768px) {
+    input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]),
+    select,
+    textarea {
+        font-size: 16px !important;
+    }
+}
+
+/* 直立手機 */
+@media (max-width: 480px) {
+    /* 標題列：保留「整理成筆記」「產生報告／簡報」與主題切換（分享按鈕仍隱藏） */
+    .header-actions {
+        gap: 2px;
+    }
+
+    .header-actions > #note-select-btn,
+    .header-actions > #chat-artifact-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    /* 輸入框下方工具列：左邊可收縮，右邊（送出鍵）固定 */
+    .input-bottom-row {
+        gap: 6px;
+    }
+
+    .input-bottom-left {
+        flex: 1 1 auto;
+        min-width: 0;
+        gap: 4px;
+    }
+
+    .input-bottom-right {
+        flex-shrink: 0;
+        gap: 6px;
+    }
+
+    /* 「思考／快捷」只對股市 Agent 有用；被鎖定時在手機直接收起，讓出空間 */
+    .response-mode-wrap.mode-locked {
+        display: none;
+    }
+
+    /* 模型選擇器只留晶片圖示，點開選單才看完整名稱 */
+    #general-model-label {
+        display: none;
+    }
+
+    .chat-mode-btn {
+        padding: 5px 9px;
+        white-space: nowrap;
+    }
+
+    /* 彈出選單改以整個輸入框為定位基準，貼齊左右兩側，不會溢出螢幕 */
+    .chat-input-area .chat-mode-wrap,
+    .chat-input-area .chat-attach-wrap,
+    .chat-input-area .tool-settings {
+        position: static;
+    }
+
+    .chat-input-area .chat-mode-menu {
+        left: 0;
+        right: auto;
+        bottom: calc(100% + 8px);
+        min-width: min(260px, 100%);
+        max-width: 100%;
+    }
+
+    .chat-input-area .tool-popover {
+        left: 0;
+        bottom: calc(100% + 8px);
+    }
+
+    .chat-attach-popover {
+        left: 0;
+        right: 0;
+        width: auto;
+        bottom: calc(100% + 8px);
+        max-height: min(62vh, 480px);
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .chat-attach-name {
+        max-width: 150px;
+    }
+
+    /* 輸入框上方的附件排成一列、可橫向滑動，不要把輸入框撐得很高 */
+    .chat-attach-list:not(.chat-attach-list--sent) {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+        padding-bottom: 2px;
+    }
+
+    .chat-attach-list:not(.chat-attach-list--sent)::-webkit-scrollbar {
+        display: none;
+    }
+
+    .chat-attach-list:not(.chat-attach-list--sent) .chat-attach-chip {
+        flex: none;
+    }
+}
+
+/* 觸控裝置：放大可點區域（外觀尺寸變化很小，主要是點擊範圍） */
+@media (pointer: coarse) {
+    .header-actions .icon-btn {
+        width: 38px;
+        height: 38px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 10px;
+    }
+
+    .user-avatar-btn {
+        min-width: 38px;
+        min-height: 38px;
+    }
+
+    .tool-btn,
+    .chat-attach-btn {
+        min-width: 36px;
+        min-height: 36px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .chat-mode-btn,
+    .response-mode-btn {
+        min-height: 36px;
+    }
+
+    .send-btn {
+        width: 40px;
+        height: 40px;
+    }
+
+    .project-row-menu-btn {
+        width: 34px;
+        height: 34px;
+    }
+
+    .chat-attach-remove {
+        width: 32px;
+        height: 32px;
+        margin: -4px -4px -4px 0;   /* 點擊範圍放大，但標籤外觀不跟著變高 */
+        font-size: 1.05rem;
+    }
+
+    .dr-theme-chip {
+        min-height: 36px;
+    }
+
+    .dr-length-input {
+        min-height: 36px;
+    }
+
+    .chat-attach-chip {
+        padding-top: 2px;
+        padding-bottom: 2px;
+    }
+
+    .suggestion-chip {
+        min-height: 38px;
+    }
+
+    .toast-close {
+        min-width: 32px;
+        min-height: 32px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+}
+
+/* 分享鈕在直立手機隱藏。選擇器帶 id，權重高過上面觸控規則的 display，不受檔案順序影響 */
+@media (max-width: 480px) {
+    .header-actions > .icon-btn:not(#note-select-btn):not(#chat-artifact-btn):not(#theme-toggle-btn) {
+        display: none;
+    }
+}
+
+/* ── 側欄「探索」子選單 ─────────────────────────────────────── */
+.explore-group {
+    position: relative;
+}
+
+.explore-chevron {
+    width: 15px;
+    height: 15px;
+    margin-left: auto;
+    opacity: 0.6;
+    transition: transform 0.2s;
+}
+
+.explore-group.open .explore-chevron {
+    transform: rotate(90deg);
+}
+
+/* 子項目在探索底下被選中時，父按鈕也維持高亮 */
+.explore-group:has(.explore-menu-item.active) > #explore-menu-btn,
+.explore-group.open > #explore-menu-btn {
+    background: var(--card-bg);
+    border-color: rgba(176, 176, 176, 0.35);
+    color: var(--accent);
+}
+
+/* 桌機：在側欄右側彈出（位置由 JS 依按鈕計算） */
+.explore-menu {
+    position: fixed;
+    z-index: 1200;
+    min-width: 180px;
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    background: var(--dropdown-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--dropdown-shadow, 0 12px 40px rgba(0, 0, 0, 0.5));
+}
+
+.explore-menu.hidden {
+    display: none;
+}
+
+.explore-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 38px;
+    padding: 8px 10px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-main);
+    font: inherit;
+    font-size: 0.88rem;
+    text-align: left;
+    cursor: pointer;
+}
+
+.explore-menu-item svg {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    color: var(--text-dim);
+}
+
+.explore-menu-item:hover,
+.explore-menu-item:focus-visible {
+    background: var(--surface-hover);
+    outline: none;
+}
+
+.explore-menu-item.active {
+    background: var(--menu-option-selected-bg);
+    font-weight: 600;
+}
+
+.explore-menu-item.active svg {
+    color: var(--accent);
+}
+
+/* 抽屜（平板與手機）：在按鈕下方展開，展開時占滿整列 */
+@media (max-width: 1024px) {
+    .sidebar-nav .explore-group.open {
+        grid-column: 1 / -1;
+    }
+
+    .explore-group .new-chat-btn {
+        width: 100%;
+    }
+
+    .explore-menu {
+        position: static;
+        margin-top: 6px;
+        box-shadow: none;
+        background: var(--card-bg);
+        border-radius: 10px;
+    }
+
+    .explore-menu-item {
+        min-height: 40px;
+    }
 }

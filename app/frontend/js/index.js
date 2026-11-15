@@ -1759,6 +1759,7 @@ function initEventListeners() {
         closeSidebarDrawer();
     });
 
+    initExploreMenu();
     initMobileSidebar();
     initSidebarResize();
 
@@ -3274,8 +3275,68 @@ function showExploreView() {
     if (typeof exitNoteSelectMode === 'function') exitNoteSelectMode();
 
     document.getElementById('explore-btn').classList.add('active');
-    setMainChatTitle('探索');
+    setMainChatTitle('K 線圖');
     updateSendButtonForStreamingState();
+}
+
+// ── 側欄「探索」子選單（K 線圖／新聞／AI 分析）────────────────────────────
+// 桌機：在側欄右邊彈出（側欄本身 overflow: hidden，所以用 fixed 依按鈕位置定位）
+// 抽屜（≤1024px）：在按鈕下方展開成清單，不會跑出畫面
+// 子項目沿用原本的 id，點了之後由各自既有的 click handler 切換頁面，這裡只負責開關選單。
+
+function isDrawerLayout() {
+    return window.matchMedia('(max-width: 1024px)').matches;
+}
+
+function setExploreMenuOpen(open) {
+    const group = document.getElementById('explore-group');
+    const btn = document.getElementById('explore-menu-btn');
+    const menu = document.getElementById('explore-menu');
+    if (!group || !btn || !menu) return;
+
+    group.classList.toggle('open', open);
+    menu.classList.toggle('hidden', !open);
+    btn.setAttribute('aria-expanded', String(open));
+
+    if (open && !isDrawerLayout()) {
+        const r = btn.getBoundingClientRect();
+        menu.style.left = `${Math.round(r.right + 8)}px`;
+        menu.style.top = `${Math.round(r.top)}px`;
+    } else {
+        menu.style.left = '';
+        menu.style.top = '';
+    }
+    if (open) {
+        const first = menu.querySelector('.explore-menu-item');
+        if (first && !isDrawerLayout()) first.focus({ preventScroll: true });
+    }
+}
+
+function initExploreMenu() {
+    const group = document.getElementById('explore-group');
+    const btn = document.getElementById('explore-menu-btn');
+    const menu = document.getElementById('explore-menu');
+    if (!group || !btn || !menu) return;
+
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setExploreMenuOpen(menu.classList.contains('hidden'));
+    });
+    // 選了任一項就收起（頁面切換由各項目自己的 handler 處理）
+    menu.querySelectorAll('.explore-menu-item').forEach((item) => {
+        item.addEventListener('click', () => setExploreMenuOpen(false));
+    });
+    document.addEventListener('click', (e) => {
+        if (!menu.classList.contains('hidden') && !group.contains(e.target)) setExploreMenuOpen(false);
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !menu.classList.contains('hidden')) {
+            setExploreMenuOpen(false);
+            btn.focus();
+        }
+    });
+    // 視窗大小或側欄寬度改變時，fixed 的位置會失準，直接收起
+    window.addEventListener('resize', () => setExploreMenuOpen(false));
 }
 
 /** 離開探索視圖（僅隱藏，iframe 保留） */

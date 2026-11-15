@@ -348,3 +348,84 @@ a.feed-card:hover {
         padding: 0.9rem 1rem;
     }
 }
+
+/* 直立手機：「刷新」只留圖示，和搜尋鈕排在同一列 */
+@media (max-width: 480px) {
+    .feed-search-btn[data-role="refresh"] {
+        padding: 0 0.7rem;
+    }
+
+    .feed-search-btn[data-role="refresh"] span {
+        display: none;
+    }
+}
+
+@media (pointer: coarse) {
+    .feed-search-btn {
+        min-height: 40px;
+    }
+
+    .feed-chip {
+        min-height: 32px;
+    }
+}
+
+/* 篩選鈕只在手機出現 */
+.feed-filter-toggle {
+    display: none;
+}
+
+/* 手機：篩選列收成一行（關鍵字＋圖示按鈕），日期與分析類型按「篩選」才展開 */
+@media (max-width: 768px) {
+    .feed-filters {
+        padding: 0.6rem 0.85rem;
+        gap: 0.5rem;
+        align-items: center;
+    }
+
+    .feed-field:not(.feed-field-grow) {
+        display: none;
+        flex: 1 1 calc(50% - 0.5rem);
+    }
+
+    .feed-filters.filters-open .feed-field:not(.feed-field-grow) {
+        display: flex;
+    }
+
+    .feed-field-grow {
+        flex: 1 1 0;
+        min-width: 120px;         /* 展開篩選時才會換到下一列，不會被擠在日期旁邊 */
+        order: 5;
+    }
+
+    .feed-field-grow > span {
+        display: none;            /* placeholder 已經說明用途 */
+    }
+
+    .feed-search-btn {
+        order: 6;
+        flex: none;
+        height: 40px;
+        min-width: 40px;
+        padding: 0 0.65rem;
+        justify-content: center;
+    }
+
+    .feed-search-btn span {
+        display: none;            /* 只留圖示（皆有 aria-label） */
+    }
+
+    .feed-filter-toggle {
+        display: inline-flex;
+    }
+
+    .feed-filters.filters-open .feed-filter-toggle {
+        color: var(--accent);
+        border-color: rgba(var(--accent-rgb), 0.45);
+    }
+
+    .feed-field input,
+    .feed-field select {
+        height: 40px;
+    }
+}
