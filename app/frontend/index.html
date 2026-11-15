@@ -64,32 +64,32 @@
                 <span>新對話</span>
             </button>
 
-            <!-- 探索：iframe 嵌入 Kinetic Charts 技術分析 -->
-            <button id="explore-btn" class="new-chat-btn explore-btn">
-                <i data-lucide="compass"></i>
-                <span>探索</span>
-            </button>
-
-            <!-- 深度研究：OpenAI Agents SDK（Web Search / File Search） -->
-            <button id="deep-research-btn" class="new-chat-btn explore-btn">
-                <i data-lucide="telescope"></i>
-                <span>深度研究</span>
-            </button>
+            <!-- 探索：點擊展開子選單（K 線圖／新聞／AI 分析），選了才切換頁面。
+                 子項目沿用原本的 id，各自的切換邏輯（index.js／market-feed.js）不必改。 -->
+            <div class="explore-group" id="explore-group">
+                <button type="button" id="explore-menu-btn" class="new-chat-btn explore-btn"
+                        aria-haspopup="menu" aria-expanded="false" aria-controls="explore-menu">
+                    <i data-lucide="compass"></i>
+                    <span>探索</span>
+                    <i data-lucide="chevron-right" class="explore-chevron"></i>
+                </button>
+                <div id="explore-menu" class="explore-menu hidden" role="menu" aria-label="探索">
+                    <button type="button" id="explore-btn" class="explore-menu-item" role="menuitem">
+                        <i data-lucide="chart-candlestick"></i><span>K 線圖</span>
+                    </button>
+                    <button type="button" id="news-feed-btn" class="explore-menu-item" role="menuitem">
+                        <i data-lucide="newspaper"></i><span>新聞</span>
+                    </button>
+                    <button type="button" id="ai-feed-btn" class="explore-menu-item" role="menuitem">
+                        <i data-lucide="sparkles"></i><span>AI 分析</span>
+                    </button>
+                </div>
+            </div>
 
             <!-- 筆記：把對話整理成筆記，分頁管理 -->
             <button id="notes-btn" class="new-chat-btn explore-btn">
                 <i data-lucide="notebook-pen"></i>
                 <span>筆記</span>
-            </button>
-
-            <!-- 新聞瀏覽／AI 分析瀏覽：直接讀 MongoDB（MONGO_URI） -->
-            <button id="news-feed-btn" class="new-chat-btn explore-btn">
-                <i data-lucide="newspaper"></i>
-                <span>新聞</span>
-            </button>
-            <button id="ai-feed-btn" class="new-chat-btn explore-btn">
-                <i data-lucide="sparkles"></i>
-                <span>AI 分析</span>
             </button>
 
             <!-- 投資組合：庫存／觀察清單，排程呼叫 Zentra 產生分析與調整建議 -->
@@ -240,99 +240,31 @@
             </div>
 
 
-            <!-- 深度研究視圖：上傳檔案 → Agent 研究 → 產出報告／簡報 -->
-            <div id="deep-research-view" class="dr-view">
-                <div class="dr-scroll">
-
-                    <!-- 起始狀態：輸入研究題目與附件 -->
-                    <section id="dr-composer" class="dr-composer">
-                        <div class="dr-hero">
-                            <span class="dr-hero-badge"><i data-lucide="telescope"></i> 深度研究</span>
-                            <h1>把一個問題查到底</h1>
-                            <p>附上你的文件、試算表或圖片，寫下想弄清楚的事。Agent 會用網路搜尋與文件檢索交叉查證，再把結果整理成研究報告或簡報。</p>
-                        </div>
-
-                        <div class="dr-card">
-                            <div id="dr-dropzone" class="dr-dropzone" tabindex="0" role="button" aria-label="選擇或拖曳要研究的檔案">
-                                <input type="file" id="dr-file-input" multiple hidden>
-                                <i data-lucide="paperclip" class="dr-dz-icon"></i>
-                                <div class="dr-dz-text">
-                                    <p class="dr-dz-title">拖曳檔案到這裡，或<span class="dr-dz-link">點擊選擇</span></p>
-                                    <p class="dr-dz-hint" id="dr-accept-hint">支援 PDF、Word、Excel、CSV 與圖片</p>
-                                </div>
-                            </div>
-                            <ul id="dr-file-list" class="dr-file-list"></ul>
-
-                            <textarea id="dr-query" class="dr-query" rows="4"
-                                      placeholder="想研究什麼？例如：比較附件兩家供應商近三年的財務體質，指出最大的三個風險，並附上外部佐證。"></textarea>
-
-                            <div class="dr-composer-foot">
-                                <div class="dr-model-wrap">
-                                    <button type="button" id="dr-model-btn" class="dr-model-btn"
-                                            aria-haspopup="listbox" aria-expanded="false" title="選擇研究模型">
-                                        <i data-lucide="cpu"></i>
-                                        <span id="dr-model-label">載入中…</span>
-                                        <i data-lucide="chevron-down" class="dr-chevron"></i>
-                                    </button>
-                                    <ul id="dr-model-menu" class="dr-model-menu hidden" role="listbox"></ul>
-                                </div>
-                                <div class="dr-foot-right">
-                                    <span id="dr-query-count" class="dr-query-count"></span>
-                                    <button type="button" id="dr-submit-btn" class="dr-submit-btn" disabled>
-                                        <i data-lucide="sparkles"></i><span>開始研究</span>
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </section>
-
-                    <!-- 執行中／結果 -->
-                    <section id="dr-run" class="dr-run hidden">
-                        <div class="dr-run-head">
-                            <div class="dr-run-head-text">
-                                <h2 id="dr-run-title"></h2>
-                                <p id="dr-run-meta" class="dr-run-meta"></p>
-                            </div>
-                            <div class="dr-run-head-actions">
-                                <button type="button" id="dr-copy-btn" class="dr-ghost-btn hidden"
-                                        title="複製整份研究結果（Markdown 原文）">
-                                    <i data-lucide="copy"></i><span>複製全文</span>
-                                </button>
-                                <button type="button" id="dr-reset-btn" class="dr-ghost-btn">
-                                    <i data-lucide="rotate-ccw"></i><span>新的研究</span>
-                                </button>
-                            </div>
-                        </div>
-
-                        <ul id="dr-progress" class="dr-progress"></ul>
-                        <div id="dr-error" class="dr-error hidden"></div>
-                        <article id="dr-result" class="dr-result"></article>
-                        <div id="dr-citations" class="dr-citations hidden"></div>
-
-                        <div id="dr-skills" class="dr-skills hidden">
-                            <p class="dr-skills-q">要用這份研究產生什麼？</p>
-                            <div id="dr-skill-cards" class="dr-skill-cards"></div>
-                        </div>
-                    </section>
-
-                </div>
-            </div>
-
             <!-- 筆記視圖：左側頁面清單，右側該頁筆記 -->
             <div id="notes-view" class="notes-view">
                 <aside class="notes-pages">
                     <div class="notes-pages-head">
                         <span>筆記頁</span>
-                        <button type="button" id="note-page-add" class="notes-icon-btn" title="新增筆記頁" aria-label="新增筆記頁">
-                            <i data-lucide="plus"></i>
-                        </button>
+                        <div class="notes-pages-head-actions">
+                            <button type="button" id="note-page-add" class="notes-icon-btn" title="新增筆記頁" aria-label="新增筆記頁">
+                                <i data-lucide="plus"></i>
+                            </button>
+                            <button type="button" id="note-pages-collapse" class="notes-icon-btn" title="收起筆記頁清單" aria-label="收起筆記頁清單">
+                                <i data-lucide="panel-left-close"></i>
+                            </button>
+                        </div>
                     </div>
                     <ul id="note-page-list" class="notes-page-list"></ul>
                 </aside>
 
                 <section class="notes-main">
                     <div class="notes-main-head">
-                        <h3 id="note-page-title">筆記</h3>
+                        <div class="notes-main-title">
+                            <button type="button" id="note-pages-expand" class="notes-icon-btn" title="展開筆記頁清單" aria-label="展開筆記頁清單" aria-expanded="false">
+                                <i data-lucide="panel-left-open"></i>
+                            </button>
+                            <h3 id="note-page-title">筆記</h3>
+                        </div>
                         <div class="notes-main-actions">
                             <button type="button" id="note-add" class="notes-primary-btn">新增筆記</button>
                             <button type="button" id="note-page-rename" class="notes-text-btn">重新命名</button>
@@ -379,7 +311,8 @@
                         <span>關鍵字</span>
                         <input type="search" name="keyword" maxlength="100" placeholder="搜尋新聞標題或內文">
                     </label>
-                    <button type="submit" class="feed-search-btn"><i data-lucide="search"></i><span>搜尋</span></button>
+                    <button type="button" class="feed-search-btn feed-filter-toggle" data-role="filter-toggle" aria-expanded="false" aria-label="日期與其他篩選條件" title="日期與其他篩選條件"><i data-lucide="sliders-horizontal"></i></button>
+                    <button type="submit" class="feed-search-btn" aria-label="搜尋"><i data-lucide="search"></i><span>搜尋</span></button>
                     <button type="button" class="feed-search-btn" data-role="refresh" title="重新載入最新資料" aria-label="刷新"><i data-lucide="rotate-cw"></i><span>刷新</span></button>
                 </form>
                 <div class="feed-scroll" data-role="scroll">
@@ -411,7 +344,8 @@
                         <span>關鍵字</span>
                         <input type="search" name="keyword" maxlength="100" placeholder="搜尋分析、重點新聞或產業">
                     </label>
-                    <button type="submit" class="feed-search-btn"><i data-lucide="search"></i><span>搜尋</span></button>
+                    <button type="button" class="feed-search-btn feed-filter-toggle" data-role="filter-toggle" aria-expanded="false" aria-label="日期與其他篩選條件" title="日期與其他篩選條件"><i data-lucide="sliders-horizontal"></i></button>
+                    <button type="submit" class="feed-search-btn" aria-label="搜尋"><i data-lucide="search"></i><span>搜尋</span></button>
                     <button type="button" class="feed-search-btn" data-role="refresh" title="重新載入最新資料" aria-label="刷新"><i data-lucide="rotate-cw"></i><span>刷新</span></button>
                 </form>
                 <div class="feed-active-filter hidden" data-role="industry-chip"></div>
@@ -1015,7 +949,7 @@
     <script src="/js/api-config.js"></script>
     <script src="/js/auth.js"></script>
     <script src="/js/index.js"></script>
-    <script src="/js/deep-research.js"></script>
+    <script src="/js/artifact-preview.js"></script>
     <script src="/js/chat-artifacts.js"></script>
     <script src="/js/notes.js"></script>
     <script src="/js/market-feed.js"></script>

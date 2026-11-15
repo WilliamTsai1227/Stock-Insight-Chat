@@ -57,6 +57,8 @@ function showNotesView() {
     if (main) main.classList.remove('project-view-mode');
     document.querySelector('.chat-input-area').style.display = 'none';
     noteEl('notes-view').style.display = 'flex';
+    // 手機一打開就收起筆記頁清單；桌機沿用使用者上次的選擇
+    setNotePagesCollapsed(isNarrowNotesLayout() || readNotePagesCollapsed(), { remember: false });
 
     const btn = noteEl('notes-btn');
     if (btn) btn.classList.add('active');
@@ -65,6 +67,32 @@ function showNotesView() {
     if (!notesState.loaded) {
         notesState.loaded = true;
         loadNotePages();
+    }
+}
+
+// ── 筆記頁清單的收合 ─────────────────────────────────────────────
+const NOTE_PAGES_COLLAPSED_KEY = 'insight_note_pages_collapsed';
+
+function isNarrowNotesLayout() {
+    return window.matchMedia('(max-width: 768px)').matches;
+}
+
+function readNotePagesCollapsed() {
+    try { return localStorage.getItem(NOTE_PAGES_COLLAPSED_KEY) === '1'; } catch (_) { return false; }
+}
+
+/**
+ * @param {boolean} collapsed
+ * @param {{remember?: boolean}} [opts] remember=true 時記住偏好（只記桌機上的手動操作）
+ */
+function setNotePagesCollapsed(collapsed, opts = {}) {
+    const view = noteEl('notes-view');
+    if (!view) return;
+    view.classList.toggle('pages-collapsed', collapsed);
+    const expand = noteEl('note-pages-expand');
+    if (expand) expand.setAttribute('aria-expanded', String(!collapsed));
+    if (opts.remember && !isNarrowNotesLayout()) {
+        try { localStorage.setItem(NOTE_PAGES_COLLAPSED_KEY, collapsed ? '1' : '0'); } catch (_) {}
     }
 }
 
@@ -125,6 +153,8 @@ function renderNotePages() {
 
         li.append(name, count);
         li.addEventListener('click', () => {
+            // 小螢幕上清單蓋在內容上方，選完頁就收起來讓出空間
+            if (isNarrowNotesLayout()) setNotePagesCollapsed(true, { remember: false });
             if (page.id === notesState.currentPageId) return;
             // 換頁時關掉編輯器，否則未儲存的內容會被寫進新的一頁
             closeNoteEditor();
@@ -209,6 +239,68 @@ async function deleteNotePage() {
 }
 
 // ============================================================
+// 筆記內文排版：標題變成可收合區塊
+// ============================================================
+
+/**
+ * 把已渲染（且已消毒）的 Markdown 依標題分組，每個標題連同它底下的內容
+ * 包成 <details>：點標題即可收合／展開，h3 會巢狀在所屬的 h2 裡。
+ *
+ * 只搬動既有節點、不重新解析 HTML，所以不會繞過 DOMPurify。
+ */
+function notionizeNoteBody(body) {
+    // 表格包一層，窄螢幕可以橫向捲動而不撐破卡片
+    body.querySelectorAll('table').forEach((table) => {
+        const wrap = document.createElement('div');
+        wrap.className = 'nb-table-wrap';
+        table.parentNode.insertBefore(wrap, table);
+        wrap.appendChild(table);
+    });
+
+    const level = (el) => (/^H[1-4]$/.test(el.tagName) ? Number(el.tagName[1]) : 0);
+
+    function group(container, nodes) {
+        let i = 0;
+        while (i < nodes.length) {
+            const node = nodes[i];
+            const lv = node.nodeType === 1 ? level(node) : 0;
+            if (!lv) {
+                container.appendChild(node);
+                i += 1;
+                continue;
+            }
+            // 收集到下一個「同級或更高級」標題之前的所有節點
+            let j = i + 1;
+            while (j < nodes.length) {
+                const n = nodes[j];
+                const l = n.nodeType === 1 ? level(n) : 0;
+                if (l && l <= lv) break;
+                j += 1;
+            }
+            const details = document.createElement('details');
+            details.className = `nb-toggle nb-h${lv}`;
+            details.open = true;
+            const summary = document.createElement('summary');
+            summary.appendChild(node);
+            const inner = document.createElement('div');
+            inner.className = 'nb-toggle-body';
+            group(inner, nodes.slice(i + 1, j));
+            details.append(summary, inner);
+            container.appendChild(details);
+            i = j;
+        }
+    }
+
+    const nodes = Array.from(body.childNodes).filter(
+        (n) => n.nodeType === 1 || (n.nodeType === 3 && n.textContent.trim())
+    );
+    if (!nodes.some((n) => n.nodeType === 1 && level(n))) return;   // 沒有標題就不動
+    body.textContent = '';
+    group(body, nodes);
+
+}
+
+// ============================================================
 // 筆記
 // ============================================================
 
@@ -276,9 +368,11 @@ function renderNotes() {
 
         const body = document.createElement('div');
         body.className = 'note-card-body';
-        // 內容是 LLM 產生的 Markdown，沿用聊天氣泡那條已消毒的渲染路徑
+        // 內容是 LLM 產生的 Markdown，沿用聊天氣泡那條已消毒的渲染路徑，
+        // 再把標題轉成可收合的區塊（類似 Notion 的 toggle heading）
         if (typeof applyMarkdown === 'function') {
             applyMarkdown(body, note.content || '');
+            notionizeNoteBody(body);
         } else {
             body.textContent = note.content || '';
         }
@@ -637,6 +731,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (el) el.addEventListener('click', fn);
     };
     bind('note-page-add', createNotePage);
+    bind('note-pages-collapse', () => setNotePagesCollapsed(true, { remember: true }));
+    bind('note-pages-expand', () => setNotePagesCollapsed(false, { remember: true }));
     bind('note-add', () => openNoteEditor(null));
     bind('note-editor-cancel', closeNoteEditor);
     bind('note-editor-save', saveNoteEditor);

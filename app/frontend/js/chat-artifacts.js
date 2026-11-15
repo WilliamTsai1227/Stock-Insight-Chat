@@ -5,7 +5,7 @@
  * 與「整理成筆記」共用）→ 這裡的視窗選類型、風格、篇幅 → 產生 → 預覽／下載。
  *
  * 報告／簡報的 skill、風格、篇幅範圍與深度研究頁完全相同（GET /api/deep-research/config），
- * 預覽視窗也共用深度研究頁那一個（deep-research.js 的 openArtifactPreview）。
+ * 預覽視窗與類型說明在 artifact-preview.js（openArtifactPreview、DR_SKILL_META）。
  *
  * 產出的檔案只在後端記憶體保留一段時間（預設 2 小時），不寫進對話紀錄。
  * 所有文字一律以 textContent 寫入。

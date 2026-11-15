@@ -167,15 +167,130 @@
 
 .note-card-body {
     color: var(--text-main);
-    font-size: 0.87rem;
-    line-height: 1.75;
+    font-size: 0.9rem;
+    line-height: 1.7;
+    padding-left: 24px;           /* 收合三角形的位置 */
 }
 
+/* ── 筆記內文：Notion 風格排版 ───────────────────────────
+   標題分級明顯、標題可收合（notes.js 的 notionizeNoteBody）、
+   圓點清單、有格線的表格。只作用在筆記卡片內，不影響聊天氣泡。 */
+.note-card-body > :first-child,
+.note-card-body .nb-toggle-body > :first-child { margin-top: 0; }
+
+.note-card-body h1,
 .note-card-body h2,
-.note-card-body h3 { font-size: 0.92rem; margin: 0.9rem 0 0.35rem; }
+.note-card-body h3,
+.note-card-body h4 {
+    color: var(--text-main);
+    font-weight: 700;
+    line-height: 1.35;
+    margin: 0;
+    border: 0;
+    padding: 0;
+}
+.note-card-body h1 { font-size: 1.45rem; }
+.note-card-body h2 { font-size: 1.18rem; }
+.note-card-body h3 { font-size: 1.0rem; }
+.note-card-body h4 { font-size: 0.92rem; color: var(--text-dim); }
+
+/* 可收合的標題（toggle heading） */
+.nb-toggle { margin: 0.9rem 0 0.2rem; }
+.nb-toggle.nb-h1 { margin-top: 1.4rem; }
+.nb-toggle.nb-h2 { margin-top: 1.15rem; }
+.nb-toggle > summary {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: -24px;           /* 讓三角形掛在左側留白，標題文字與內文對齊 */
+    padding: 3px 6px 3px 4px;
+    border-radius: 6px;
+    list-style: none;
+    cursor: pointer;
+    user-select: none;
+}
+.nb-toggle > summary::-webkit-details-marker { display: none; }
+.nb-toggle > summary::before {
+    content: '';
+    flex: none;
+    width: 14px;
+    height: 14px;
+    background: currentColor;
+    color: var(--text-dim);
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9 6l7 6-7 6z'/%3E%3C/svg%3E") center / contain no-repeat;
+            mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9 6l7 6-7 6z'/%3E%3C/svg%3E") center / contain no-repeat;
+    transition: transform 0.15s ease;
+}
+.nb-toggle[open] > summary::before { transform: rotate(90deg); }
+.nb-toggle > summary:hover { background: var(--surface-hover); }
+.nb-toggle-body { padding-top: 0.25rem; }
+/* 收合後的提示：標題後面淡淡顯示「…」 */
+.nb-toggle:not([open]) > summary > :last-child::after {
+    content: ' …';
+    color: var(--text-dim);
+    font-weight: 400;
+}
+
+.note-card-body p { margin: 0.45rem 0; }
+
+/* 圓點清單：第一層實心圓、第二層空心圓、第三層小方塊 */
 .note-card-body ul,
-.note-card-body ol { margin: 0.35rem 0 0.35rem 1.1rem; }
-.note-card-body p { margin: 0.35rem 0; }
+.note-card-body ol {
+    margin: 0.35rem 0;
+    padding-left: 1.45rem;
+}
+.note-card-body ul { list-style: disc; }
+.note-card-body ul ul { list-style: circle; }
+.note-card-body ul ul ul { list-style: square; }
+.note-card-body li { margin: 0.2rem 0; padding-left: 0.15rem; }
+.note-card-body li::marker { color: var(--text-dim); }
+.note-card-body ol li::marker { font-variant-numeric: tabular-nums; }
+
+/* 引言：Notion 的 quote 樣式 */
+.note-card-body blockquote {
+    margin: 0.6rem 0;
+    padding: 0.15rem 0 0.15rem 0.9rem;
+    border-left: 3px solid var(--text-main);
+    color: var(--text-main);
+}
+
+.note-card-body hr {
+    margin: 1rem 0;
+    border: 0;
+    border-top: 1px solid var(--border);
+}
+
+.note-card-body strong { font-weight: 700; }
+.note-card-body a { color: var(--text-main); text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
+.note-card-body p,
+.note-card-body li { overflow-wrap: anywhere; }
+
+/* 表格：格線、表頭底色；外層可橫向捲動 */
+.nb-table-wrap {
+    max-width: 100%;
+    margin: 0.7rem 0;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+.note-card-body table {
+    width: max-content;
+    min-width: 100%;
+    border-collapse: collapse;
+    font-size: 0.84rem;
+}
+.note-card-body th,
+.note-card-body td {
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    text-align: left;
+    vertical-align: top;
+    white-space: nowrap;
+}
+.note-card-body th {
+    background: var(--surface-hover);
+    color: var(--text-main);
+    font-weight: 600;
+}
 
 .note-card-foot {
     margin-top: 0.8rem;
@@ -395,7 +510,7 @@
     .note-editor { margin: 1rem 1rem 0; }
 }
 
-/* 手機：左右兩欄改成上下堆疊，筆記頁清單變成頂端一條可橫向滑動的分頁列 */
+/* 手機：左右兩欄改成上下堆疊；筆記頁清單展開時排在內容上方（預設收起） */
 @media (max-width: 640px) {
     .notes-view {
         flex-direction: column;
@@ -404,46 +519,13 @@
     .notes-pages {
         width: auto;
         flex: none;
+        max-height: 45vh;
         border-right: none;
         border-bottom: 1px solid var(--border);
-        flex-direction: row;
-        align-items: center;
-        gap: 6px;
-        padding: 8px 0.85rem;
     }
-
-    .notes-pages-head {
-        flex: none;
-        padding: 0;
-        margin: 0;
-    }
-
-    .notes-pages-head > span {
-        display: none;          /* 「筆記頁」標題在橫列裡多餘，只留新增鈕 */
-    }
-
-    .notes-page-list {
-        flex: 1;
-        min-width: 0;
-        display: flex;
-        flex-direction: row;
-        gap: 6px;
-        padding: 0;
-        overflow-x: auto;
-        overflow-y: hidden;
-        -webkit-overflow-scrolling: touch;
-        scrollbar-width: none;
-    }
-
-    .notes-page-list::-webkit-scrollbar { display: none; }
 
     .notes-page-item {
-        flex: none;
-        max-width: 60vw;
-        border: 1px solid var(--border);
-        border-radius: 999px;
-        padding: 6px 12px;
-        min-height: 36px;
+        min-height: 40px;
     }
 
     .notes-main-head {
@@ -451,7 +533,7 @@
         row-gap: 8px;
     }
 
-    .notes-main-head h3 {
+    .notes-main-title {
         flex: 1 1 100%;
     }
 
@@ -486,13 +568,36 @@
     }
 }
 
-/* 手機：筆記裡的表格改為橫向捲動，不要把欄位擠到逐字換行 */
-@media (max-width: 640px) {
-    .note-card-body table {
-        display: block;
-        max-width: 100%;
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
-        white-space: nowrap;
-    }
+/* ── 筆記頁清單收合 ─────────────────────────────────────── */
+.notes-pages-head-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.notes-main-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+/* 展開鈕只在收起時出現 */
+#note-pages-expand {
+    display: none;
+    flex: none;
+}
+
+.notes-view.pages-collapsed .notes-pages {
+    display: none;
+}
+
+.notes-view.pages-collapsed #note-pages-expand {
+    display: inline-flex;
+}
+
+/* 筆記卡片標題與頁尾對齊內文（內文左側留給收合三角形） */
+.note-card-head,
+.note-card-foot {
+    margin-left: 24px;
 }

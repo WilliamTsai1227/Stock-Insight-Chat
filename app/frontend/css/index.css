@@ -3950,3 +3950,109 @@ body.light-theme .pv-file-status {
         display: none;
     }
 }
+
+/* ── 側欄「探索」子選單 ─────────────────────────────────────── */
+.explore-group {
+    position: relative;
+}
+
+.explore-chevron {
+    width: 15px;
+    height: 15px;
+    margin-left: auto;
+    opacity: 0.6;
+    transition: transform 0.2s;
+}
+
+.explore-group.open .explore-chevron {
+    transform: rotate(90deg);
+}
+
+/* 子項目在探索底下被選中時，父按鈕也維持高亮 */
+.explore-group:has(.explore-menu-item.active) > #explore-menu-btn,
+.explore-group.open > #explore-menu-btn {
+    background: var(--card-bg);
+    border-color: rgba(176, 176, 176, 0.35);
+    color: var(--accent);
+}
+
+/* 桌機：在側欄右側彈出（位置由 JS 依按鈕計算） */
+.explore-menu {
+    position: fixed;
+    z-index: 1200;
+    min-width: 180px;
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    background: var(--dropdown-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--dropdown-shadow, 0 12px 40px rgba(0, 0, 0, 0.5));
+}
+
+.explore-menu.hidden {
+    display: none;
+}
+
+.explore-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 38px;
+    padding: 8px 10px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-main);
+    font: inherit;
+    font-size: 0.88rem;
+    text-align: left;
+    cursor: pointer;
+}
+
+.explore-menu-item svg {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    color: var(--text-dim);
+}
+
+.explore-menu-item:hover,
+.explore-menu-item:focus-visible {
+    background: var(--surface-hover);
+    outline: none;
+}
+
+.explore-menu-item.active {
+    background: var(--menu-option-selected-bg);
+    font-weight: 600;
+}
+
+.explore-menu-item.active svg {
+    color: var(--accent);
+}
+
+/* 抽屜（平板與手機）：在按鈕下方展開，展開時占滿整列 */
+@media (max-width: 1024px) {
+    .sidebar-nav .explore-group.open {
+        grid-column: 1 / -1;
+    }
+
+    .explore-group .new-chat-btn {
+        width: 100%;
+    }
+
+    .explore-menu {
+        position: static;
+        margin-top: 6px;
+        box-shadow: none;
+        background: var(--card-bg);
+        border-radius: 10px;
+    }
+
+    .explore-menu-item {
+        min-height: 40px;
+    }
+}

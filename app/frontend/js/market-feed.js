@@ -417,6 +417,16 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
+        // 手機：日期／分析類型預設收起，按篩選鈕才展開（桌機上這顆按鈕不顯示）
+        const toggle = feedPart(kind, 'filter-toggle');
+        if (form && toggle) {
+            toggle.addEventListener('click', () => {
+                const open = !form.classList.contains('filters-open');
+                form.classList.toggle('filters-open', open);
+                toggle.setAttribute('aria-expanded', String(open));
+            });
+        }
+
         // 刷新：用目前的篩選條件從第一頁重新載入（結束日期留空時會抓到最新一筆）
         feedPart(kind, 'refresh')?.addEventListener('click', () => applyFeedFilters(kind));
 
