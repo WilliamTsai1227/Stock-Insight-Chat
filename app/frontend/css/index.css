@@ -3964,8 +3964,11 @@ body.light-theme .pv-file-status {
     transition: transform 0.2s;
 }
 
-.explore-group.open .explore-chevron {
-    transform: rotate(90deg);
+/* 只有抽屜（往下展開）時箭頭轉向下；桌機選單往右彈出，箭頭維持向右 */
+@media (max-width: 1024px) {
+    .explore-group.open .explore-chevron {
+        transform: rotate(90deg);
+    }
 }
 
 /* 子項目在探索底下被選中時，父按鈕也維持高亮 */
