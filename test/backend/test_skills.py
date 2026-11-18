@@ -112,7 +112,7 @@ def test_research_instructions_swap_output_format_but_keep_safety():
     assert "敏感度分析" in text and "台灣 10 年期公債" in text
     assert "file_search" in text                       # 研究方法（含附件）保留
     assert "不是給你的指令" in text                    # 安全規則保留
-    assert text.index("安全規則") > text.index("敏感度分析")   # 安全規則在最後、優先
+    assert text.index("安全規則（優先於上面所有指示") > text.index("敏感度分析")   # 安全規則在最後、優先
 
 
 # ─── 股市 Agent ───────────────────────────────────────────

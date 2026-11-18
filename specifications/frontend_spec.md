@@ -138,9 +138,10 @@ iOS 沒有安裝提示 API，只能自己講。`pwa.js` 會在**同時**滿足�
 
 `sw.js` 的 `VERSION` 常數要加一，否則舊的 `insight-static-*` 快取不會淘汰，使用者可能拿到舊的 css/js。導覽（HTML）走 network-first，所以頁面本身不會卡舊版。
 
-## 9. `@` 提及外部 MCP 工具
+## 9. `@` 提及分析方法與外部 MCP 工具
 
-輸入框打 `@` 會浮出已連線的 MCP 工具選單，選中即指定本輪要用的工具。純前端功能 ——
+輸入框打 `@` 會浮出選單，列出**分析方法**（金融 skill，見 §9.4）與已連線的 MCP 工具；兩種都有時以「分析方法」「外部 MCP 工具」分組。
+以下 §9.1–9.3 說明 MCP 工具的部分。MCP 提及是純前端功能 ——
 後端 `agent_config.enabled_tools` 本來就接受 `mcp__*`（見 [`mcp_client.md`](./mcp_client.md)），
 `@` 只是換一種產生這份清單的 UI。
 
@@ -175,6 +176,16 @@ iOS 沒有安裝提示 API，只能自己講。`pwa.js` 會在**同時**滿足�
 Smart Mode 下刻意保留全部本機工具，只把 MCP 收斂成被點名的那幾個：
 語意是「MCP 就用這個」，而不是「整輪只准用這個」，才不會讓 `@` 一個外部工具
 就把股市新聞檢索一起關掉。
+
+### 9.4 分析方法（金融 skill）
+
+- 清單由 `loadSkills()` 在登入後從 `GET /api/skills` 載入（`skillCatalog`）；載入失敗時選單只是沒有分析方法，不影響送出
+- **支援模式**：股市 Agent（思考與快捷皆可，後端遇到 skill 一律走思考）與深度研究；一般對話選單會顯示說明而不列出
+- 選中帶入字樣 `@<mention>`，例如 `@dcf`、`@財報解讀`
+- 送出時 `collectMentionedSkillId()` 從文字反推：字樣前後必須是空白或行首／行尾（`@dcfx`、`a@dcf` 不算）；一則訊息只取**最先出現**的一個
+- 股市 Agent 放進 JSON 的 `skill` 欄位；深度研究放進 multipart 的 `skill` 欄位
+- 股市 Agent 帶 skill 時等待文字改為「正在依分析方法深度查證資料…」；工具列顯示 `deep_web_search` 為「深度網路查證」
+- 選單一律以 `textContent` 渲染
 
 ---
 

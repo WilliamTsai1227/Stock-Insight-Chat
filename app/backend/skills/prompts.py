@@ -11,8 +11,15 @@ from __future__ import annotations
 from .registry import Skill
 
 
+# 每個區塊都帶這句：skill 只能改「查什麼、怎麼寫」，不能放寬平台規則
+PRIORITY_NOTE = (
+    "此分析方法只規範資料範圍與報告結構；平台的安全規則、引用規範與「不得編造數字」"
+    "仍然優先，兩者衝突時以平台規則為準。"
+)
+
+
 def _header(skill: Skill) -> str:
-    return f"使用者以 {skill.token} 指定本輪採用「{skill.label}」分析方法。"
+    return f"使用者以 {skill.token} 指定本輪採用「{skill.label}」分析方法。{PRIORITY_NOTE}"
 
 
 def gather_block(skill: Skill) -> str:

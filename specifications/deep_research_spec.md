@@ -165,7 +165,7 @@ pre-flight 只擋「開始之前」，不會在跑到一半時中止（與聊天
 ## 6. 在對話中使用（聊天模式「深度研究」）
 
 輸入框的聊天模式多了第三個選項「深度研究」，走 `POST /api/chat/deep-research`
-（[`api/chat_deep_research.py`](../app/backend/api/chat_deep_research.py)，multipart：`chat_id`、`query`、`model`、`files[]`）。
+（[`api/chat_deep_research.py`](../app/backend/api/chat_deep_research.py)，multipart：`chat_id`、`query`、`model`、`skill`、`files[]`）。
 SSE 事件與 `/api/chat/messages` 相同，前端共用同一套渲染。
 
 | 面向 | 深度研究頁 | 對話中的深度研究 |
@@ -187,6 +187,23 @@ SSE 事件與 `/api/chat/messages` 相同，前端共用同一套渲染。
 | `DEEP_SEARCH_CHAT_HISTORY_ASSISTANT_MAX_CHARS` | 3000 | 每則 assistant 回覆 |
 | `DEEP_SEARCH_CHAT_HISTORY_USER_MAX_CHARS` | 2000 | 每則 user 訊息 |
 | `DEEP_SEARCH_CHAT_TIMEOUT_SECONDS` | 900 | 單次研究上限 |
+
+### 6.1 點名分析方法（`@dcf`、`@財報解讀`…）
+
+`skill` 欄位帶 skill id（清單見 `GET /api/skills`，定義在 [`app/backend/skills/library/`](../app/backend/skills/library/)）。
+未知 id 回 `422`，且在佔用「每人一個研究」名額**之前**就擋下。
+
+研究指示拆成四段（[`researcher.py`](../app/backend/deep_research/researcher.py) 的 `research_instructions()`）：
+
+```txt
+研究方法 ＋ 輸出格式 ＋ 寫作要求 ＋ 安全規則
+             ↑ 有 skill 時換成「skill 資料蒐集 ＋ skill 分析與輸出」，其餘三段不變
+```
+
+- 上傳檔案的處理完全不變：文件 → 臨時向量庫、試算表 → Markdown 表格、圖片 → `input_image`
+- 安全規則固定在最後，並寫明優先於指定的分析方法；skill 區塊本身也帶「平台規則優先」的聲明
+- 寫作要求加上單位規則：billion／million 與億／萬換算時原值與換算值都要寫（1 billion = 10 億）
+- `skill` 寫進 user／assistant 訊息的 metadata 與 `done` 事件
 
 ## 7. 上傳檔案的安全檢查
 

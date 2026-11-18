@@ -191,6 +191,8 @@ docker compose ... exec backend env | grep <變數名>               # 驗證讀
 | `TAVILY_INCLUDE_ANSWER` | `1` | 是否請 Tavily 附帶即時摘要 |
 | `TAVILY_TIMEOUT_SEC` | `15` | 單次搜尋逾時秒數 |
 | `TAVILY_MAX_CALLS_PER_TURN` | `2` | 單輪最多呼叫幾次，避免 Agent 反覆搜尋拖慢回應 |
+| `DEEP_SEARCH_MAX_CALLS_PER_TURN` | `4` | 點名 @ 分析方法時，`deep_web_search`（取代 Tavily）單輪最多執行幾次；每次約 1.4 萬 token |
+| `DEEP_LOOKUP_MAX_TURNS` | `8` | 單次 `deep_web_search` 的 Agents SDK 迴圈上限 |
 
 ---
 

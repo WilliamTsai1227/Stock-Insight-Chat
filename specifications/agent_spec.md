@@ -53,6 +53,9 @@ class AgentState(TypedDict):
     trace: Dict[str, Any]           # 紀錄各節點執行時間、Tool Calls 與 Thought
     retrieved_data: List[Dict]      # 儲存 Qdrant 的原始結構化數據，供 API 溯源
     enabled_tools: List[str]        # 前端動態指定的可用工具列表
+    web_search_calls: int           # 本輪已呼叫 tavily_global_search 次數
+    skill_id: Optional[str]         # 使用者 @ 點名的分析方法（見 §10）；None = 一般流程
+    deep_search_calls: int          # 本輪已執行的 deep_web_search 次數
 ```
 
 ---
@@ -315,3 +318,48 @@ ToolMessage 中的正文經 `_clip_for_llm(..., MAX_TOOL_ITEM_CHARS)`（預設�
 - **想再壓低延遲**：例如略降 `FLASH_RETRIEVAL_TOP_K`、`FLASH_REF_MAX_BODY_CHARS`。若曾開 **`FLASH_LLM_QUERY_REWRITE=1`**，可改 **`FLASH_REWRITE_DUAL_SEARCH=0`**（只搜一次較便宜）或將 **`FLASH_MERGED_RETRIEVE_CAP`** 調小。（**請勿對 `gpt-5-mini`** 將 `FLASH_ANALYST_MAX_TOKENS` 設得過低，否則可見正文極易被截斷。）
 
 **結論**：不必為了「有預設值」而把整張表複製進 `.env`；依需求只覆寫少數鍵即可。其餘 Router／歷史載入相關變數仍見前文「可調整的環境變數」表格。
+
+---
+
+## 10. @ 分析方法（金融 skill）
+
+使用者在輸入框以 `@dcf`、`@comps`、`@財報解讀`、`@籌碼分析`、`@產業比較` 點名分析方法時，
+請求帶 `skill`（見 [`api_spec.md`](./api_spec.md) `POST /api/chat/messages`）。深度研究的做法見 [`deep_research_spec.md`](./deep_research_spec.md) §6.1。
+
+### 10.1 Skill 檔案
+
+[`app/backend/skills/library/<id>/SKILL.md`](../app/backend/skills/library/)：YAML frontmatter（`id`、`mention`、`label`、`description`、`source`…）＋兩個必要小節。
+[`registry.py`](../app/backend/skills/registry.py) 在服務啟動時載入並驗證（缺小節、缺欄位、id 格式錯、mention 重複、id 與資料夾不符都直接報錯）。
+
+| 小節 | 股市 Agent 中的用途 |
+| :--- | :--- |
+| `## 資料蒐集` | 併入 Router 指示，決定要呼叫哪些工具、查哪些數字 |
+| `## 分析與輸出` | 併入 Analyst 指示，取代預設報告格式 |
+
+兩個區塊都帶 `PRIORITY_NOTE`：skill 只規範資料範圍與報告結構，平台的安全規則、引用規範與「不得編造數字」仍然優先。
+
+`dcf`、`comps`、`earnings`、`sector` 改編自 anthropics/financial-services（Apache 2.0，授權與出處見 [`third_party/anthropic-financial-services/`](../third_party/anthropic-financial-services/)）；`chips` 為自撰。
+
+### 10.2 流程差異
+
+- **一律走思考模式**：帶 skill 時 `response_mode=flash` 被忽略（flash 的單輪管線放不下 skill 的資料清單）
+- **工具替換**：`_skill_tool_names()` 把 `tavily_global_search` 換成 `deep_web_search`；使用者沒勾網路搜尋就不會打開；向量庫與 MCP 工具保留
+- **Router prompt**：`build_router_system_prompt()` 偵測到 `deep_web_search` 時改用對應指引（合併成 2–4 個完整查詢、並行呼叫），不再出現「預設優先呼叫 tavily」
+
+### 10.3 `deep_web_search`
+
+實作在 [`deep_research/web_lookup.py`](../app/backend/deep_research/web_lookup.py)：Agents SDK ＋ OpenAI `WebSearchTool(search_context_size="high")`，
+只產出條列事實（數值＋期間＋出處；查不到寫「查無資料」），不寫報告。實測單次約 1.4 萬 token、12–16 秒。
+
+| 項目 | 做法 |
+| :--- | :--- |
+| 每輪上限 | `DEEP_SEARCH_MAX_CALLS_PER_TURN`（預設 4）；名額在並行執行**前**一次分配，同批次超出的回「已達上限」 |
+| 失敗 | 不中斷整輪；錯誤只進 Router 的 ToolMessage，不進 Analyst 與參考資料 |
+| 計費 | `lookup_usage_scope()`（contextvar）收集用量，整輪結束（成功／失敗／取消）以 `caller=stock_agent_deep_lookup` 記帳並綁到 assistant 訊息 |
+| 來源 | `retrieved_data` 一筆＝一次查證，`citations` 在 API 層展開成多筆 `retrieval_sources` |
+| 單位 | 保留來源原始單位與幣別；換算時原值與換算值都寫 |
+
+### 10.4 已知限制
+
+- 股市 Agent 的 skill 回合**沒有每人併發上限**（深度研究有 `_active_runs`）。同一使用者可同時開多個 skill 回合，配額 pre-flight 只在開始前檢查。
+
