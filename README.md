@@ -46,6 +46,22 @@ flowchart LR
 | **股市 Agent（思考）** | `stock_agent` + `thinking` | LangGraph Router（gpt-5-mini）多輪 ReAct 調用工具 → Analyst（gpt-5）產出報告 |
 | **股市 Agent（快捷）** | `stock_agent` + `flash` | 略過 Router，單輪向量檢索（可選並行 query 改寫雙軌檢索）→ 輕量 Analyst |
 
+### @ 金融分析方法（skill）
+
+在「股市 Agent」或「深度研究」模式的輸入框打 `@`，可點名一種分析方法：
+
+| 點名 | 內容 | 來源 |
+| :--- | :--- | :--- |
+| `@dcf` | 現金流折現估值、WACC、敏感度表 | 改編自 Anthropic `dcf-model` |
+| `@comps` | 可比公司營運指標與估值倍數 | 改編自 Anthropic `comps-analysis` |
+| `@財報解讀` | 最新一季優於／低於預期、財測 | 改編自 Anthropic `earnings-analysis` |
+| `@籌碼分析` | 三大法人、融資融券、大戶持股 | 本專案自撰 |
+| `@產業比較` | 產業結構、主要玩家與估值比較 | 改編自 Anthropic `sector-overview` + `competitive-analysis` |
+
+- skill 定義在 [app/backend/skills/library/](app/backend/skills/library/)，每個 `SKILL.md` 分「資料蒐集」與「分析與輸出」兩節；改編自官方的 skill 依 Apache 2.0 附授權與出處，見 [third_party/anthropic-financial-services/](third_party/anthropic-financial-services/)。
+- **深度研究**：skill 取代預設的研究簡報格式；上傳的文件、試算表、圖片照常讀取。
+- **股市 Agent**：一律走思考模式；Router 依資料清單檢索，網路搜尋由 Tavily 改為 `deep_web_search`（與深度研究相同的 OpenAI Web Search 多輪查證，每輪上限 `DEEP_SEARCH_MAX_CALLS_PER_TURN`，預設 4），用量以 `stock_agent_deep_lookup` 記入配額。
+
 ### 技術棧
 
 | 層 | 技術 |
