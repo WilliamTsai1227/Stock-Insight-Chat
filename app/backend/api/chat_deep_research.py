@@ -64,6 +64,7 @@ from app.backend.module.chat_context import fetch_prior_context_for_agent
 from app.backend.module.jwt import get_current_user_id
 from app.backend.module.token_usage import attach_token_usage_logs_to_message
 from app.backend.module.usage_quota import assert_preflight_llm_quota
+from app.backend.skills.registry import get_skill
 
 router = APIRouter(tags=["Chat"])
 
@@ -95,12 +96,16 @@ async def chat_deep_research(
     chat_id: UUID = Form(...),
     query: str = Form(...),
     model: Optional[str] = Form(None, max_length=64),
+    skill: Optional[str] = Form(None, max_length=32),
     files: List[UploadFile] = File(default=[]),
     db: asyncpg.Connection = Depends(get_db),
     current_user_id: UUID = Depends(get_current_user_id),
 ):
     """
-    在指定對話中執行一次深度研究（multipart：chat_id、query、model、files[]），以 SSE 回傳。
+    在指定對話中執行一次深度研究（multipart：chat_id、query、model、skill、files[]），以 SSE 回傳。
+
+    `skill`：使用者以 @ 點名的金融分析方法（GET /api/skills）。有指定時，研究改依該
+    skill 的資料清單查證、依其格式輸出；上傳的文件、試算表與圖片照常讀取。
 
     事件與 `/api/chat/messages` 相同，前端可共用同一套渲染：
       thinking   — 進度文字（讀取檔案、規劃查證方向、推理中…）
@@ -124,6 +129,11 @@ async def chat_deep_research(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "請輸入想研究的問題。")
     if len(clean_query) > QUERY_MAX_CHARS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"研究題目請控制在 {QUERY_MAX_CHARS} 字以內。")
+    chosen_skill = get_skill(skill) if skill else None
+    if skill and chosen_skill is None:
+        await _delete_chat_if_no_messages(db, chat_id, current_user_id)
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"未知的分析方法：{skill}")
+    skill_meta = {"skill": chosen_skill.id} if chosen_skill else {}
 
     user_key = str(current_user_id)
     # 2. 每人同時只能跑一個研究（與深度研究頁共用同一把鎖）。
@@ -158,7 +168,7 @@ async def chat_deep_research(
                 db,
                 chat_id,
                 clean_query,
-                metadata={"response_mode": RESPONSE_MODE, "attachments": attachments},
+                metadata={"response_mode": RESPONSE_MODE, "attachments": attachments, **skill_meta},
             )
             prior_rows = await fetch_prior_context_for_agent(
                 db, chat_id=chat_id, user_message_id=user_message_id
@@ -219,6 +229,7 @@ async def chat_deep_research(
                     prepared=prepared,
                     usage=usage,
                     history=history,
+                    skill=chosen_skill,
                 ):
                     name = event.get("event")
                     if name == "delta":
@@ -252,6 +263,7 @@ async def chat_deep_research(
                 "response_mode": RESPONSE_MODE,
                 "model": chosen_model,
                 "usage": usage.as_dict(),
+                **skill_meta,
             }))
 
             assistant_id = await _insert_assistant_message(
@@ -266,6 +278,7 @@ async def chat_deep_research(
                     "tools_used": outcome.get("tools_used") or [],
                     "attachments": [a["name"] for a in attachments],
                     "warnings": prepared.warnings if prepared else [],
+                    **skill_meta,
                 },
             )
             if assistant_id and log_ids:
@@ -304,7 +317,7 @@ async def chat_deep_research(
                 chat_id=chat_id,
                 parent_id=user_message_id,
                 content=err_text,
-                metadata={"error": reason, "response_mode": RESPONSE_MODE, "model": chosen_model},
+                metadata={"error": reason, "response_mode": RESPONSE_MODE, "model": chosen_model, **skill_meta},
             )
             if err_id and log_ids:
                 await attach_token_usage_logs_to_message(current_user_id, err_id, log_ids)

@@ -14,6 +14,9 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from app.backend.agent.chat import create_chat_agent
+from app.backend.deep_research.usage import AgentUsage, record_agent_usage
+from app.backend.deep_research.web_lookup import lookup_usage_scope
+from app.backend.skills.registry import get_skill
 from app.backend.database.postgresql import get_db, get_pool
 from app.backend.module.chat_context import (
     fetch_prior_context_for_agent,
@@ -134,6 +137,38 @@ class MessageRequest(BaseModel):
             "這個值來自瀏覽器，開放任意字串等於讓使用者自選單價。"
         ),
     )
+    skill: Optional[str] = Field(
+        default=None,
+        max_length=32,
+        description=(
+            "使用者以 @ 點名的金融 skill id（GET /api/skills）。"
+            "只在 chat_mode=stock_agent 生效，且一律走思考模式（flash 的單輪管線放不下 skill 的資料清單）。"
+        ),
+    )
+
+
+# deep_web_search（skill 模式的網路查證）記帳用的 caller
+_CALLER_DEEP_LOOKUP = "stock_agent_deep_lookup"
+# SSE 閒置多久送一次 keepalive 註解行（與 chat_deep_research 相同）
+_SSE_HEARTBEAT_SECONDS = 15
+
+
+def _resolve_request_skill(request: "MessageRequest"):
+    """驗證請求的 skill：未知 id 或用在不支援的模式一律 422，不要默默忽略。"""
+    if not request.skill:
+        return None
+    skill = get_skill(request.skill)
+    if skill is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"未知的分析方法：{request.skill}",
+        )
+    if request.chat_mode != "stock_agent":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="@ 分析方法只支援「股市 Agent」與「深度研究」模式。",
+        )
+    return skill
 
 
 class CreateChatRequest(BaseModel):
@@ -203,6 +238,39 @@ class AssignChatToProjectRequest(BaseModel):
 
 
 agent_app = create_chat_agent()
+
+
+def _retrieval_sources_from(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    retrieved_data → 前端「參考來源」清單。
+
+    deep_web_search 的一筆結果是整理過的查證清單，真正的來源在 `citations`；
+    這種項目展開成每個引用網址一筆，否則前端只會看到一個沒有連結的標題。
+    """
+    sources: List[Dict[str, Any]] = []
+    for item in items:
+        citations = item.get("citations")
+        if citations:
+            for c in citations:
+                if c.get("url"):
+                    sources.append({
+                        "tool": item.get("source_tool"),
+                        "title": c.get("title") or c.get("url"),
+                        "publishAt": None,
+                        "url": c.get("url"),
+                        "mongo_id": None,
+                        "content_preview": "",
+                    })
+            continue
+        sources.append({
+            "tool": item.get("source_tool"),
+            "title": item.get("title"),
+            "publishAt": item.get("publishAt"),
+            "url": item.get("url"),
+            "mongo_id": item.get("mongo_id"),
+            "content_preview": (item.get("content") or "")[:100] + "...",
+        })
+    return sources
 
 
 def _sse(event: str, data: Any) -> str:
@@ -1127,6 +1195,14 @@ async def get_ai_response(
     # 2. 旗標：FALSE 才需要產 title
     should_generate_title = not chat_row["title_generated"]
 
+    # 2a. skill 驗證（在寫入任何訊息與檢查配額之前）
+    try:
+        skill = _resolve_request_skill(request)
+    except HTTPException:
+        # 剛建立的新對話若因此是空的，刪掉免得側欄留下孤兒
+        await _delete_chat_if_no_messages(db, request.chat_id, current_user_id)
+        raise
+
     # 2b. Token 配額 Pre-flight（未進 LangGraph／OpenAI）；已達上限回 429
     try:
         await assert_preflight_llm_quota(current_user_id)
@@ -1151,7 +1227,12 @@ async def get_ai_response(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Query cannot be empty.",
             )
-        user_message_id = await _insert_user_message(db, request.chat_id, clean_query)
+        user_message_id = await _insert_user_message(
+            db,
+            request.chat_id,
+            clean_query,
+            metadata={"skill": skill.id} if skill else None,
+        )
 
         prior_rows = await fetch_prior_context_for_agent(
             db,
@@ -1186,6 +1267,8 @@ async def get_ai_response(
         "retrieved_data": [],
         "enabled_tools": enabled_tools,
         "web_search_calls": 0,
+        "skill_id": skill.id if skill else None,
+        "deep_search_calls": 0,
     }
     config = {"configurable": {"thread_id": chat_id_str}}
 
@@ -1223,6 +1306,27 @@ async def get_ai_response(
         def _event_output_as_dict(ev: Dict[str, Any]) -> Dict[str, Any]:
             raw = ev.get("output") if isinstance(ev, dict) else None
             return raw if isinstance(raw, dict) else {}
+
+        # skill 模式的 deep_web_search 走 Agents SDK，用量不會出現在 on_chat_model_end，
+        # 由收集器累計後在這裡一次記帳（成功、失敗都要記：打出去的請求照樣計費）
+        lookup_scope = lookup_usage_scope()
+        lookup_collector = lookup_scope.__enter__()
+        lookup_recorded = False
+
+        async def _record_lookup_usage() -> None:
+            nonlocal lookup_recorded
+            if lookup_recorded:
+                return
+            lookup_recorded = True
+            log_id = await record_agent_usage(
+                user_id=current_user_id,
+                model=lookup_collector.model,
+                usage=lookup_collector.usage,
+                caller=_CALLER_DEEP_LOOKUP,
+                chat_id=request.chat_id,
+            )
+            if log_id is not None:
+                pending_token_log_ids.append(log_id)
 
         try:
             async for event in agent_app.astream_events(
@@ -1350,22 +1454,13 @@ async def get_ai_response(
                             pending_token_log_ids.append(log_id)
 
             # 圖已執行完畢
+            await _record_lookup_usage()
             total_time = round(time.time() - start_total, 3)
             final_content = accumulated_final_analyst.get("content", "")
             # 股市 Agent 回應末尾固定附加免責聲明，並透過 token SSE 讓前端即時渲染
             await event_queue.put(_sse("token", {"text": _STOCK_DISCLAIMER}))
             final_content += _STOCK_DISCLAIMER
-            retrieval_sources = [
-                {
-                    "tool": item.get("source_tool"),
-                    "title": item.get("title"),
-                    "publishAt": item.get("publishAt"),
-                    "url": item.get("url"),
-                    "mongo_id": item.get("mongo_id"),
-                    "content_preview": item.get("content", "")[:100] + "...",
-                }
-                for item in accumulated_retrieved
-            ]
+            retrieval_sources = _retrieval_sources_from(accumulated_retrieved)
             await event_queue.put(_sse("done", {
                 "status": "success",
                 "chat_id": chat_id_str,
@@ -1373,6 +1468,7 @@ async def get_ai_response(
                 "steps": accumulated_steps,
                 "final_content": final_content,
                 "retrieval_sources": retrieval_sources,
+                **({"skill": skill.id} if skill else {}),
             }))
 
             # 持久化 assistant 訊息
@@ -1384,6 +1480,7 @@ async def get_ai_response(
                 metadata={
                     "steps": accumulated_steps,
                     "total_execution_time": total_time,
+                    **({"skill": skill.id} if skill else {}),
                 },
             )
             if assistant_message_id and pending_token_log_ids:
@@ -1410,13 +1507,14 @@ async def get_ai_response(
             
             err_text = f"Agent 執行失敗: {str(e)}"
             await event_queue.put(_sse("error", {"message": err_text}))
-            
+            await _record_lookup_usage()
+
             # 發生錯誤也寫入 DB 以防資料丟失
             err_assistant_id = await _insert_assistant_message(
                 chat_id=request.chat_id,
                 parent_id=user_message_id,
                 content=err_text,
-                metadata={"error": str(e)}
+                metadata={"error": str(e), **({"skill": skill.id} if skill else {})}
             )
             if err_assistant_id and pending_token_log_ids:
                 await attach_token_usage_logs_to_message(
@@ -1425,6 +1523,10 @@ async def get_ai_response(
                     pending_token_log_ids,
                 )
         finally:
+            lookup_scope.__exit__(None, None, None)
+            if not lookup_recorded:
+                # 被取消等例外路徑：仍要把已花掉的查證用量記進配額
+                _spawn_background(_record_lookup_usage())
             # 放一個 None 當作結束標記
             await event_queue.put(None)
 
@@ -1965,7 +2067,7 @@ async def get_ai_response(
     # 啟動背景生產者任務（保留強參考避免被 GC，並記錄失敗例外）
     if request.chat_mode == "general":
         _spawn_background(background_general_runner())
-    elif request.response_mode == "flash":
+    elif request.response_mode == "flash" and skill is None:
         _spawn_background(background_flash_runner())
     else:
         _spawn_background(background_agent_runner())
@@ -1974,7 +2076,13 @@ async def get_ai_response(
     async def event_generator():
         try:
             while True:
-                msg = await event_queue.get()
+                # 點名分析方法時的 deep_web_search 一次可能 30–90 秒沒有任何事件；
+                # 定期送 SSE 註解行，避免 Cloudflare／proxy 判定閒置切斷（免費方案 100 秒）
+                try:
+                    msg = await asyncio.wait_for(event_queue.get(), timeout=_SSE_HEARTBEAT_SECONDS)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
                 if msg is None:  # 收到結束標記
                     break
                 yield msg

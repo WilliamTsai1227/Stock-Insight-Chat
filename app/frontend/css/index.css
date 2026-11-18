@@ -3395,6 +3395,20 @@ body.light-theme .pv-file-status {
     line-height: 1.6;
 }
 
+.mention-group-title {
+    padding: 8px 10px 4px;
+    color: var(--text-dim);
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+}
+
+.mention-group-title:not(:first-child) {
+    margin-top: 4px;
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+}
+
 .mention-item {
     display: flex;
     flex-direction: column;

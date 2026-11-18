@@ -57,6 +57,8 @@ from app.backend.tools.mcp_client import (
     is_mcp_tool_name,
     mcp_client_manager,
 )
+from app.backend.skills.prompts import gather_block, output_block
+from app.backend.skills.registry import get_skill
 
 load_dotenv()
 
@@ -144,6 +146,8 @@ MAX_TOOL_ITEM_CHARS = int(os.getenv("MAX_TOOL_ITEM_CHARS", "500"))
 ROUTER_HISTORY_TURNS = int(os.getenv("ROUTER_HISTORY_TURNS", "2"))
 # 每次使用者提問，tavily_global_search 最多可呼叫幾次（跨工具輪次累計）
 TAVILY_MAX_CALLS_PER_TURN: int = int(os.getenv("TAVILY_MAX_CALLS_PER_TURN", "2"))
+# skill 模式下 deep_web_search 每輪上限（每次都是一個多輪 web search 的 Agents SDK 執行）
+DEEP_SEARCH_MAX_CALLS_PER_TURN: int = int(os.getenv("DEEP_SEARCH_MAX_CALLS_PER_TURN", "4"))
 
 
 def _strip_tool_calls_for_orphan_ai(m: BaseMessage) -> BaseMessage:
@@ -211,6 +215,12 @@ class AgentState(TypedDict):
     enabled_tools: Optional[List[str]]
     # 本輪（單次使用者提問）已呼叫 tavily_global_search 的累計次數
     web_search_calls: int
+    # 使用者以 @ 點名的金融 skill id（例如 "dcf"）；None = 一般股市 Agent 流程。
+    # 有 skill 時：Router 依 skill 的資料清單檢索、網路搜尋改用 deep_web_search，
+    # Analyst 依 skill 的輸出格式撰寫。
+    skill_id: Optional[str]
+    # 本輪已執行的 deep_web_search 次數（每次 30–90 秒、數萬 token，需另設上限）
+    deep_search_calls: int
 
 # --- 2. 封裝工具 (Tool Wrappers) ---
 # 這裡將之前寫好的 async 函式封裝成 LangChain 可識別的 @tool
@@ -392,7 +402,36 @@ async def tavily_global_search(query: str):
     return "\n\n---\n".join(lines)
 
 
+@tool
+async def deep_web_search(query: str):
+    """
+    深度網路查證（與「深度研究」相同的檢索方式）：以多輪網路搜尋交叉確認事實，
+    回傳附期間與出處的條列事實。適用於財報數字、估值參數、法人籌碼、產業數據等需要精確數字的查詢。
+    每次約需 30–90 秒，請把相關的子問題合併成一個完整的查詢句，不要拆成很多次小查詢。
+    參數:
+        query: 要查證的完整問題，寫清楚公司名稱／股票代號、期間與要哪些數字。
+    """
+    # 實際執行在 call_tools（需要本輪的呼叫次數上限與用量收集器）；這裡只提供 schema
+    return "deep_web_search 由 call_tools 執行。"
+
+
 tools = [search_stock_news, search_market_ai_analysis, get_market_recommendations, tavily_global_search]
+# 只在使用者點名 skill 時綁定；Smart Mode 的一般提問不會用到
+skill_tools = [deep_web_search]
+
+# skill 模式下「網路搜尋」的替換關係：使用者在工具權限勾了網路搜尋，就換成深度查證
+_SKILL_WEB_TOOL = "deep_web_search"
+_DEFAULT_WEB_TOOL = "tavily_global_search"
+
+
+def _skill_tool_names(names: List[str]) -> List[str]:
+    """skill 模式：把 tavily 換成 deep_web_search，其餘工具（向量庫、MCP）保留。"""
+    out: List[str] = []
+    for name in names:
+        mapped = _SKILL_WEB_TOOL if name == _DEFAULT_WEB_TOOL else name
+        if mapped not in out:
+            out.append(mapped)
+    return out
 
 # OpenAI streaming：在尾包帶 usage（供 astream_events / on_chat_model_end 聚合）
 _OPENAI_STREAM_OPTS: Dict[str, Any] = {"stream_options": {"include_usage": True}}
@@ -618,12 +657,18 @@ async def call_router(state: AgentState):
     # None 代表 Smart Mode；手動模式即使清單為空或工具已下線，也必須維持
     # 「不開放任何工具」，不可意外退回全開。
     target_tools = all_tool_names if enabled is None else valid_enabled
-    
+
+    skill = get_skill(state.get("skill_id"))
+    if skill is not None:
+        target_tools = _skill_tool_names(target_tools)
+
     system_prompt = build_router_system_prompt(current_now, target_tools)
-    
+    if skill is not None:
+        system_prompt += "\n\n" + gather_block(skill)
+
     # 核心修正：動態挑選工具物件實體，進行硬性綁定
     # 從本機工具及 MCP function schemas 中挑出本輪允許的工具。
-    current_tools_to_bind = [t for t in tools if t.name in target_tools]
+    current_tools_to_bind = [t for t in tools + skill_tools if t.name in target_tools]
     current_tools_to_bind.extend(
         item for item in mcp_openai_tools
         if item["function"]["name"] in target_tools
@@ -695,6 +740,9 @@ async def call_analyst(state: AgentState):
     current_now = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
 
     analyst_prompt = build_analyst_system_prompt(current_now)
+    skill = get_skill(state.get("skill_id"))
+    if skill is not None:
+        analyst_prompt += "\n\n" + output_block(skill)
     if _ANALYST_LENGTH_SUFFIX:
         analyst_prompt += "\n" + _ANALYST_LENGTH_SUFFIX
     full_ref = _format_retrieved_data_for_analyst(state.get("retrieved_data", []))
@@ -743,6 +791,14 @@ async def call_tools(state: AgentState, *, retrieval_top_k: Optional[int] = None
     retrieval_top_k：快捷模式傳較小值可縮短向量查詢時間與上下文。"""
     last_message = state["messages"][-1]
     top_k_eff = retrieval_top_k if retrieval_top_k is not None else RETRIEVAL_TOP_K
+
+    # deep_web_search 的名額在並行前一次分配：同一批次 Router 可能一口氣發出好幾個，
+    # 只有前 N 個（N = 本輪剩餘名額）真的執行
+    deep_remaining = max(0, DEEP_SEARCH_MAX_CALLS_PER_TURN - (state.get("deep_search_calls") or 0))
+    deep_allowed_ids = {
+        tc.get("id")
+        for tc in [c for c in last_message.tool_calls if c["name"] == _SKILL_WEB_TOOL][:deep_remaining]
+    }
 
     # 🆕 P4: 統一建立 Embedding 實例 + 快取，避免重複 API 呼叫
     emb = _get_shared_embeddings()
@@ -865,6 +921,33 @@ async def call_tools(state: AgentState, *, retrieval_top_k: Optional[int] = None
                     "score": r.get("score", 0),
                 })
 
+        elif tool_name == _SKILL_WEB_TOOL:
+            query_text = (args.get("query") or "").strip()
+            if not query_text:
+                ai_content = "深度查證失敗：缺少查詢內容。"
+            elif tool_call.get("id") not in deep_allowed_ids:
+                ai_content = (
+                    f"本輪深度查證已達上限（{DEEP_SEARCH_MAX_CALLS_PER_TURN} 次），"
+                    "請根據已有資料作答，缺少的數字由 Analyst 標明「查無資料」。"
+                )
+            else:
+                from app.backend.deep_research.web_lookup import deep_web_lookup
+                try:
+                    lookup = await deep_web_lookup(query_text)
+                except Exception as exc:  # noqa: BLE001 — 單一查證失敗不中斷整輪
+                    ai_content = f"深度查證失敗：{type(exc).__name__}: {exc}"
+                else:
+                    ai_content = lookup.text or "找不到相關網路資訊。"
+                    if lookup.text:
+                        retrieved.append({
+                            "source_tool": "web",
+                            "title": f"深度查證：{query_text[:60]}",
+                            "url": "",
+                            "content": lookup.text,
+                            # 前端「參考來源」逐筆列出；Analyst 已從 content 的連結看得到
+                            "citations": lookup.citations,
+                        })
+
         elif is_mcp_tool_name(tool_name):
             try:
                 mcp_result = await mcp_client_manager.call_tool(tool_name, args)
@@ -909,6 +992,7 @@ async def call_tools(state: AgentState, *, retrieval_top_k: Optional[int] = None
         "messages": tool_messages,
         "retrieved_data": new_retrieved_data,
         "web_search_calls": state.get("web_search_calls", 0) + tavily_executed,
+        "deep_search_calls": (state.get("deep_search_calls") or 0) + len(deep_allowed_ids),
     }
 
 # --- 4. 定義邊界邏輯 (Conditional Edges) ---

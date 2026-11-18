@@ -24,6 +24,8 @@
 | | 取得所有對話 | `/api/chat/all` | `GET` | 是 |
 | | 取得單一對話（訊息） | `/api/chat` | `GET` | 是 |
 | | 發送訊息（SSE） | `/api/chat/messages` | `POST` | 是 |
+| | 對話中執行深度研究（multipart → SSE） | `/api/chat/deep-research` | `POST` | 是 |
+| | @ 分析方法（金融 skill）清單 | `/api/skills` | `GET` | 是 |
 | | 修改對話標題 | `/api/chat` | `PATCH` | 是 |
 | | 刪除對話 | `/api/chat` | `DELETE` | 是 |
 | | 指派對話至專案 | `/api/chat/project` | `POST` | 是 |
@@ -300,6 +302,7 @@ RT Rotation：換取新的 Access Token + 新的 Refresh Token。
   "chat_mode": "general | stock_agent",
   "response_mode": "thinking | flash",
   "model": "gpt-5.6-luna（僅 chat_mode=general 生效）",
+  "skill": "dcf（選填，@ 分析方法 id，僅 chat_mode=stock_agent）",
   "agent_config": {
     "enabled_tools": [
       "search_stock_news",
@@ -319,6 +322,37 @@ RT Rotation：換取新的 Access Token + 新的 Refresh Token。
 | `response_mode` | string | 否 | `chat_mode=stock_agent` 時生效：`thinking`（預設）或 `flash` |
 | `model` | string | 否 | `chat_mode=general` 時生效：使用者選的模型 id。只接受 `GET /api/chat/models` 的白名單，其餘退回預設模型（最長 64 字元） |
 | `agent_config` | object | 否 | 含 `enabled_tools`；空則由 Agent 自行判斷 |
+| `skill` | string | 否 | 使用者以 `@` 點名的分析方法 id（`GET /api/skills`，最長 32 字元）。只在 `chat_mode=stock_agent` 生效，一律走思考模式（`flash` 被忽略）；未知 id 或 `general` 模式帶 skill → `422` |
+
+**點名分析方法（skill）時的差異**（詳見 [`agent_spec.md`](./agent_spec.md) §10）：
+- Router 的網路搜尋由 `tavily_global_search` 換成 `deep_web_search`（與深度研究相同的 OpenAI Web Search 多輪查證），每輪上限 `DEEP_SEARCH_MAX_CALLS_PER_TURN`（預設 4）
+- `done` 事件多一個 `skill` 欄位；`deep_web_search` 的結果依引用網址展開成多筆 `retrieval_sources`
+- 查證用量以 `caller = stock_agent_deep_lookup` 寫入 `token_usage_logs`
+- user／assistant 訊息的 `metadata.skill` 記錄 skill id
+
+**SSE keepalive**：串流閒置超過 15 秒會送 SSE 註解行 `: keepalive`（避免 Cloudflare 100 秒閒置斷線），前端略過即可。
+
+### `GET /api/skills`
+
+`@` 選單用的金融分析方法清單。不查資料庫，讀 `app/backend/skills/library/`。
+
+**Header**：`Authorization: Bearer <access_token>`（未帶或無效 → `401`）
+
+**Response 200**：
+```json
+{
+  "status": "success",
+  "data": {
+    "skills": [
+      {"id": "dcf", "mention": "dcf", "label": "DCF 估值", "description": "現金流折現估值：WACC、終值、權益價值與敏感度表"},
+      {"id": "earnings", "mention": "財報解讀", "label": "財報解讀", "description": "最新一季財報：優於／低於預期、利潤率、財測與法說會重點"}
+    ],
+    "supported_modes": ["stock_agent", "deep_research"]
+  }
+}
+```
+
+只回傳顯示用欄位，skill 的 prompt 正文不外流。目前有 `dcf`、`comps`、`earnings`（@財報解讀）、`chips`（@籌碼分析）、`sector`（@產業比較）。
 
 ### `GET /api/chat/models`
 

@@ -1242,11 +1242,79 @@ async function loadMcpTools() {
 }
 
 // ============================================================
-// @ 提及：在輸入框指定本輪要用的外部 MCP 工具
+// @ 提及：在輸入框點名本輪的「分析方法」（金融 skill）或外部 MCP 工具
 // ------------------------------------------------------------
-// 後端 agent_config.enabled_tools 早已接受 mcp__* 格式，所以這裡純前端：
-// @ 只是換一種產生 enabled_tools 的 UI，不需要後端配合。
+// - 分析方法（@dcf、@財報解讀…）：股市 Agent 與深度研究都支援，送出時帶 `skill` 欄位，
+//   後端依 skill 決定要查哪些資料、用什麼格式寫。
+// - MCP 工具：後端 agent_config.enabled_tools 早已接受 mcp__* 格式，
+//   @ 只是換一種產生 enabled_tools 的 UI。
 // ============================================================
+
+/**
+ * 金融分析 skill 目錄，由 loadSkills() 從 GET /api/skills 填入。
+ * 每一筆：{ id, mention, label, description }
+ */
+let skillCatalog = [];
+/** 後端回報支援 skill 的模式；載入失敗時用與後端相同的預設值 */
+let skillSupportedModes = ['stock_agent', 'deep_research'];
+
+async function loadSkills() {
+    try {
+        const res = await authFetch(`${state.apiBase}/skills`);
+        if (!res || !res.ok) return;
+        const json = await res.json();
+        const data = json.data || {};
+        skillCatalog = Array.isArray(data.skills) ? data.skills : [];
+        if (Array.isArray(data.supported_modes)) skillSupportedModes = data.supported_modes;
+    } catch (err) {
+        skillCatalog = [];
+        console.error('[Skills] 分析方法清單載入失敗：', err);
+    }
+}
+
+function skillMentionToken(skill) {
+    return `@${skill.mention}`;
+}
+
+/** 股市 Agent（思考／快捷皆可，後端遇到 skill 一律走思考流程）與深度研究支援 @ 分析方法 */
+function skillMentionSupported(mode = chatMode) {
+    return skillSupportedModes.includes(mode);
+}
+
+function matchSkills(query) {
+    if (!query) return skillCatalog;
+    return skillCatalog.filter((skill) =>
+        skill.mention.toLowerCase().includes(query) ||
+        skill.label.toLowerCase().includes(query) ||
+        skill.id.includes(query) ||
+        (skill.description || '').toLowerCase().includes(query)
+    );
+}
+
+/**
+ * 從送出的文字找出被點名的分析方法；一則訊息只用一個，取**最先出現**的那個。
+ * 與 MCP 相同，不另存「已選取」狀態：字樣被刪掉，點名就失效。
+ * 字樣後面必須是空白或結尾，避免 `@dcfx` 這類字被誤認。
+ */
+function collectMentionedSkillId(text) {
+    let best = null;
+    skillCatalog.forEach((skill) => {
+        const token = skillMentionToken(skill);
+        let from = 0;
+        while (from <= text.length) {
+            const at = text.indexOf(token, from);
+            if (at === -1) break;
+            const before = at === 0 ? ' ' : text[at - 1];
+            const after = text[at + token.length];
+            if (/\s/.test(before) && (after === undefined || /\s/.test(after))) {
+                if (!best || at < best.at) best = { at, id: skill.id };
+                break;
+            }
+            from = at + 1;
+        }
+    });
+    return best ? best.id : null;
+}
 
 /** 股市 Agent 內建的本機工具（Smart Mode 下維持全開）。與後端 _ALLOWED_TOOLS 一致。 */
 const LOCAL_AGENT_TOOL_IDS = [
@@ -1271,7 +1339,7 @@ function mentionSupported() {
 }
 
 /** open=選單是否開著；start/end=輸入框中 @ 片段的範圍；index=鍵盤游標 */
-const mentionState = { open: false, items: [], index: 0, start: -1, end: -1 };
+const mentionState = { open: false, items: [], kinds: 0, index: 0, start: -1, end: -1 };
 
 /**
  * 從游標往前找出正在輸入的 @ 片段。
@@ -1314,18 +1382,28 @@ function renderMentionMenu() {
     if (!mentionState.items.length) {
         const hint = document.createElement('p');
         hint.className = 'mention-hint';
-        if (!mentionSupported()) {
-            hint.textContent = '@ 工具目前僅支援「股市 Agent ＋ 思考模式」。';
-        } else if (!mcpToolCatalog.length) {
-            hint.textContent = '尚未連線任何外部 MCP Server，請先在後端設定 MCP_SERVERS_JSON。';
+        if (!skillMentionSupported() && !mentionSupported()) {
+            hint.textContent = '@ 分析方法僅支援「股市 Agent」與「深度研究」模式。';
+        } else if (!skillCatalog.length && !mcpToolCatalog.length) {
+            hint.textContent = '目前沒有可點名的分析方法或外部工具。';
         } else {
-            hint.textContent = '找不到符合的工具。';
+            hint.textContent = '找不到符合的分析方法或工具。';
         }
         box.appendChild(hint);
         return;
     }
 
-    mentionState.items.forEach((tool, i) => {
+    let lastKind = null;
+    mentionState.items.forEach((entry, i) => {
+        // 兩種項目都有時加分組標題，讓使用者分得出「分析方法」與「外部工具」
+        if (entry.kind !== lastKind && mentionState.kinds > 1) {
+            const group = document.createElement('div');
+            group.className = 'mention-group-title';
+            group.textContent = entry.kind === 'skill' ? '分析方法' : '外部 MCP 工具';
+            box.appendChild(group);
+        }
+        lastKind = entry.kind;
+
         const item = document.createElement('div');
         item.className = 'mention-item' + (i === mentionState.index ? ' active' : '');
         item.setAttribute('role', 'option');
@@ -1334,24 +1412,32 @@ function renderMentionMenu() {
         const top = document.createElement('div');
         top.className = 'mention-item-top';
         const name = document.createElement('span');
-        name.textContent = tool.name;
-        const server = document.createElement('span');
-        server.className = 'mention-item-server';
-        server.textContent = tool.server;
-        top.append(name, server);
+        const badge = document.createElement('span');
+        badge.className = 'mention-item-server';
+        let description = '';
+        if (entry.kind === 'skill') {
+            name.textContent = skillMentionToken(entry.skill);
+            badge.textContent = entry.skill.label;
+            description = entry.skill.description;
+        } else {
+            name.textContent = entry.tool.name;
+            badge.textContent = entry.tool.server;
+            description = entry.tool.description;
+        }
+        top.append(name, badge);
         item.appendChild(top);
 
-        if (tool.description) {
+        if (description) {
             const desc = document.createElement('div');
             desc.className = 'mention-item-desc';
-            desc.textContent = tool.description;
+            desc.textContent = description;
             item.appendChild(desc);
         }
 
         // 用 mousedown 而非 click：click 時輸入框已失焦，選取範圍會跑掉
         item.addEventListener('mousedown', (e) => {
             e.preventDefault();
-            applyMention(tool);
+            applyMention(entry);
         });
         box.appendChild(item);
     });
@@ -1363,7 +1449,13 @@ function openMentionMenu(hit) {
     mentionState.open = true;
     mentionState.start = hit.start;
     mentionState.end = hit.end;
-    mentionState.items = mentionSupported() ? matchMcpTools(hit.query) : [];
+    const skills = skillMentionSupported() ? matchSkills(hit.query) : [];
+    const tools = mentionSupported() ? matchMcpTools(hit.query) : [];
+    mentionState.items = [
+        ...skills.map((skill) => ({ kind: 'skill', skill })),
+        ...tools.map((tool) => ({ kind: 'mcp', tool })),
+    ];
+    mentionState.kinds = (skills.length ? 1 : 0) + (tools.length ? 1 : 0);
     mentionState.index = 0;
     renderMentionMenu();
     box.classList.remove('hidden');
@@ -1391,10 +1483,10 @@ function moveMentionSelection(step) {
 }
 
 /** 把 @片段 換成完整字樣，游標移到其後 */
-function applyMention(tool) {
+function applyMention(entry) {
     const el = document.getElementById('user-input');
     if (!el) return;
-    const token = mcpMentionToken(tool) + ' ';
+    const token = (entry.kind === 'skill' ? skillMentionToken(entry.skill) : mcpMentionToken(entry.tool)) + ' ';
     el.value = el.value.slice(0, mentionState.start) + token + el.value.slice(mentionState.end);
     const caret = mentionState.start + token.length;
     closeMentionMenu();
@@ -1632,6 +1724,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         loadGeneralChatModels(),
         loadDeepResearchChatConfig(),
         loadMcpTools(),
+        loadSkills(),
     ]);
     updateSendButtonForStreamingState();
 });
@@ -1664,11 +1757,11 @@ function initEventListeners() {
             moveMentionSelection(e.key === 'ArrowDown' ? 1 : -1);
         } else if (e.key === 'Enter' || e.key === 'Tab') {
             // 選單開著但沒有可選項（模式不支援／無連線）時不攔截，讓 Enter 正常送出
-            const tool = mentionState.items[mentionState.index];
-            if (!tool) return;
+            const entry = mentionState.items[mentionState.index];
+            if (!entry) return;
             e.preventDefault();
             e.stopImmediatePropagation();
-            applyMention(tool);
+            applyMention(entry);
         } else if (e.key === 'Escape') {
             e.preventDefault();
             e.stopImmediatePropagation();
@@ -3745,6 +3838,8 @@ async function sendMessage() {
     // @ 點名的 MCP 工具。Smart Mode 下本機工具維持全開，但 MCP 只開放被點名的
     // 那幾個（等於「這輪就用這個」）；手動模式則併進已勾選清單。
     const mentionedMcpTools = mentionSupported() ? collectMentionedMcpToolIds(query) : [];
+    // @ 點名的分析方法（金融 skill）：股市 Agent 與深度研究都帶；依「送出當下」的模式判斷
+    const sendSkill = skillMentionSupported(sendMode) ? collectMentionedSkillId(query) : null;
     if (mentionedMcpTools.length) {
         const base = isAuto ? LOCAL_AGENT_TOOL_IDS : enabled_tools;
         enabled_tools = [...new Set([...base, ...mentionedMcpTools])];
@@ -3852,7 +3947,9 @@ async function sendMessage() {
         ? '思考中...'
         : sendMode === 'deep_research'
             ? '深度研究準備中…（約需 1–5 分鐘，可先離開此頁，完成後會存進對話）'
-            : '正在分析問題...';
+            : sendSkill
+                ? '正在依分析方法深度查證資料…（約需 1–3 分鐘，可先離開此頁，完成後會存進對話）'
+                : '正在分析問題...';
     const { msgDiv, toolsContainer, bubble, streamCursor, initialPlaceholder } = createStreamingMessageUI(initPlaceholderText);
     const container = document.getElementById('chat-messages');
     const welcome = container.querySelector('.welcome-hero');
@@ -3930,6 +4027,7 @@ async function sendMessage() {
             form.append('chat_id', streamTargetChatId);
             form.append('query', query);
             if (drModel) form.append('model', drModel);
+            if (sendSkill) form.append('skill', sendSkill);
             sendAttachments.forEach((file) => form.append('files', file, file.name));
             response = await authFetch(`${state.apiBase}/chat/deep-research`, {
                 method: 'POST',
@@ -3949,6 +4047,8 @@ async function sendMessage() {
                     response_mode: chatResponseMode === 'flash' ? 'flash' : 'thinking',
                     // 只有一般對話吃這個欄位；清單沒載到時不帶，後端用預設模型
                     ...(sendMode === 'general' && generalModel ? { model: generalModel } : {}),
+                    // 點名分析方法時後端一律走思考流程（快捷模式放不下 skill 的資料清單）
+                    ...(sendSkill ? { skill: sendSkill } : {}),
                 })
             });
         }
@@ -4307,6 +4407,7 @@ const TOOL_DISPLAY_NAMES = {
     search_market_ai_analysis:  '搜尋 AI 市場分析',
     get_market_recommendations: '提取潛力標的',
     tavily_global_search:         '網路搜尋',
+    deep_web_search:            '深度網路查證',
     dr_web_search:              '網路搜尋',
     dr_file_search:             '檢索你附上的檔案',
 };

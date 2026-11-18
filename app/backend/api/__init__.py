@@ -12,6 +12,7 @@ from .market_feed import router as market_feed_router
 from .portfolio import router as portfolio_router
 from .chat_deep_research import router as chat_deep_research_router
 from .chat_artifacts import router as chat_artifacts_router
+from .skills import router as skills_router
 
 
 api_router = APIRouter()
@@ -54,5 +55,8 @@ api_router.include_router(chat_deep_research_router)
 
 # 從對話訊息產生報告／簡報（最多 5 則，沿用深度研究的 skill 與下載路由）
 api_router.include_router(chat_artifacts_router)
+
+# 金融分析 skill 目錄（輸入框 @dcf、@財報解讀…；股市 Agent 與深度研究共用）
+api_router.include_router(skills_router)
 
 __all__ = ["api_router"]
