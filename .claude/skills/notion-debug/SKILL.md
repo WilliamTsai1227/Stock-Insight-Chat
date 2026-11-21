@@ -14,18 +14,53 @@ disable-model-invocation: true
 
 | 第一層 inline 資料庫 | 第二層：每一列是一個頁面 | 第三層：頁面內的 inline 資料庫「測試項目」 |
 |---|---|---|
-| **API**（`collection://31d2dbee-5080-801d-a912-000b01ea4dd8`，標題欄位 `Name`） | 一支被測試的 API，例：`api/chat/message`、`deep search`、`/chatbot/api/vectorSearch` | 每一列是一次測試／一個 bug |
-| **ETL**（`collection://4182dbee-5080-81db-b446-000b8a339932`，標題欄位 `Name`） | 一條 ETL 流程或腳本，例：`ETL` | 同上 |
-| **資安**（`collection://3702dbee-5080-80b3-9cd9-000bd3fda0a3`，標題欄位 `檢測類別`） | 一種資安檢測類別：輸入驗證、XSS／前端安全、Prompt Injection／AI 安全、身分驗證與登入、流量防護 | 每一列是一個具體檢測項目 |
+| **API**（`collection://31d2dbee-5080-801d-a912-000b01ea4dd8`，標題欄位 `Name`） | 一組 API（依路徑前綴分組） | 每一列是一次測試／一個 bug |
+| **ETL**（`collection://4182dbee-5080-81db-b446-000b8a339932`，標題欄位 `Name`） | 一條 ETL 流程或腳本，目前只有 `ETL` | 同上 |
+| **資安**（`collection://3702dbee-5080-80b3-9cd9-000bd3fda0a3`，標題欄位 `檢測類別`） | 一種資安檢測類別（頁面有 emoji icon） | 每一列是一個具體檢測項目 |
 
 頁面最下方的「RAGAS」、「Postman」子頁面不要動。
 
+### API 第二層：路徑 → 頁面
+新頁面命名慣例是 `路徑前綴（中文說明）`，例：`/api/chat（對話管理）`。現有頁面：
+
+| 被測的路徑 | 頁面 |
+|---|---|
+| `/api/chat/messages`（一般對話／股市 Agent 串流） | `api/chat/message`（舊頁，標題是粗體） |
+| `/api/chat/deep-research`、`/api/deep-research/*`（含浮動 AI 小助手） | `deep search` |
+| 其他 `/api/chat*`（建立、列表、標題、刪除…） | `/api/chat（對話管理）` |
+| `/api/feed/*` | `/api/feed（新聞・AI 分析）` |
+| `/api/portfolio/*`、`/api/insights/*` | `/api/portfolio・/api/insights` |
+| `/api/notes/*` | `/api/notes` |
+| `/api/project/*` | `/api/project` |
+| `/api/files/*` | `/api/files` |
+| `/api/skills` | `/api/skills` |
+| `/api/mcp/*` | `/api/mcp` |
+| `/api/user/auth/*` | `/api/user/auth（Google SSO・refresh・logout）` |
+| 其他 `/api/user/*` | `/api/user（個人資料・用量・回饋・刪除帳號）` |
+| `/explore/*` | `/explore` |
+| `/` | `/ 健康檢查` |
+| `/chatbot/api/vectorSearch` | `/chatbot/api/vectorSearch`（舊版 API） |
+
+這張表可能過時：寫入前先用 `query-data-sources`（rows 模式）列出第一層資料庫的實際列；fetch 資料庫只會回 schema，看不到列。
+
+### 資安第二層：現有檢測類別
+輸入驗證、XSS／前端安全、Prompt Injection／AI 安全、身分驗證與登入、流量防護、CORS／HTTP 安全設定、存取控制（IDOR）
+
+### 第三層「測試項目」的欄位（各頁不同）
+| 範例頁 | 標題欄位 | 其他欄位 |
+|---|---|---|
+| `api/chat/message`（舊） | `Request` | `簡述`、`BUG程度` |
+| `/api/chat（對話管理）` 等新 API 頁 | `測試項目` | `簡述`、`BUG程度` |
+| 資安各類別 | `測試項目` | 無 |
+
+`BUG程度` 選項：緊急／中等／輕微／純測試。
+
 ## 步驟
-1. 判斷屬於 API、ETL 還是資安；再判斷是哪一個第二層頁面。
-   - fetch 該第一層資料庫，找對應的頁面。
-   - 找不到 → 在第一層資料庫新增一列（API 用路徑或功能名、ETL 用流程名、資安用檢測類別名），並在該頁面裡建立 inline 資料庫「測試項目」。
+1. 判斷屬於 API、ETL 還是資安；再依上面的對照判斷是哪一個第二層頁面。
+   - 找不到合適的 → 在第一層資料庫新增一列（API 照 `路徑前綴（中文說明）` 命名；資安用檢測類別名並加 emoji icon），
+     並在該頁面裡建立 inline 資料庫「測試項目」，欄位照同類型最新的頁面複製（API 照 `/api/chat（對話管理）`，資安照 `存取控制（IDOR）`）。
    - 判斷不了放哪裡時，先問使用者。
-2. fetch 該頁面內的「測試項目」資料庫，**照它現有的欄位填**。各資料庫欄位不一樣，例如 `api/chat/message` 的有 `Request`（標題）、`簡述`、`BUG程度`（緊急／中等／輕微／純測試）；其他多半只有標題欄位。不要自己新增欄位。
+2. fetch 該頁面拿到「測試項目」的 data source，再 fetch 它的 schema，**照現有欄位填**，不要自己新增欄位。
 3. 新增一列：
    - 標題：`✅ YYYY-MM-DD 簡短問題名稱`（還沒修好用 `🔧`）；如果標題欄位是 `Request`，就放觸發問題的 request／輸入。
    - 有 `簡述`、`BUG程度` 欄位就填。
