@@ -2,11 +2,11 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Insight | AI Workspace</title>
     <!-- PWA：可安裝、iOS 加到主畫面後以獨立視窗（standalone）開啟 -->
     <link rel="manifest" href="/manifest.json">
-    <meta name="theme-color" content="#0d0d0d">
+    <meta name="theme-color" content="#182024">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <!-- default：內容排在狀態列下方，狀態列底色跟著 theme-color 走（淺色主題才不會頂一條黑） -->
@@ -32,8 +32,14 @@
     <link rel="stylesheet" href="/css/notes.css">
     <link rel="stylesheet" href="/css/market-feed.css">
     <link rel="stylesheet" href="/css/portfolio.css">
+    <link rel="stylesheet" href="/css/ai-assistant.css">
+    <link rel="stylesheet" href="/css/share.css">
+    <!-- 視覺層：配色、字體與回答排版（拿掉這行即回到舊外觀） -->
+    <link rel="stylesheet" href="/css/insight-theme.css">
     <!-- Google Fonts: Outfit & Inter -->
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@500;600&display=swap" rel="stylesheet">
     <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
     <!-- Marked for Markdown Parsing -->
@@ -141,7 +147,7 @@
                     </button>
                     <div class="chat-title-info">
                         <h2 id="current-chat-title">歡迎回來</h2>
-                        <span id="chat-status" class="status-badge">Ready</span>
+                        <span id="chat-status" class="status-badge" role="status"></span>
                     </div>
                 </div>
                 <div class="header-actions">
@@ -156,7 +162,9 @@
                     <button type="button" id="theme-toggle-btn" class="icon-btn theme-toggle-btn" aria-label="切換淺色／深色模式" title="切換主題">
                         <i data-lucide="contrast"></i>
                     </button>
-                    <button class="icon-btn"><i data-lucide="share-2"></i></button>
+                    <button type="button" id="share-chat-btn" class="icon-btn" aria-label="分享對話" title="分享對話" aria-haspopup="dialog">
+                        <i data-lucide="share-2"></i>
+                    </button>
 
                     <!-- 使用者頭像 & 下拉選單 -->
                     <div class="user-menu" id="user-menu-trigger">
@@ -274,9 +282,9 @@
 
                     <!-- 手動新增／編輯筆記的編輯器（不經過 LLM，不計費） -->
                     <div id="note-editor" class="note-editor hidden">
-                        <input type="text" id="note-editor-title" class="note-editor-title"
+                        <input type="text" id="note-editor-title" class="note-editor-title" aria-label="筆記標題"
                                placeholder="標題（留空會取內文第一行）" maxlength="200">
-                        <textarea id="note-editor-content" class="note-editor-content"
+                        <textarea id="note-editor-content" class="note-editor-content" aria-label="筆記內容"
                                   placeholder="貼上或輸入內容，支援 Markdown…" rows="8" maxlength="20000"></textarea>
                         <div class="note-editor-foot">
                             <span id="note-editor-count" class="note-editor-count">0 / 20000</span>
@@ -536,14 +544,14 @@
                     <ul id="chat-attach-list" class="chat-attach-list hidden" aria-label="已附加的檔案"></ul>
                     <!-- 上方：使用者輸入 -->
                     <div class="input-top-row">
-                        <textarea id="user-input" placeholder="問我任何事…" rows="1" maxlength="2000"></textarea>
+                        <textarea id="user-input" name="query" aria-label="輸入問題" autocomplete="off" placeholder="問我任何事…" rows="1" maxlength="2000"></textarea>
                     </div>
                     <!-- 下方：工具列 -->
                     <div class="input-bottom-row">
                         <div class="input-bottom-left">
                             <!-- 工具設定 -->
                             <div class="tool-settings">
-                                <button id="tool-toggle-btn" class="tool-btn" title="切換工具權限">
+                                <button type="button" id="tool-toggle-btn" class="tool-btn" title="切換工具權限" aria-label="切換工具權限" aria-haspopup="true" aria-controls="tool-popover">
                                     <i data-lucide="settings-2"></i>
                                 </button>
                                 <div id="tool-popover" class="tool-popover hidden">
@@ -623,7 +631,7 @@
                                 <ul id="response-mode-menu" class="response-mode-menu hidden" role="listbox"></ul>
                             </div>
                             <!-- 送出 -->
-                            <button id="send-btn" class="send-btn">
+                            <button type="button" id="send-btn" class="send-btn" aria-label="送出訊息">
                                 <i data-lucide="arrow-up"></i>
                             </button>
                         </div>
@@ -642,7 +650,7 @@
             <div class="modal-header">
                 <h3><i data-lucide="folder-plus"></i> 建立專案</h3>
                 <div class="modal-header-actions">
-                    <button class="modal-close" onclick="closeCreateProjectModal()">
+                    <button type="button" class="modal-close" aria-label="關閉" onclick="closeCreateProjectModal()">
                         <i data-lucide="x"></i>
                     </button>
                 </div>
@@ -721,16 +729,16 @@
         <div class="modal-card">
             <div class="modal-header">
                 <h3><i data-lucide="user"></i> 會員資料</h3>
-                <button class="modal-close" onclick="closeAllModals()"><i data-lucide="x"></i></button>
+                <button type="button" class="modal-close" aria-label="關閉" onclick="closeAllModals()"><i data-lucide="x"></i></button>
             </div>
             <div class="modal-body">
                 <div class="modal-field">
-                    <label>電子信箱</label>
-                    <input type="email" id="profile-email" disabled>
+                    <label for="profile-email">電子信箱</label>
+                    <input type="email" id="profile-email" autocomplete="email" disabled>
                 </div>
                 <div class="modal-field">
-                    <label>使用者名稱</label>
-                    <input type="text" id="profile-username" placeholder="輸入新的名稱">
+                    <label for="profile-username">使用者名稱</label>
+                    <input type="text" id="profile-username" name="username" autocomplete="nickname" spellcheck="false" placeholder="輸入新的名稱…">
                 </div>
                 <div class="modal-info-row">
                     <span class="info-label">帳號狀態</span>
@@ -754,7 +762,7 @@
         <div class="modal-card">
             <div class="modal-header">
                 <h3><i data-lucide="activity"></i> 用量統計</h3>
-                <button class="modal-close" onclick="closeAllModals()"><i data-lucide="x"></i></button>
+                <button type="button" class="modal-close" aria-label="關閉" onclick="closeAllModals()"><i data-lucide="x"></i></button>
             </div>
             <div class="modal-body">
                 <p id="usage-loading" class="usage-loading">載入用量中…</p>
@@ -867,7 +875,7 @@
             <div class="modal-header">
                 <h3><i data-lucide="pencil"></i> 重新命名聊天</h3>
                 <div class="modal-header-actions">
-                    <button class="modal-close" onclick="closeEditChatTitleModal()">
+                    <button type="button" class="modal-close" aria-label="關閉" onclick="closeEditChatTitleModal()">
                         <i data-lucide="x"></i>
                     </button>
                 </div>
@@ -912,6 +920,22 @@
     </div>
 
     <!-- 全域 Toast 容器（成功/失敗提示）-->
+    <!-- 分享對話（公開唯讀快照）Modal，內容由 share-chat.js 依狀態渲染 -->
+    <div class="modal-overlay" id="share-chat-modal" role="dialog" aria-modal="true" aria-labelledby="share-chat-title">
+        <div class="modal-card share-chat-card">
+            <div class="modal-header">
+                <h3 id="share-chat-title"><i data-lucide="share-2"></i> 分享對話</h3>
+                <div class="modal-header-actions">
+                    <button type="button" class="modal-close" aria-label="關閉" data-share-action="close">
+                        <i data-lucide="x"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="modal-body" id="share-chat-body"></div>
+            <div class="modal-footer" id="share-chat-footer"></div>
+        </div>
+    </div>
+
     <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
     <!-- 刪除帳號 Modal -->
@@ -919,13 +943,13 @@
         <div class="modal-card danger">
             <div class="modal-header">
                 <h3><i data-lucide="alert-triangle"></i> 刪除帳號</h3>
-                <button class="modal-close" onclick="closeAllModals()"><i data-lucide="x"></i></button>
+                <button type="button" class="modal-close" aria-label="關閉" onclick="closeAllModals()"><i data-lucide="x"></i></button>
             </div>
             <div class="modal-body">
                 <p class="danger-text">此操作將永久刪除您的帳號及所有關聯資料，且<strong>無法復原</strong>。</p>
                 <div class="modal-field">
-                    <label>請輸入「DELETE」以確認刪除</label>
-                    <input type="text" id="delete-confirm-input" placeholder="DELETE" oninput="checkDeleteConfirm()">
+                    <label for="delete-confirm-input">請輸入「DELETE」以確認刪除</label>
+                    <input type="text" id="delete-confirm-input" autocomplete="off" spellcheck="false" autocapitalize="characters" placeholder="DELETE" oninput="checkDeleteConfirm()">
                 </div>
                 <div id="delete-msg" class="modal-msg"></div>
             </div>
@@ -954,6 +978,8 @@
     <script src="/js/notes.js"></script>
     <script src="/js/market-feed.js"></script>
     <script src="/js/portfolio.js"></script>
+    <script src="/js/ai-assistant.js"></script>
+    <script src="/js/share-chat.js"></script>
     <script>lucide.createIcons();</script>
 </body>
 </html>

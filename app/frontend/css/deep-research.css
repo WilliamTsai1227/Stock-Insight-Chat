@@ -55,7 +55,7 @@
 .dr-hero-badge i { width: 13px; height: 13px; }
 
 .dr-hero h1 {
-    font-family: 'Outfit', sans-serif;
+    font-family: var(--font-sans);
     font-size: 1.9rem;
     font-weight: 500;
     color: var(--text-main);
@@ -319,7 +319,7 @@
 .dr-run-head-text { min-width: 0; }
 
 .dr-run-head h2 {
-    font-family: 'Outfit', sans-serif;
+    font-family: var(--font-sans);
     font-size: 1.15rem;
     font-weight: 500;
     color: var(--text-main);
@@ -377,7 +377,7 @@
 .dr-result { color: var(--text-main); font-size: 0.93rem; line-height: 1.78; }
 .dr-result:empty { display: none; }
 .dr-result h1, .dr-result h2, .dr-result h3 {
-    font-family: 'Outfit', sans-serif;
+    font-family: var(--font-sans);
     font-weight: 500;
     color: var(--text-main);
     line-height: 1.4;

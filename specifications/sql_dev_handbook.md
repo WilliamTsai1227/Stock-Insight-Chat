@@ -187,6 +187,8 @@ COMMIT;
 | `V009__notes.sql` | 新增 `note_pages`、`notes`（筆記功能）。2026-11-07 已補套用正式 RDS |
 | `V010__note_pages_source_chat.sql` | `note_pages.source_chat_id` + 唯一索引（須在 V009 之後）。2026-11-07 已補套用正式 RDS |
 | `V011__portfolio_insight.sql` | 投資組合排程分析四張表（2026-11-07 已套用正式 RDS） |
+| `V012__chats_source.sql` | `chats.source`（main / assistant），小助手對話不列在主側欄。**尚未套用正式 RDS** |
+| `V013__chat_shares.sql` | 新增 `chat_shares`（對話公開分享快照）。**尚未套用正式 RDS** |
 
 ### 4.3 對既有資料庫執行 migration
 

@@ -44,7 +44,7 @@ _KEYWORD_MAX = 100
 
 # 列表不需要的大欄位，與原專案 projection 一致
 _NEWS_PROJECTION = {
-    "_id": 0,
+    "_id": 1,
     "news_id": 0,
     "summary": 0,
     "keyword": 0,
@@ -53,10 +53,10 @@ _NEWS_PROJECTION = {
     "stock": 0,
 }
 
-_client: Optional[AsyncIOMotorClient] = None
+_client: Optional[Any] = None
 
 
-def _get_db() -> AsyncIOMotorDatabase:
+def _get_db() -> Any:
     """延遲建立 client：沒設連線字串時不影響後端啟動，只讓本模組回 503。"""
     global _client
     uri = os.getenv("FEED_MONGO_URI") or os.getenv("MONGO_URI")

@@ -78,6 +78,8 @@ function hideFeedViews() {
         if (view) view.style.display = 'none';
         document.getElementById(feedConfig[kind].btnId)?.classList.remove('active');
     });
+    document.querySelectorAll('.news-card.selected').forEach((node) => node.classList.remove('selected'));
+    if (window.AI_ASSISTANT) window.AI_ASSISTANT.clearContext();
 }
 
 // ============================================================
@@ -240,6 +242,26 @@ function renderNewsCard(item) {
     card.appendChild(meta);
     card.appendChild(feedEl('h3', 'feed-card-title', item.title || '（無標題）'));
     if (item.content) card.appendChild(feedEl('p', 'feed-card-body', `${item.content}…`));
+
+    const newsId = item._id;
+    if (newsId) {
+        const ask = feedEl('button', 'ai-news-ask');
+        ask.type = 'button';
+        ask.title = '針對這篇新聞詢問金融 AI 小助手';
+        ask.innerHTML = '<i data-lucide="sparkles"></i><span>詢問這篇新聞</span>';
+        ask.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            document.querySelectorAll('.news-card.selected').forEach((node) => node.classList.remove('selected'));
+            card.classList.add('selected');
+            if (window.AI_ASSISTANT) {
+                // title 只給小助手顯示用；後端只吃 news_id，原文一律從 MongoDB 重取
+                window.AI_ASSISTANT.setContext({ mode: 'selected_news', news_id: String(newsId), title: item.title || '' });
+                window.AI_ASSISTANT.open();
+            }
+        });
+        card.appendChild(ask);
+    }
     return card;
 }
 

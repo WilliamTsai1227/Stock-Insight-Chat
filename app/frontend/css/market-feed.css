@@ -212,7 +212,7 @@ a.feed-card:hover {
 
 .feed-card-title {
     margin: 0;
-    font-family: 'Outfit', 'Inter', sans-serif;
+    font-family: var(--font-sans);
     font-size: 1.02rem;
     font-weight: 600;
     line-height: 1.45;

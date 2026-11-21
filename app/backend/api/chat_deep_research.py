@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 from contextlib import suppress
@@ -55,6 +56,12 @@ from app.backend.deep_research.config import (
 )
 from app.backend.deep_research.researcher import history_to_input, stream_research
 from app.backend.deep_research.sources import PreparedSources, prepare_sources, read_uploads
+from app.backend.market_ai.common.page_context import (
+    format_assistant_context,
+    load_portfolio_context,
+    load_selected_news_context,
+)
+from app.backend.market_ai.common.prompts import build_assistant_research_instructions
 from app.backend.deep_research.usage import (
     CALLER_CHAT_RESEARCH,
     AgentUsage,
@@ -81,6 +88,51 @@ _TOOL_IDS = {"網路搜尋": "dr_web_search", "文件檢索": "dr_file_search"}
 RESPONSE_MODE = "deep_research"
 
 
+_ASSISTANT_MODES = {"general", "selected_news", "portfolio"}
+
+
+def _parse_assistant_context(raw: Optional[str]) -> Optional[Dict[str, str]]:
+    """
+    浮動 AI 小助手的頁面上下文（multipart 欄位，JSON 字串）。
+
+    只取白名單欄位：mode 與 news_id；資料內容一律由後端依 mode 重取，不信任前端。
+    沒帶欄位 → None（一般深度研究）；格式錯誤 → 422。
+    """
+    if raw is None or not raw.strip():
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "assistant_context 不是合法的 JSON。")
+    if not isinstance(data, dict):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "assistant_context 格式錯誤。")
+    mode = data.get("mode") or "general"
+    if mode not in _ASSISTANT_MODES:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"未知的小助手模式：{mode}")
+    parsed = {"mode": mode}
+    if mode == "selected_news":
+        parsed["news_id"] = str(data.get("news_id") or "")[:64]
+    return parsed
+
+
+async def _load_assistant_context_text(
+    db: asyncpg.Connection, user_id: UUID, ctx: Dict[str, str]
+) -> Optional[str]:
+    """依模式從 MongoDB／PostgreSQL 取回頁面資料；失敗時回一段要模型告知使用者的說明。"""
+    mode = ctx["mode"]
+    try:
+        if mode == "selected_news":
+            loaded = await load_selected_news_context(ctx.get("news_id", ""))
+        elif mode == "portfolio":
+            loaded = await load_portfolio_context(db, user_id)
+        else:
+            return None
+    except Exception as exc:  # noqa: BLE001 — 上下文載入失敗不擋提問，改請模型誠實告知
+        print(f"[ASSISTANT_CONTEXT] failed: {type(exc).__name__}: {exc}", flush=True)
+        loaded = {"source_type": mode, "error": "頁面資料暫時無法載入"}
+    return format_assistant_context(loaded) or None
+
+
 def _history_from_rows(rows: List[asyncpg.Record]) -> List[Dict[str, Any]]:
     turns = [(r["role"], r["content"] or "") for r in rows]
     return history_to_input(
@@ -97,12 +149,18 @@ async def chat_deep_research(
     query: str = Form(...),
     model: Optional[str] = Form(None, max_length=64),
     skill: Optional[str] = Form(None, max_length=32),
+    assistant_context: Optional[str] = Form(None, max_length=500),
     files: List[UploadFile] = File(default=[]),
     db: asyncpg.Connection = Depends(get_db),
     current_user_id: UUID = Depends(get_current_user_id),
 ):
     """
     在指定對話中執行一次深度研究（multipart：chat_id、query、model、skill、files[]），以 SSE 回傳。
+
+    `assistant_context`：浮動 AI 小助手專用（JSON：{"mode": "general|selected_news|portfolio",
+    "news_id"?}）。有帶時改用金融分析師 prompt、把頁面資料（MongoDB 新聞原文或個人持倉＋
+    近 90 天新聞）附進輸入，並以較低的推理強度加快回覆；附件處理與一般深度研究相同。
+    小助手與深度研究各自佔一個名額，彼此不互鎖。
 
     `skill`：使用者以 @ 點名的金融分析方法（GET /api/skills）。有指定時，研究改依該
     skill 的資料清單查證、依其格式輸出；上傳的文件、試算表與圖片照常讀取。
@@ -129,13 +187,23 @@ async def chat_deep_research(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "請輸入想研究的問題。")
     if len(clean_query) > QUERY_MAX_CHARS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"研究題目請控制在 {QUERY_MAX_CHARS} 字以內。")
+    try:
+        assistant = _parse_assistant_context(assistant_context)
+    except HTTPException:
+        await _delete_chat_if_no_messages(db, chat_id, current_user_id)
+        raise
+    if assistant is not None:
+        skill = None  # 小助手不支援 @ skill，避免兩套輸出格式互相打架
     chosen_skill = get_skill(skill) if skill else None
     if skill and chosen_skill is None:
         await _delete_chat_if_no_messages(db, chat_id, current_user_id)
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"未知的分析方法：{skill}")
     skill_meta = {"skill": chosen_skill.id} if chosen_skill else {}
+    if assistant is not None:
+        skill_meta = {"assistant_mode": assistant["mode"]}
 
-    user_key = str(current_user_id)
+    # 小助手用獨立的名額 key：不會因為使用者正在跑深度研究就被擋下
+    user_key = str(current_user_id) + (":assistant" if assistant is not None else "")
     # 2. 每人同時只能跑一個研究（與深度研究頁共用同一把鎖）。
     #    檢查與佔位之間**不能有 await**：否則同時送來的多個請求會在後面的
     #    配額檢查／讀檔期間全部通過檢查，一次跑好幾個研究，配額也被超用好幾倍。
@@ -143,7 +211,9 @@ async def chat_deep_research(
         await _delete_chat_if_no_messages(db, chat_id, current_user_id)
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            "您已有一個深度研究正在執行，請等它完成後再開始下一個。",
+            "AI 小助手還在回答上一個問題，請稍候再送出。"
+            if assistant is not None
+            else "您已有一個深度研究正在執行，請等它完成後再開始下一個。",
         )
     _active_runs.add(user_key)
 
@@ -158,6 +228,12 @@ async def chat_deep_research(
             await _delete_chat_if_no_messages(db, chat_id, current_user_id)
             raise
         chosen_model = resolve_model(model)
+        # 頁面上下文在請求階段就取好：背景任務開始時 request 綁定的 DB 連線可能已歸還
+        context_text = (
+            await _load_assistant_context_text(db, current_user_id, assistant)
+            if assistant is not None
+            else None
+        )
         attachments = [
             {"name": u.filename, "kind": u.kind, "size": len(u.content)} for u in uploads
         ]
@@ -220,7 +296,10 @@ async def chat_deep_research(
                 if prepared.warnings:
                     await event_queue.put(_sse("notice", {"messages": prepared.warnings}))
 
-                await event_queue.put(_sse("thinking", {"text": "開始研究，規劃查證方向…"}))
+                await event_queue.put(_sse("thinking", {
+                    "text": "整合頁面資料、基本面與技術面…" if assistant is not None
+                    else "開始研究，規劃查證方向…"
+                }))
 
                 outcome: Dict[str, Any] = {}
                 async for event in stream_research(
@@ -230,6 +309,15 @@ async def chat_deep_research(
                     usage=usage,
                     history=history,
                     skill=chosen_skill,
+                    instructions=(
+                        build_assistant_research_instructions(assistant["mode"])
+                        if assistant is not None
+                        else None
+                    ),
+                    context_text=context_text,
+                    # 小助手要的是對話節奏：推理與搜尋強度調低，換取數十秒內回覆
+                    reasoning_effort="low" if assistant is not None else "medium",
+                    search_context_size="medium" if assistant is not None else "high",
                 ):
                     name = event.get("event")
                     if name == "delta":
@@ -309,7 +397,10 @@ async def chat_deep_research(
                 reason = str(exc.detail)
             else:
                 reason = str(exc) or type(exc).__name__
-            err_text = f"深度研究執行失敗：{reason}"
+            err_text = (
+                f"AI 小助手分析失敗：{reason}" if assistant is not None
+                else f"深度研究執行失敗：{reason}"
+            )
             await event_queue.put(_sse("error", {"message": err_text}))
             # 失敗也要記帳：已經打出去的那幾輪 OpenAI 照樣收錢
             await record_usage()

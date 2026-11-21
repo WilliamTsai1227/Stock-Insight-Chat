@@ -344,11 +344,10 @@ const CHAT_INPUT_PLACEHOLDER = {
 /** 歡迎畫面依模式顯示的建議問題（點擊即送出） */
 const SUGGESTED_PROMPTS = {
     general: [
-        '幫我找找台北聚餐好去處',
-        '幫我找找大安區咖啡廳',
-        '松山火車站附近有什麼上班族中午可以吃的',
-        '幫我整理這週科技產業的重要新聞',
-        '最近有哪些演唱會？',
+        '幫我整理這週台股的重要財經新聞',
+        '用白話解釋本益比和股價淨值比的差別',
+        '美國降息對台股會有什麼影響？',
+        '新手該怎麼開始規劃資產配置？',
     ],
     stock_agent: [
         '台積電近期財報有哪些重點？',
@@ -422,7 +421,7 @@ function setChatStatusLoading(isLoading) {
         badge.textContent = '載入中';
         badge.classList.add('is-loading');
     } else {
-        badge.textContent = 'Ready';
+        badge.textContent = '';
         badge.classList.remove('is-loading');
     }
 }
@@ -528,7 +527,7 @@ function updateSendButtonForStreamingState() {
 
     sendBtn.disabled = busy || tooLong || empty;
     inputEl.disabled = busy;
-    inputEl.placeholder = busy ? '等待回覆中...' : '';
+    inputEl.placeholder = busy ? '等待回覆中…' : '';
     if (!busy) applyIdleInputPlaceholder();
 }
 
@@ -553,6 +552,7 @@ let state = {
     pendingEditChat: null,
     apiBase: resolveStockInsightApiBase(),
 };
+window.state = state;
 
 // --- Marked.js 設定 ---
 marked.setOptions({
@@ -3801,7 +3801,7 @@ async function sendMessage() {
 
     sendBtn.disabled = true;
     inputEl.disabled = true;
-    inputEl.placeholder = '等待回覆中...';
+    inputEl.placeholder = '等待回覆中…';
 
     const query = inputEl.value.trim();
     // 鎖定送出當下的模式與附件：等待建立 chat 的期間使用者可能切換模式
@@ -3857,7 +3857,7 @@ async function sendMessage() {
     inputEl.style.height = 'auto';
 
     const statusBadge = document.getElementById('chat-status');
-    statusBadge.textContent = 'Analyzing...';
+    statusBadge.textContent = '分析中…';
 
     let wasNewChatThisSend = false;
 
@@ -3895,7 +3895,7 @@ async function sendMessage() {
                     appendQuotaExceededAssistantMessage(mapped.quota);
                     state.currentChatId = null;
                 }
-                statusBadge.textContent = 'Ready';
+                statusBadge.textContent = '';
                 newChatComposeLock = false;
                 sendBtn.disabled = false;
                 inputEl.disabled = false;
@@ -3932,7 +3932,7 @@ async function sendMessage() {
             if (pid) renderPvChats(state.chats[pid] || [], pid);
         } catch (err) {
             showToast(`網路錯誤：${err.message}`, 'error');
-            statusBadge.textContent = 'Ready';
+            statusBadge.textContent = '';
             newChatComposeLock = false;
             sendBtn.disabled = false;
             inputEl.disabled = false;
@@ -3944,12 +3944,12 @@ async function sendMessage() {
     // 建立 AI 訊息容器（先放到畫面上，後續逐步填入）
     // 依模式決定等待提示文字：一般對話用「思考中...」，股市 Agent 用「正在分析問題...」
     const initPlaceholderText = sendMode === 'general'
-        ? '思考中...'
+        ? '思考中…'
         : sendMode === 'deep_research'
             ? '深度研究準備中…（約需 1–5 分鐘，可先離開此頁，完成後會存進對話）'
             : sendSkill
                 ? '正在依分析方法深度查證資料…（約需 1–3 分鐘，可先離開此頁，完成後會存進對話）'
-                : '正在分析問題...';
+                : '正在分析問題…';
     const { msgDiv, toolsContainer, bubble, streamCursor, initialPlaceholder } = createStreamingMessageUI(initPlaceholderText);
     const container = document.getElementById('chat-messages');
     const welcome = container.querySelector('.welcome-hero');
@@ -4105,7 +4105,7 @@ async function sendMessage() {
                     // Router 思考中（更新初始佔位文字）
                     case 'thinking': {
                         const txt = initialPlaceholder.querySelector('span:last-child');
-                        if (txt) txt.textContent = payload.text || '思考中...';
+                        if (txt) txt.textContent = payload.text || '思考中…';
                         break;
                     }
 
@@ -4133,7 +4133,7 @@ async function sendMessage() {
                         label.textContent = formatToolName(payload.tool);
 
                         const suffix = document.createElement('span');
-                        suffix.textContent = '...';
+                        suffix.textContent = '…';
 
                         row.appendChild(iconSpan);
                         row.appendChild(label);
@@ -4319,7 +4319,7 @@ async function sendMessage() {
 
         sendBtn.disabled = false;
         inputEl.disabled = false;
-        statusBadge.textContent = 'Ready';
+        statusBadge.textContent = '';
         lucide.createIcons();
         updateSendButtonForStreamingState();
     }
@@ -4380,7 +4380,7 @@ function createStreamingMessageUI(placeholderText) {
     initIconWrap.className = 'tool-status-icon spinning';
     initIconWrap.appendChild(makeSvgSpinner(14));
     const initText = document.createElement('span');
-    initText.textContent = placeholderText || '正在分析問題...';
+    initText.textContent = placeholderText || '正在分析問題…';
     initialPlaceholder.appendChild(initIconWrap);
     initialPlaceholder.appendChild(initText);
     toolsContainer.appendChild(initialPlaceholder);

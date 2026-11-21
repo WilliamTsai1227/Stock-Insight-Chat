@@ -1,517 +1,290 @@
-/* ============================================
-   Login / Register Page Styles
-   Design: Dark glassmorphism, consistent with index.css
-   ============================================ */
+/*
+ * 登入頁
+ * ------------------------------------------------------------------
+ * 第一次來的人要在一眼內知道 Insight 是什麼，然後用 Google 登入（頁面上唯一的動作）。
+ * 不用卡片、不用格線背景、不列功能清單：左邊直接放一份「批註式研究筆記」範例，
+ * 跟公開分享頁同一種排法（提問在左側批註、回答依基本面／新聞面／技術面展開）。
+ * 唯一的動態：載入時範例回答逐行出現，像 AI 正在寫；減少動態時直接顯示全文。
+ * 色票與 insight-theme.css、share-page.css 相同。
+ */
+
+:root,
+body.dark-theme {
+    --paper: #182024;
+    --ink: #E4E9E8;
+    --ink-soft: #C3CCCB;
+    --muted: #93A09F;
+    --rule: #2D393D;
+    --rail: #1F292D;
+    --accent: #7CC0C4;
+    --accent-ink: #10181B;
+    --surface: #1F282C;
+    --error: #FF8A80;
+    --overlay: rgba(6, 12, 14, 0.66);
+    color-scheme: dark;
+}
+
+body.light-theme {
+    --paper: #F5F6F4;
+    --ink: #1C2326;
+    --ink-soft: #3A4549;
+    --muted: #5E686C;
+    --rule: #D8DDDC;
+    --rail: #E9EEEC;
+    --accent: #1D6B73;
+    --accent-ink: #FFFFFF;
+    --surface: #FFFFFF;
+    --error: #B42318;
+    --overlay: rgba(28, 35, 38, 0.36);
+    color-scheme: light;
+}
 
 :root {
-    --bg-dark: #0d0d0d;
-    --sidebar-bg: #131313;
-    --text-main: #e0e0e0;
-    --text-dim: #888888;
-    --accent: #b0b0b0;
-    --accent-glow: rgba(176, 176, 176, 0.2);
-    --border: #2a2a2a;
-    --card-bg: rgba(255, 255, 255, 0.03);
-    --glass: rgba(20, 20, 20, 0.7);
-    --error: #ff6b6b;
-    --success: #00d68f;
-    --login-container-bg: rgba(19, 19, 19, 0.85);
-    --login-container-shadow: 0 25px 80px rgba(0, 0, 0, 0.6);
-    --login-brand-gradient: linear-gradient(135deg, #1a1a1a 0%, #111 100%);
-    --login-brand-glow: rgba(176, 176, 176, 0.04);
-    --login-logo-gradient: linear-gradient(to right, #fff, #888);
-    --login-grid-line: rgba(255, 255, 255, 0.05);
-    --login-input-bg: rgba(255, 255, 255, 0.04);
-    --login-social-hover-bg: rgba(255, 255, 255, 0.03);
-    --login-google-btn-bg: rgba(255, 255, 255, 0.05);
-    --login-google-btn-border: rgba(255, 255, 255, 0.12);
-    --login-google-btn-hover-bg: rgba(255, 255, 255, 0.1);
-    --login-google-btn-hover-border: rgba(255, 255, 255, 0.25);
-    --login-primary-text: #000;
-    --login-primary-hover: #c0c0c0;
-    --login-placeholder: #555;
-    --login-link-hover: #ddd;
-    --login-toggle-hover-bg: rgba(255, 255, 255, 0.08);
+    --serif: 'Noto Serif TC', 'Songti TC', 'PMingLiU', serif;
+    --sans: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', system-ui, sans-serif;
 }
 
-* {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
-}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { -webkit-text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
 
 body {
-    font-family: 'Inter', sans-serif;
-    background-color: var(--bg-dark);
-    color: var(--text-main);
     min-height: 100vh;
     min-height: 100dvh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    overflow-x: hidden;
-    overflow-y: auto;
-    padding:
-        max(1rem, env(safe-area-inset-top))
-        max(1rem, env(safe-area-inset-right))
-        max(1rem, env(safe-area-inset-bottom))
-        max(1rem, env(safe-area-inset-left));
-}
-
-body.theme-switching,
-body.theme-switching * {
-    transition: none !important;
-}
-
-/* --- Theme Toggle --- */
-.login-theme-toggle {
-    position: fixed;
-    top: max(1rem, env(safe-area-inset-top));
-    right: max(1rem, env(safe-area-inset-right));
-    z-index: 10;
-    width: 40px;
-    height: 40px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    background: var(--card-bg);
-    color: var(--text-dim);
-    cursor: pointer;
-    transition: color 0.2s, background 0.2s, border-color 0.2s;
-}
-
-.login-theme-toggle:hover {
-    color: var(--accent);
-    background: var(--login-toggle-hover-bg);
-    border-color: var(--accent);
-}
-
-.login-theme-toggle i {
-    width: 18px;
-    height: 18px;
-    pointer-events: none;
-}
-
-/* --- Background Grid Effect --- */
-.bg-grid {
-    position: fixed;
-    inset: 0;
-    background-image:
-        linear-gradient(var(--login-grid-line) 1px, transparent 1px),
-        linear-gradient(90deg, var(--login-grid-line) 1px, transparent 1px);
-    background-size: 60px 60px;
-    z-index: 0;
-    animation: gridShift 30s linear infinite;
-}
-
-@keyframes gridShift {
-    0% { transform: translate(0, 0); }
-    100% { transform: translate(60px, 60px); }
-}
-
-/* --- Auth Container --- */
-.auth-container {
-    position: relative;
-    z-index: 1;
-    display: flex;
-    width: 900px;
-    max-width: 100%;
-    min-height: 580px;
-    margin: 0 auto;
-    background: var(--login-container-bg);
-    border: 1px solid var(--border);
-    border-radius: 24px;
-    overflow: hidden;
-    backdrop-filter: blur(20px);
-    box-shadow: var(--login-container-shadow);
-    flex-shrink: 0;
-}
-
-/* --- Brand Panel (Left) --- */
-.brand-panel {
-    flex: 1;
-    background: var(--login-brand-gradient);
-    padding: 3rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-right: 1px solid var(--border);
-    position: relative;
-    overflow: hidden;
-}
-
-.brand-panel::before {
-    content: '';
-    position: absolute;
-    top: -50%;
-    left: -50%;
-    width: 200%;
-    height: 200%;
-    background: radial-gradient(ellipse at 30% 50%, var(--login-brand-glow) 0%, transparent 70%);
-    animation: brandGlow 8s ease-in-out infinite;
-}
-
-@keyframes brandGlow {
-    0%, 100% { transform: translate(0, 0); }
-    50% { transform: translate(10px, -10px); }
-}
-
-.brand-content {
-    position: relative;
-    z-index: 1;
-}
-
-.brand-logo {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 1rem;
-}
-
-.brand-logo h1 {
-    font-family: 'Outfit', sans-serif;
-    font-size: 1.8rem;
-    font-weight: 700;
-    color: #ffffff;
-    background: var(--login-logo-gradient);
-    background-clip: text;
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-}
-
-.brand-icon {
-    width: 32px;
-    height: 32px;
-    color: var(--accent);
-}
-
-.brand-tagline {
-    color: var(--text-dim);
-    font-size: 0.95rem;
-    margin-bottom: 2.5rem;
-    line-height: 1.5;
-}
-
-.brand-features {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.75;
+    -webkit-font-smoothing: antialiased;
     display: flex;
     flex-direction: column;
-    gap: 1.2rem;
+    padding:
+        env(safe-area-inset-top)
+        env(safe-area-inset-right)
+        env(safe-area-inset-bottom)
+        env(safe-area-inset-left);
 }
 
-.feature-item {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    color: var(--text-dim);
-    font-size: 0.85rem;
-}
+/* 切換深／淺色時暫停轉場（login.js 會加上這個 class） */
+body.theme-switching,
+body.theme-switching * { transition: none !important; }
 
-.feature-item i {
-    width: 18px;
-    height: 18px;
-    color: var(--accent);
-    flex-shrink: 0;
-}
+button, a { touch-action: manipulation; }
 
-/* --- Form Panel (Right) --- */
-.form-panel {
-    flex: 1;
-    padding: 3rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 0;
-}
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
 
-.auth-form {
+/* ── 頂列 ─────────────────────────────────────────── */
+.login-top {
     width: 100%;
-    max-width: 340px;
-    display: none;
-    animation: fadeSlideIn 0.35s ease;
+    max-width: 72rem;
+    margin: 0 auto;
+    padding: 1.5rem 1.5rem 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
 }
 
-.auth-form.active {
-    display: block;
-}
-
-@keyframes fadeSlideIn {
-    from { opacity: 0; transform: translateY(12px); }
-    to   { opacity: 1; transform: translateY(0); }
-}
-
-.auth-form h2 {
-    font-family: 'Outfit', sans-serif;
-    font-size: 1.6rem;
+.login-brand {
+    font-family: var(--serif);
     font-weight: 600;
+    font-size: 1.25rem;
+    letter-spacing: 0.01em;
+}
+
+.login-theme-toggle {
+    width: 2.5rem;
+    height: 2.5rem;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--rule);
+    border-radius: 50%;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease;
+}
+.login-theme-toggle:hover { color: var(--ink); border-color: var(--muted); }
+.login-theme-toggle svg { width: 18px; height: 18px; }
+
+/* ── 版面：左欄介紹＋範例，右欄登入 ───────────────────── */
+.login-page {
+    flex: 1;
+    width: 100%;
+    max-width: 72rem;
+    margin: 0 auto;
+    padding: 3rem 1.5rem 3.5rem;
+    display: grid;
+    grid-template-columns: minmax(0, 1.45fr) minmax(18rem, 1fr);
+    grid-template-areas:
+        "intro    action"
+        "specimen action";
+    column-gap: clamp(3rem, 7vw, 7rem);
+    row-gap: 2.75rem;
+    align-content: center;
+}
+
+.login-intro { grid-area: intro; }
+.login-specimen { grid-area: specimen; }
+.login-action {
+    grid-area: action;
+    align-self: center;
+    padding-left: clamp(2rem, 4vw, 3.5rem);
+    border-left: 1px solid var(--rule);
+}
+
+.login-headline {
+    font-family: var(--serif);
+    font-weight: 600;
+    font-size: clamp(2rem, 1.35rem + 2.6vw, 3.4rem);
+    line-height: 1.28;
+    letter-spacing: 0.01em;
+    word-break: keep-all;
+    overflow-wrap: anywhere;
+}
+
+.login-lede {
+    margin-top: 1.25rem;
+    max-width: 34rem;
+    color: var(--muted);
+    font-size: 1.02rem;
+    line-height: 1.85;
+}
+
+/* ── 範例筆記 ─────────────────────────────────────── */
+.login-specimen {
+    display: grid;
+    grid-template-columns: 9.5rem minmax(0, 1fr);
+    column-gap: 2rem;
+    padding-top: 2rem;
+    border-top: 1px solid var(--rule);
+    max-width: 40rem;
+}
+
+.specimen-q-label {
+    display: block;
+    color: var(--accent);
+    font-size: 0.8rem;
+    font-weight: 500;
     margin-bottom: 0.3rem;
 }
 
-.form-subtitle {
-    color: var(--text-dim);
-    font-size: 0.85rem;
-    margin-bottom: 1.8rem;
+.specimen-q p {
+    font-family: var(--serif);
+    font-weight: 500;
+    font-size: 1rem;
+    line-height: 1.75;
 }
 
-/* --- Input Groups --- */
-.input-group {
-    margin-bottom: 1.2rem;
-}
+.specimen-a { color: var(--ink-soft); font-size: 0.95rem; line-height: 1.85; }
+.specimen-a > p:first-child { color: var(--ink); }
 
-.input-group label {
-    display: block;
-    font-size: 0.78rem;
-    color: var(--text-dim);
-    margin-bottom: 0.4rem;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
+.specimen-lenses { margin: 1rem 0; display: grid; gap: 0.55rem; }
+.specimen-lenses > div { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr); column-gap: 0.75rem; }
+.specimen-lenses dt { color: var(--ink); font-weight: 700; }
 
-.input-wrapper {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    background: var(--login-input-bg);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 0 14px;
-    transition: 0.3s;
-}
+.specimen-sources { color: var(--muted); font-size: 0.86rem; }
 
-.input-wrapper:focus-within {
-    border-color: var(--accent);
-    box-shadow: 0 0 12px var(--accent-glow);
-}
-
-.input-wrapper i {
-    width: 16px;
-    height: 16px;
-    color: var(--text-dim);
-    flex-shrink: 0;
-}
-
-.input-wrapper input {
-    flex: 1;
-    background: transparent;
-    border: none;
-    color: var(--text-main);
-    font-family: inherit;
-    font-size: 0.9rem;
-    padding: 12px 0;
-    outline: none;
-}
-
-.input-wrapper input::placeholder {
-    color: var(--login-placeholder);
-}
-
-.toggle-pw {
-    background: none;
-    border: none;
-    color: var(--text-dim);
-    cursor: pointer;
-    padding: 4px;
-    transition: 0.2s;
-}
-
-.toggle-pw:hover {
-    color: var(--accent);
-}
-
-/* --- Password Strength --- */
-.password-strength {
+.specimen-caption {
+    grid-column: 2;
     margin-top: 0.5rem;
-    display: flex;
-    align-items: center;
-    gap: 10px;
+    color: var(--muted);
+    font-size: 0.75rem;
 }
 
-.strength-bar {
-    flex: 1;
-    height: 3px;
-    background: var(--border);
-    border-radius: 3px;
-    overflow: hidden;
+/* 唯一的動態：回答逐行出現（像 AI 正在寫） */
+@media (prefers-reduced-motion: no-preference) {
+    .specimen-line {
+        opacity: 0;
+        transform: translateY(4px);
+        animation: specimen-in 0.5s ease forwards;
+    }
+    .specimen-a > .specimen-line:nth-child(1) { animation-delay: 0.35s; }
+    .specimen-lenses > .specimen-line:nth-child(1) { animation-delay: 0.75s; }
+    .specimen-lenses > .specimen-line:nth-child(2) { animation-delay: 1.05s; }
+    .specimen-lenses > .specimen-line:nth-child(3) { animation-delay: 1.35s; }
+    .specimen-a > .specimen-sources { animation-delay: 1.7s; }
 }
+@keyframes specimen-in { to { opacity: 1; transform: none; } }
 
-.strength-fill {
-    height: 100%;
-    width: 0%;
-    border-radius: 3px;
-    transition: width 0.3s, background 0.3s;
-}
-
-.strength-text {
-    font-size: 0.7rem;
-    color: var(--text-dim);
-    white-space: nowrap;
-}
-
-/* --- Buttons --- */
-.primary-btn {
-    width: 100%;
-    padding: 13px;
-    background: var(--accent);
-    color: var(--login-primary-text);
-    border: none;
-    border-radius: 12px;
-    font-family: 'Outfit', sans-serif;
-    font-size: 0.95rem;
+/* ── 登入區 ───────────────────────────────────────── */
+.login-action-title {
+    font-family: var(--serif);
     font-weight: 600;
-    cursor: pointer;
-    transition: 0.3s;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    margin-top: 0.5rem;
+    font-size: 1.35rem;
+    margin-bottom: 1.25rem;
 }
 
-.primary-btn:hover {
-    background: var(--login-primary-hover);
-    box-shadow: 0 0 20px var(--accent-glow);
-}
-
-.primary-btn:active {
-    transform: scale(0.98);
-}
-
-.primary-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-}
-
-/* Button Loader */
-.btn-loader {
-    display: flex;
-    gap: 4px;
-}
-
-.btn-loader.hidden {
-    display: none;
-}
-
-.btn-loader span {
-    width: 6px;
-    height: 6px;
-    background: #000;
-    border-radius: 50%;
-    animation: bounce 1.4s infinite ease-in-out both;
-}
-
-.btn-loader span:nth-child(1) { animation-delay: -0.32s; }
-.btn-loader span:nth-child(2) { animation-delay: -0.16s; }
-
-@keyframes bounce {
-    0%, 80%, 100% { transform: scale(0); }
-    40% { transform: scale(1.0); }
-}
-
-/* --- Social Button --- */
-.social-btn {
-    width: 100%;
-    padding: 12px;
-    background: transparent;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    color: var(--text-main);
-    font-family: inherit;
-    font-size: 0.88rem;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-    transition: 0.3s;
-    min-width: 0;
-}
-
-.social-btn svg {
-    flex-shrink: 0;
-}
-
-.social-btn:hover:not(:disabled) {
-    border-color: var(--accent);
-    background: var(--login-social-hover-bg);
-}
-
-.social-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-}
-
-/* Google SSO 主按鈕（填色、大尺寸） */
 .social-btn.google-primary {
     width: 100%;
-    padding: 14px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.7rem;
+    padding: 0.9rem 1.25rem;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    background: var(--accent);
+    color: var(--accent-ink);
+    font-family: var(--sans);
     font-size: 1rem;
     font-weight: 500;
-    border: 1px solid var(--login-google-btn-border);
-    background: var(--login-google-btn-bg);
-    border-radius: 14px;
-    margin-top: 0.5rem;
-    transition: background 0.25s, border-color 0.25s, transform 0.15s;
-    min-height: 48px;
+    cursor: pointer;
+    transition: filter 0.15s ease, opacity 0.15s ease;
 }
-
-.social-btn.google-primary span {
-    flex: 0 1 auto;
-    text-align: center;
-    line-height: 1.35;
-    white-space: normal;
+.social-btn.google-primary svg {
+    flex: none;
+    background: #FFFFFF;           /* Google 標誌規範：彩色 G 放在白底上 */
+    border-radius: 50%;
+    padding: 3px;
+    width: 26px;
+    height: 26px;
 }
+.social-btn.google-primary:hover:not(:disabled) { filter: brightness(1.08); }
+.social-btn.google-primary:active:not(:disabled) { filter: brightness(0.95); }
+.social-btn.google-primary:disabled { opacity: 0.7; cursor: progress; }
 
-.social-btn.google-primary:hover:not(:disabled) {
-    background: var(--login-google-btn-hover-bg);
-    border-color: var(--login-google-btn-hover-border);
-    transform: translateY(-1px);
-}
-
-.social-btn.google-primary:active:not(:disabled) {
-    transform: translateY(0);
-}
-
-/* SSO 說明小字 */
 .sso-note {
-    text-align: center;
-    font-size: 0.75rem;
-    color: var(--text-dim);
-    margin-top: 1.4rem;
-    line-height: 1.6;
-    word-break: break-word;
+    margin-top: 0.85rem;
+    color: var(--muted);
+    font-size: 0.85rem;
 }
 
-/* --- 服務條款 / 隱私條款同意 --- */
 .legal-consent {
-    text-align: center;
-    font-size: 0.72rem;
-    color: var(--text-dim);
-    margin-top: 1rem;
-    line-height: 1.65;
-    word-break: break-word;
+    margin-top: 1.75rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--rule);
+    color: var(--muted);
+    font-size: 0.78rem;
+    line-height: 1.8;
 }
 
 .legal-link {
     display: inline;
     padding: 0;
-    margin: 0;
-    border: none;
+    border: 0;
     background: none;
     font: inherit;
-    font-size: inherit;
-    color: var(--accent);
+    color: var(--ink-soft);
     text-decoration: underline;
-    text-underline-offset: 2px;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.2em;
     cursor: pointer;
-    transition: color 0.2s;
+}
+.legal-link:hover { color: var(--accent); }
+
+.error-msg {
+    margin-bottom: 1rem;
+    padding: 0.7rem 0.9rem;
+    border-left: 2px solid var(--error);
+    background: var(--rail);
+    color: var(--error);
+    font-size: 0.86rem;
+    line-height: 1.6;
 }
 
-.legal-link:hover {
-    color: var(--login-link-hover);
-}
+.hidden { display: none !important; }
 
-/* --- Legal Modal --- */
+/* ── 條款 Modal ───────────────────────────────────── */
 .legal-modal-overlay {
     position: fixed;
     inset: 0;
@@ -524,25 +297,22 @@ body.theme-switching * {
         max(1rem, env(safe-area-inset-right))
         max(1rem, env(safe-area-inset-bottom))
         max(1rem, env(safe-area-inset-left));
-    background: rgba(0, 0, 0, 0.65);
-    backdrop-filter: blur(4px);
-    animation: fadeSlideIn 0.25s ease;
+    background: var(--overlay);
+    backdrop-filter: blur(3px);
+    overscroll-behavior: contain;
 }
-
-.legal-modal-overlay.hidden {
-    display: none !important;
-}
+.legal-modal-overlay.hidden { display: none !important; }
 
 .legal-modal-card {
     width: 100%;
-    max-width: 520px;
+    max-width: 34rem;
     max-height: min(85vh, 720px);
     display: flex;
     flex-direction: column;
-    background: var(--login-container-bg);
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    box-shadow: var(--login-container-shadow);
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 14px;
+    box-shadow: 0 24px 60px rgba(6, 12, 14, 0.35);
     overflow: hidden;
 }
 
@@ -551,365 +321,90 @@ body.theme-switching * {
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    padding: 1.1rem 1.25rem 0.5rem;
-    flex-shrink: 0;
+    padding: 1.1rem 1.25rem 0.4rem;
 }
-
-.legal-modal-header h3 {
-    font-family: 'Outfit', sans-serif;
-    font-size: 1.15rem;
-    font-weight: 600;
-    margin: 0;
-}
+.legal-modal-header h3 { font-family: var(--serif); font-size: 1.2rem; font-weight: 600; }
 
 .legal-modal-close {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    border: 1px solid var(--border);
+    width: 2rem;
+    height: 2rem;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--rule);
     border-radius: 8px;
     background: transparent;
-    color: var(--text-dim);
+    color: var(--muted);
     cursor: pointer;
-    transition: color 0.2s, background 0.2s;
-    flex-shrink: 0;
+    transition: color 0.15s ease, border-color 0.15s ease;
 }
+.legal-modal-close:hover { color: var(--ink); border-color: var(--muted); }
+.legal-modal-close svg { width: 16px; height: 16px; pointer-events: none; }
 
-.legal-modal-close:hover {
-    color: var(--text-main);
-    background: var(--login-toggle-hover-bg);
-}
-
-.legal-modal-close i {
-    width: 16px;
-    height: 16px;
-    pointer-events: none;
-}
-
-.legal-modal-updated {
-    padding: 0 1.25rem 0.75rem;
-    font-size: 0.72rem;
-    color: var(--text-dim);
-    flex-shrink: 0;
-}
+.legal-modal-updated { padding: 0 1.25rem 0.75rem; font-size: 0.75rem; color: var(--muted); }
 
 .legal-modal-body {
     flex: 1;
     overflow-y: auto;
+    overscroll-behavior: contain;
     padding: 0 1.25rem 1rem;
-    font-size: 0.82rem;
-    line-height: 1.65;
-    color: var(--text-main);
-}
-
-.legal-modal-body section {
-    margin-bottom: 1.1rem;
-}
-
-.legal-modal-body h4 {
-    font-family: 'Outfit', sans-serif;
     font-size: 0.88rem;
-    font-weight: 600;
-    margin: 0 0 0.45rem;
-    color: var(--text-main);
+    line-height: 1.8;
 }
+.legal-modal-body section { margin-bottom: 1.1rem; }
+.legal-modal-body h4 { font-size: 0.92rem; font-weight: 700; margin-bottom: 0.4rem; }
+.legal-modal-body p { margin-bottom: 0.55rem; color: var(--ink-soft); }
+.legal-modal-body p:last-child { margin-bottom: 0; }
+.legal-modal-body strong { color: var(--ink); }
 
-.legal-modal-body p {
-    margin: 0 0 0.55rem;
-    color: var(--text-dim);
-}
-
-.legal-modal-body p:last-child {
-    margin-bottom: 0;
-}
-
-.legal-modal-body strong {
-    color: var(--text-main);
-    font-weight: 600;
-}
-
-.legal-modal-footer {
-    padding: 0.85rem 1.25rem 1.1rem;
-    border-top: 1px solid var(--border);
-    flex-shrink: 0;
-}
-
+.legal-modal-footer { padding: 0.85rem 1.25rem 1.1rem; border-top: 1px solid var(--rule); }
 .legal-modal-btn {
     width: 100%;
-    padding: 11px;
-    border: none;
-    border-radius: 10px;
+    padding: 0.75rem;
+    border: 0;
+    border-radius: 999px;
     background: var(--accent);
-    color: var(--login-primary-text);
-    font-family: 'Outfit', sans-serif;
-    font-size: 0.9rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background 0.2s;
-}
-
-.legal-modal-btn:hover {
-    background: var(--login-primary-hover);
-}
-
-body.light-theme .legal-modal-overlay {
-    background: rgba(0, 0, 0, 0.35);
-}
-
-/* --- Divider --- */
-.form-divider {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin: 1.2rem 0;
-}
-
-.form-divider::before,
-.form-divider::after {
-    content: '';
-    flex: 1;
-    height: 1px;
-    background: var(--border);
-}
-
-.form-divider span {
-    font-size: 0.75rem;
-    color: var(--text-dim);
-}
-
-/* --- Switch Text --- */
-.switch-text {
-    text-align: center;
-    font-size: 0.85rem;
-    color: var(--text-dim);
-    margin-top: 1.5rem;
-}
-
-.switch-text a {
-    color: var(--accent);
-    text-decoration: none;
+    color: var(--accent-ink);
+    font: inherit;
     font-weight: 500;
-    transition: 0.2s;
+    cursor: pointer;
+    transition: filter 0.15s ease;
+}
+.legal-modal-btn:hover { filter: brightness(1.08); }
+
+/* ── 窄螢幕：介紹 → 登入 → 範例 ───────────────────── */
+@media (max-width: 860px) {
+    .login-page {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-areas:
+            "intro"
+            "action"
+            "specimen";
+        row-gap: 2.25rem;
+        padding-top: 2rem;
+        align-content: start;
+    }
+    .login-action { padding-left: 0; border-left: 0; max-width: 28rem; }
+    /* 上方已有條款的分隔線，範例不再疊一條 */
+    .login-specimen { grid-template-columns: minmax(0, 1fr); row-gap: 0.9rem; border-top: 0; padding-top: 0.5rem; }
+    .specimen-q {
+        padding: 0.8rem 1rem;
+        background: var(--rail);
+        border-left: 2px solid var(--accent);
+        border-radius: 0 8px 8px 0;
+    }
+    .specimen-caption { grid-column: 1; margin-top: 0; }
 }
 
-.switch-text a:hover {
-    color: var(--login-link-hover);
+@media (max-width: 420px) {
+    .login-top { padding: 1rem 1.25rem 0; }
+    .login-page { padding: 1.5rem 1.25rem 2.5rem; }
+    .specimen-lenses > div { grid-template-columns: minmax(0, 1fr); }
 }
 
-/* --- Error / Success Messages --- */
-.error-msg {
-    background: rgba(255, 107, 107, 0.1);
-    border: 1px solid rgba(255, 107, 107, 0.3);
-    color: var(--error);
-    padding: 10px 14px;
-    border-radius: 10px;
-    font-size: 0.82rem;
-    margin-bottom: 1rem;
-    animation: fadeSlideIn 0.3s ease;
-}
-
-.success-msg {
-    background: rgba(0, 214, 143, 0.1);
-    border: 1px solid rgba(0, 214, 143, 0.3);
-    color: var(--success);
-    padding: 10px 14px;
-    border-radius: 10px;
-    font-size: 0.82rem;
-    margin-bottom: 1rem;
-    animation: fadeSlideIn 0.3s ease;
-}
-
-.hidden {
-    display: none !important;
-}
-
-/* --- Responsive --- */
-
-/* 平板：維持左右雙欄，略縮內距 */
-@media (max-width: 1024px) {
-    .auth-container {
-        width: min(900px, 100%);
-        min-height: auto;
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
     }
-
-    .brand-panel,
-    .form-panel {
-        padding: 2.25rem;
-    }
-
-    .brand-tagline {
-        margin-bottom: 2rem;
-    }
-}
-
-/* 手機：改為上下堆疊、垂直置中 */
-@media (max-width: 768px) {
-    body {
-        align-items: center;
-        justify-content: center;
-    }
-
-    .auth-container {
-        flex-direction: column;
-        width: 100%;
-        max-width: 420px;
-        min-height: auto;
-        border-radius: 18px;
-    }
-
-    .brand-panel {
-        flex: 0 0 auto;
-        padding: 1.75rem 1.5rem 1.25rem;
-        border-right: none;
-        border-bottom: 1px solid var(--border);
-        overflow: visible;
-    }
-
-    .brand-content {
-        width: 100%;
-        text-align: center;
-    }
-
-    .brand-logo {
-        justify-content: center;
-    }
-
-    .brand-logo h1 {
-        font-size: 1.5rem;
-    }
-
-    .brand-tagline {
-        font-size: 0.88rem;
-        margin-bottom: 0;
-        line-height: 1.55;
-    }
-
-    .brand-features {
-        display: none;
-    }
-
-    .form-panel {
-        flex: 0 0 auto;
-        width: 100%;
-        padding: 1.5rem 1.5rem 1.75rem;
-    }
-
-    .auth-form {
-        max-width: none;
-        margin: 0 auto;
-    }
-
-    .auth-form h2 {
-        font-size: 1.4rem;
-        text-align: center;
-    }
-
-    .form-subtitle {
-        text-align: center;
-    }
-
-    .social-btn.google-primary {
-        font-size: 0.95rem;
-        padding: 13px 16px;
-    }
-}
-
-/* 極窄手機（如 iPhone SE） */
-@media (max-width: 380px) {
-    body {
-        padding-left: max(0.75rem, env(safe-area-inset-left));
-        padding-right: max(0.75rem, env(safe-area-inset-right));
-    }
-
-    .auth-container {
-        border-radius: 14px;
-    }
-
-    .brand-panel,
-    .form-panel {
-        padding-left: 1rem;
-        padding-right: 1rem;
-    }
-
-    .login-theme-toggle {
-        width: 36px;
-        height: 36px;
-    }
-}
-
-/* 橫向小高度（手機 landscape） */
-@media (max-height: 520px) and (orientation: landscape) {
-    body {
-        align-items: flex-start;
-        justify-content: center;
-        padding-top: max(1rem, env(safe-area-inset-top));
-    }
-
-    .auth-container {
-        min-height: auto;
-        max-width: min(520px, 100%);
-    }
-
-    .brand-panel {
-        padding: 1rem 1.25rem;
-    }
-
-    .brand-tagline {
-        margin-bottom: 0;
-    }
-
-    .form-panel {
-        padding: 1rem 1.25rem 1.25rem;
-    }
-}
-
-/* ============================================
-   Light Theme（與 index 共用 insightUiTheme）
-   ============================================ */
-body.light-theme {
-    --bg-dark: #f4f4f5;
-    --sidebar-bg: #ffffff;
-    --text-main: #1c1c1e;
-    --text-dim: #52525b;
-    --accent: #404045;
-    --accent-glow: rgba(0, 0, 0, 0.08);
-    --border: #e4e4e7;
-    --card-bg: rgba(0, 0, 0, 0.04);
-    --glass: rgba(255, 255, 255, 0.92);
-    --login-container-bg: rgba(255, 255, 255, 0.92);
-    --login-container-shadow: 0 20px 60px rgba(0, 0, 0, 0.1);
-    --login-brand-gradient: linear-gradient(135deg, #ececee 0%, #f8f8f9 100%);
-    --login-brand-glow: rgba(0, 0, 0, 0.04);
-    --login-logo-gradient: linear-gradient(to right, #1a1a1a, #666666);
-    --login-grid-line: rgba(0, 0, 0, 0.06);
-    --login-input-bg: #f4f4f5;
-    --login-social-hover-bg: rgba(0, 0, 0, 0.03);
-    --login-google-btn-bg: #ffffff;
-    --login-google-btn-border: #e4e4e7;
-    --login-google-btn-hover-bg: #f4f4f5;
-    --login-google-btn-hover-border: #d4d4d8;
-    --login-primary-text: #ffffff;
-    --login-primary-hover: #52525b;
-    --login-placeholder: #a1a1aa;
-    --login-link-hover: #27272a;
-    --login-toggle-hover-bg: rgba(0, 0, 0, 0.04);
-}
-
-body.light-theme .primary-btn {
-    background: var(--accent);
-    color: var(--login-primary-text);
-}
-
-body.light-theme .primary-btn:hover {
-    background: var(--login-primary-hover);
-}
-
-body.light-theme .btn-loader span {
-    background: #fff;
-}
-
-body.light-theme .brand-logo h1 {
-    color: #1a1a1a;
 }
