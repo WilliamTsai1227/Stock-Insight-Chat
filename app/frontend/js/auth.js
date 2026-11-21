@@ -957,7 +957,7 @@ async function confirmDeleteAccount() {
             return;
         }
 
-        msgEl.textContent = '帳號已永久刪除，即將跳轉...';
+        msgEl.textContent = '帳號已永久刪除，即將跳轉…';
         msgEl.className = 'modal-msg success';
 
         setTimeout(() => {

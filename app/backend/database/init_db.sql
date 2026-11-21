@@ -108,6 +108,14 @@ CREATE TABLE IF NOT EXISTS chats (
 
 -- 對已存在資料庫進行 migration（冪等）
 ALTER TABLE chats ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
+-- V012：對話來源（main = 主聊天室；assistant = 浮動 AI 小助手，不列在主側欄）
+ALTER TABLE chats ADD COLUMN IF NOT EXISTS source VARCHAR(16) NOT NULL DEFAULT 'main';
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_chats_source') THEN
+        ALTER TABLE chats ADD CONSTRAINT chk_chats_source CHECK (source IN ('main', 'assistant'));
+    END IF;
+END $$;
 
 -- 12. 建立 token_usage_logs 表 (Token 使用詳細流水帳)
 -- 須在 chats 之後建立（chat_id 外鍵）
@@ -394,3 +402,20 @@ CREATE TABLE IF NOT EXISTS insight_results (
 );
 
 CREATE INDEX IF NOT EXISTS idx_insight_results_job ON insight_results(job_id);
+
+-- V013：對話公開分享連結（唯讀快照），詳見 migrations/V013__chat_shares.sql
+CREATE TABLE IF NOT EXISTS chat_shares (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    token         VARCHAR(64)  NOT NULL UNIQUE,
+    chat_id       UUID         NOT NULL UNIQUE REFERENCES chats(id) ON DELETE CASCADE,
+    user_id       UUID         NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title         VARCHAR(255) NOT NULL,
+    snapshot      JSONB        NOT NULL,          -- [{role, content, created_at}]，已排除失敗的回覆
+    message_count INTEGER      NOT NULL CHECK (message_count >= 0),
+    truncated     BOOLEAN      NOT NULL DEFAULT FALSE,  -- 超過上限時只保留最新的訊息
+    view_count    INTEGER      NOT NULL DEFAULT 0,
+    created_at    TIMESTAMPTZ  NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TIMESTAMPTZ  NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_shares_user ON chat_shares(user_id);

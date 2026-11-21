@@ -113,7 +113,7 @@
     margin: 0;
     overflow: hidden;
     color: var(--text-main);
-    font-family: 'Outfit', sans-serif;
+    font-family: var(--font-sans);
     font-size: 1.12rem;
     font-weight: 600;
     text-overflow: ellipsis;

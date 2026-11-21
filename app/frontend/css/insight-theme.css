@@ -1,0 +1,380 @@
+/*
+ * Insight 視覺層（最後載入，覆蓋 index.css 與各頁樣式的配色、字體與回答排版）
+ * ------------------------------------------------------------------
+ * 方向：給台灣投資人的研究工具，讀起來像一份批註過的研究筆記，而不是聊天室。
+ * - 配色：墨青單一強調色＋中性紙色／板岩色。紅、綠在台股代表漲、跌，只留給行情語意，不拿來裝飾。
+ * - 字體：Noto Sans TC 負責介面與內文；Noto Serif TC 只用在品牌、頁面標題與歡迎語，像研究報告的標題。
+ * - 回答：AI 回答不再是卡片泡泡，是一欄好讀的長文；使用者的提問保留小泡泡，兩者一眼分得出來。
+ * 與公開分享頁（share-page.css）同一套色票。拿掉 index.html 裡引入本檔的那一行即回到舊外觀。
+ */
+
+/* ── 色票與字體（深色預設）──────────────────────────── */
+:root {
+    --font-sans: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', system-ui, sans-serif;
+    --font-serif: 'Noto Serif TC', 'Songti TC', 'PMingLiU', serif;
+
+    --bg-dark: #182024;
+    --sidebar-bg: #141B1E;
+    --text-main: #E4E9E8;
+    --text-dim: #93A09F;
+    --accent: #7CC0C4;
+    --accent-rgb: 124, 192, 196;
+    --accent-glow: rgba(124, 192, 196, 0.16);
+    --accent-ink: #10181B;
+    --border: #2D393D;
+    --card-bg: rgba(228, 233, 232, 0.03);
+    --glass: rgba(24, 32, 36, 0.86);
+    --bubble-ai: transparent;
+    --bubble-user: #253034;
+    --panel-header-bg: #1F282C;
+    --panel-body-bg: rgba(228, 233, 232, 0.02);
+    --dropdown-bg: #1F282C;
+    --dropdown-shadow: 0 16px 40px rgba(4, 10, 12, 0.5);
+    --modal-bg: #1F282C;
+    --modal-shadow: 0 24px 60px rgba(4, 10, 12, 0.55);
+    --modal-input-bg: rgba(228, 233, 232, 0.04);
+    --delete-modal-bg: #253034;
+    --content-surface-gradient: var(--bg-dark);
+    --popover-bg: #1F282C;
+    --surface-hover: rgba(124, 192, 196, 0.07);
+    --surface-border-subtle: rgba(228, 233, 232, 0.05);
+    --tip-bg: rgba(124, 192, 196, 0.06);
+    --mode-btn-bg: rgba(228, 233, 232, 0.04);
+    --menu-option-selected-bg: rgba(124, 192, 196, 0.14);
+    --code-block-bg: #121A1D;
+    --code-block-header-bg: rgba(228, 233, 232, 0.04);
+
+    --answer-width: 46rem;
+}
+
+body.light-theme {
+    --bg-dark: #F5F6F4;
+    --sidebar-bg: #ECEFEE;
+    --text-main: #1C2326;
+    --text-dim: #5E686C;
+    --accent: #1D6B73;
+    --accent-rgb: 29, 107, 115;
+    --accent-glow: rgba(29, 107, 115, 0.12);
+    --accent-ink: #FFFFFF;
+    --border: #D8DDDC;
+    --card-bg: rgba(28, 35, 38, 0.03);
+    --glass: rgba(245, 246, 244, 0.9);
+    --bubble-ai: transparent;
+    --bubble-user: #E3E9E8;
+    --panel-header-bg: #ECEFEE;
+    --panel-body-bg: #FFFFFF;
+    --dropdown-bg: #FFFFFF;
+    --dropdown-shadow: 0 14px 36px rgba(28, 35, 38, 0.12);
+    --modal-bg: #FFFFFF;
+    --modal-shadow: 0 22px 50px rgba(28, 35, 38, 0.14);
+    --modal-input-bg: #F5F6F4;
+    --delete-modal-bg: #FFFFFF;
+    --content-surface-gradient: var(--bg-dark);
+    --popover-bg: #FFFFFF;
+    --surface-hover: rgba(29, 107, 115, 0.06);
+    --surface-border-subtle: rgba(28, 35, 38, 0.06);
+    --tip-bg: rgba(29, 107, 115, 0.05);
+    --mode-btn-bg: rgba(28, 35, 38, 0.04);
+    --menu-option-selected-bg: rgba(29, 107, 115, 0.1);
+    --code-block-bg: #ECEFEE;
+    --code-block-header-bg: #E3E8E7;
+}
+
+body {
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: "palt" 0;
+}
+
+.main-content,
+body.light-theme .main-content {
+    background: var(--bg-dark);
+}
+
+/* ── 品牌與頁面標題（serif）────────────────────────── */
+.logo {
+    font-family: var(--font-serif);
+    font-weight: 600;
+    font-size: 1.2rem;
+    color: var(--text-main);
+    letter-spacing: 0.01em;
+}
+.logo i, .logo svg { color: var(--accent); }
+
+.chat-title-info h2 {
+    font-family: var(--font-serif);
+    font-weight: 600;
+    letter-spacing: 0.01em;
+}
+
+.chat-header { padding: 1rem 2.5rem; }
+
+/* 狀態只在進行中出現（閒置時文字為空） */
+.status-badge {
+    background: var(--tip-bg);
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+}
+.status-badge:empty { display: none; }
+.status-badge.is-loading { background: var(--mode-btn-bg); color: var(--text-dim); }
+
+/* ── 側欄：安靜的清單，不是一排卡片 ───────────────────── */
+.sidebar { padding: 1.1rem 0.75rem; }
+
+.new-chat-btn {
+    border-color: transparent;
+    border-radius: 8px;
+    padding: 0.55rem 0.75rem;
+    margin-bottom: 0.15rem;
+    color: var(--text-main);
+}
+.new-chat-btn:hover {
+    background: var(--surface-hover);
+    border-color: transparent;
+    color: var(--text-main);
+}
+.new-chat-btn:hover i { color: var(--accent); }
+
+/* 「新對話」是側欄唯一的主要動作：保留外框並與下方導覽拉開距離 */
+#new-chat-btn {
+    border-color: var(--border);
+    margin-bottom: 0.9rem;
+}
+#new-chat-btn:hover { border-color: rgba(var(--accent-rgb), 0.5); }
+
+.explore-btn.active,
+.new-chat-btn.active {
+    background: var(--menu-option-selected-bg);
+    border-color: transparent;
+    color: var(--text-main);
+}
+.explore-btn.active i { color: var(--accent); }
+
+/* ── 歡迎畫面 ─────────────────────────────────────── */
+.welcome-hero h1,
+body.light-theme .welcome-hero h1 {
+    font-family: var(--font-serif);
+    font-weight: 600;
+    font-size: clamp(1.75rem, 1.3rem + 1.6vw, 2.4rem);
+    letter-spacing: 0.01em;
+    background: none;
+    -webkit-background-clip: border-box;
+    -webkit-text-fill-color: currentColor;
+    color: var(--text-main);
+    word-break: keep-all;
+}
+
+.welcome-subtitle { color: var(--text-dim); }
+
+.welcome-suggestions { max-width: 600px; gap: 0.5rem; }
+
+.suggestion-chip,
+body.light-theme .suggestion-chip {
+    background: transparent;
+    border-color: var(--border);
+    border-radius: 10px;
+    padding: 0.6rem 0.95rem;
+    font-size: 0.86rem;
+    color: var(--text-main);
+}
+.suggestion-chip:hover,
+body.light-theme .suggestion-chip:hover {
+    background: var(--surface-hover);
+    border-color: rgba(var(--accent-rgb), 0.45);
+}
+
+/* ── 對話：提問是小泡泡，回答是一欄長文 ───────────────── */
+.chat-messages { gap: 2.25rem; }
+
+.message.user .bubble {
+    background: var(--bubble-user);
+    border-radius: 16px 16px 4px 16px;
+    padding: 0.8rem 1.1rem;
+    line-height: 1.7;
+}
+
+.message.ai {
+    max-width: min(100%, var(--answer-width));
+    width: 100%;
+}
+
+.ai .bubble {
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    padding: 0.15rem 0 0;
+    font-size: 1rem;
+    line-height: 1.85;
+    color: var(--text-main);
+}
+
+.ai .bubble h1,
+.ai .bubble h2,
+.ai .bubble h3,
+.ai .bubble h4 {
+    font-family: var(--font-sans);
+    color: var(--text-main);
+    font-weight: 700;
+    line-height: 1.45;
+    margin-top: 1.9rem;
+    margin-bottom: 0.6rem;
+    word-break: keep-all;
+    overflow-wrap: anywhere;
+}
+
+.ai .bubble h2 {
+    font-size: 1.2rem;
+    padding-bottom: 0;
+    border-bottom: 0;
+    background: none;
+    -webkit-background-clip: border-box;
+    -webkit-text-fill-color: currentColor;
+}
+
+.ai .bubble h3 {
+    font-size: 1.06rem;
+    color: var(--text-main);
+    display: block;
+}
+.ai .bubble h3::before { content: none; }
+
+.ai .bubble h4 { font-size: 1rem; opacity: 1; color: var(--text-dim); }
+
+.ai .bubble p { line-height: 1.85; margin-bottom: 1rem; color: var(--text-main); }
+
+/* 粗體就是粗體：不再是灰色小標籤 */
+.ai .bubble strong {
+    background: none;
+    padding: 0;
+    border-radius: 0;
+    color: var(--text-main);
+    font-weight: 700;
+}
+
+/* 列表：一般的項目符號與編號，跟內文對齊 */
+.ai .bubble ul,
+.ai .bubble ol { margin: 0.4rem 0 1rem; padding-left: 1.35em; }
+.ai .bubble ul { list-style: disc; }
+.ai .bubble ol { list-style: decimal; }
+.ai .bubble li { padding: 0.15rem 0 0.15rem 0.2rem; line-height: 1.8; }
+.ai .bubble ul > li::before,
+.ai .bubble ol > li::before { content: none; }
+.ai .bubble li::marker { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+
+/* 引用：中文不做假斜體，用左側墨青線區隔 */
+.ai .bubble blockquote {
+    font-style: normal;
+    background: none;
+    border-left: 2px solid var(--accent);
+    border-radius: 0;
+    padding: 0.1rem 0 0.1rem 1rem;
+    color: var(--text-dim);
+}
+
+.ai .bubble hr { background: var(--border); }
+
+/* 表格：數字等寬對齊，表頭不大寫、不上色 */
+.ai .bubble table {
+    border: 0;
+    border-radius: 0;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+    font-variant-numeric: tabular-nums;
+}
+.ai .bubble thead { background: none; }
+.ai .bubble th {
+    color: var(--text-main);
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: 0.86rem;
+    font-weight: 700;
+    padding: 0.55rem 1rem 0.55rem 0;
+    border-bottom: 1px solid var(--text-dim);
+}
+.ai .bubble td {
+    padding: 0.55rem 1rem 0.55rem 0;
+    border-bottom: 1px solid var(--border);
+}
+.ai .bubble tr:last-child td { border-bottom: 1px solid var(--border); }
+.ai .bubble tbody tr:hover { background: var(--surface-hover); }
+
+.ai .bubble a {
+    color: var(--accent);
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.2em;
+}
+.ai .bubble a:hover { text-decoration-thickness: 2px; }
+
+/* ── 輸入框 ───────────────────────────────────────── */
+.input-container {
+    background: var(--panel-header-bg);
+    border-radius: 16px;
+    box-shadow: 0 8px 28px rgba(4, 10, 12, 0.28);
+}
+body.light-theme .input-container { background: #FFFFFF; box-shadow: 0 8px 24px rgba(28, 35, 38, 0.08); }
+.input-container:focus-within {
+    border-color: rgba(var(--accent-rgb), 0.55);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+/* 主要按鈕：墨青底、深色字（深色模式）／白字（淺色模式） */
+.send-btn:not(:disabled),
+.modal-btn.primary {
+    background: var(--accent);
+    color: var(--accent-ink);
+}
+.modal-btn.primary:hover { background: var(--accent); filter: brightness(1.08); }
+
+/* ── 頭像 ─────────────────────────────────────────── */
+.user-avatar-btn,
+.dropdown-avatar,
+body.light-theme .user-avatar-btn,
+body.light-theme .dropdown-avatar {
+    background: var(--tip-bg);
+    color: var(--accent);
+    border: 1px solid rgba(var(--accent-rgb), 0.3);
+}
+
+/* ── 窄螢幕 ───────────────────────────────────────── */
+@media (max-width: 768px) {
+    .chat-header { padding: 0.75rem 1rem; }
+    .ai .bubble { font-size: 0.98rem; }
+}
+
+/* ── 圖示尺寸：lucide 會把 <i> 換成 <svg>，舊規則只寫 i 所以沒生效 ── */
+.new-chat-btn svg { width: 18px; height: 18px; flex-shrink: 0; color: var(--text-dim); }
+.new-chat-btn:hover svg,
+.explore-btn.active svg { color: var(--accent); }
+.copy-btn svg { width: 13px; height: 13px; }
+.header-actions .icon-btn svg { width: 19px; height: 19px; }
+
+/* 「已複製」用墨青，不用綠色（綠色在台股是下跌） */
+.copy-btn.copied {
+    color: var(--accent);
+    border-color: rgba(var(--accent-rgb), 0.45);
+    background: var(--tip-bg);
+}
+
+/* ── 直立手機：標題列四個按鈕都留著（分享在手機上最常用），縮成 32px、不留間距 ── */
+@media (max-width: 480px) {
+    .header-actions { gap: 0; }
+    .header-actions > .icon-btn,
+    .header-actions > #share-chat-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 36px;
+    }
+    .header-actions .icon-btn svg { width: 18px; height: 18px; }
+    .user-avatar-btn { margin-left: 4px; }
+
+    /* AI 小助手按鈕移到輸入框上方，不再蓋住免責聲明 */
+    .ai-assistant-fab {
+        width: 46px;
+        height: 46px;
+        bottom: calc(12.25rem + env(safe-area-inset-bottom));
+        right: 0.85rem;
+    }
+}

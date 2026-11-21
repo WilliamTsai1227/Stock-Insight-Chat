@@ -174,6 +174,8 @@ def _resolve_request_skill(request: "MessageRequest"):
 class CreateChatRequest(BaseModel):
     query: str = Field(..., max_length=_QUERY_MAX_CHARS)  # 第一條訊息（用於產生 placeholder title）
     project_id: Optional[UUID] = None   # 可選：指定隸屬的 project
+    # main = 主聊天室；assistant = 浮動 AI 小助手（不列在主側欄、不可指定 project）
+    source: Literal["main", "assistant"] = "main"
 
 
 # Title 長度上限（DB 為 VARCHAR(255)，這裡再多保一層防呆）
@@ -592,7 +594,12 @@ async def create_chat(
             detail="Query cannot be empty.",
         )
 
-    # 2. project_id ownership 驗證
+    # 2. project_id ownership 驗證（小助手對話不隸屬任何 project）
+    if request.source == "assistant" and request.project_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="AI 小助手的對話不能指定 project。",
+        )
     if request.project_id is not None:
         owner = await db.fetchval(
             "SELECT user_id FROM projects WHERE id = $1",
@@ -615,14 +622,15 @@ async def create_chat(
     try:
         row = await db.fetchrow(
             """
-            INSERT INTO chats (project_id, user_id, title, title_generated, created_at)
-            VALUES ($1, $2, $3, FALSE, $4)
+            INSERT INTO chats (project_id, user_id, title, title_generated, created_at, source)
+            VALUES ($1, $2, $3, FALSE, $4, $5)
             RETURNING id, project_id, title, created_at
             """,
             request.project_id,
             user_id,
             placeholder,
             now_utc,
+            request.source,
         )
     except asyncpg.PostgresError as e:
         raise HTTPException(
@@ -653,6 +661,7 @@ async def list_all_chats(
     """
     讀取目前登入使用者的「最近」聊天（未隸屬任何 project），依 updated_at 由近到遠排序。
     已加入專案的 chat 請由 GET /api/project 取得，不在此列表回傳。
+    浮動 AI 小助手的對話（source = 'assistant'）也不在此列表。
 
     安全設計：
     - user_id 由 JWT 解析，前端不需也不應傳遞（避免越權讀取他人 chats）
@@ -671,7 +680,7 @@ async def list_all_chats(
             """
             SELECT id, title, project_id, created_at, updated_at
             FROM chats
-            WHERE user_id = $1 AND project_id IS NULL
+            WHERE user_id = $1 AND project_id IS NULL AND source = 'main'
             ORDER BY updated_at DESC
             """,
             user_id,

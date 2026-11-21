@@ -43,15 +43,24 @@ function initThemeToggle() {
 }
 
 // ── OAuth 錯誤代碼對應訊息 ────────────────────────────────────────
+// 後端 auth.py 的 _fe_error() 會帶這些代碼回來（Google 端的 access_denied 等一律轉成 oauth_cancelled）。
+// 每則都說明發生什麼事、下一步怎麼做；不出現 CSRF、Session 這類技術名詞。
 const OAUTH_ERROR_MESSAGES = {
-    oauth_cancelled:      '您已取消 Google 授權，請重新嘗試。',
-    invalid_state:        '登入驗證失敗（CSRF），請重新嘗試。',
-    token_exchange_failed:'與 Google 建立連線失敗，請稍後再試。',
-    userinfo_failed:      '無法取得 Google 帳號資訊，請稍後再試。',
-    missing_user_info:    'Google 未提供必要帳號資訊，請確認授權範圍。',
-    db_error:             '伺服器發生錯誤，請稍後再試。',
-    session_error:        '無法建立登入 Session，請稍後再試。',
+    oauth_cancelled:       '你在 Google 畫面取消了登入。準備好時再按一次「以 Google 帳號登入」。',
+    invalid_state:         '登入連結已失效，可能是停留太久或開了多個分頁。請再按一次「以 Google 帳號登入」。',
+    token_exchange_failed: 'Google 暫時沒有回應，請過一分鐘再試一次。',
+    no_access_token:       'Google 沒有完成授權，請再試一次。',
+    userinfo_failed:       '暫時讀不到你的 Google 帳號資料，請過一分鐘再試一次。',
+    missing_user_info:     'Google 沒有提供電子郵件。請在 Google 的授權畫面允許 Insight 讀取電子郵件後再登入。',
+    db_error:              'Insight 伺服器暫時無法完成登入，請稍後再試。',
+    session_error:         'Insight 伺服器暫時無法完成登入，請稍後再試。',
 };
+
+/** 對照表外的代碼：先給下一步，代碼只當回報用的參考 */
+function oauthErrorMessage(code) {
+    return OAUTH_ERROR_MESSAGES[code]
+        || `登入沒有完成，請再試一次。如果一直失敗，回報問題時請附上代碼：${code}`;
+}
 
 // ── 服務條款 / 隱私條款 Modal ───────────────────────────────────
 
@@ -163,7 +172,7 @@ window.addEventListener('DOMContentLoaded', () => {
     const params = new URLSearchParams(window.location.search);
     const errorCode = params.get('error');
     if (errorCode) {
-        const msg = OAUTH_ERROR_MESSAGES[errorCode] || `登入失敗（${errorCode}），請重新嘗試。`;
+        const msg = oauthErrorMessage(errorCode.slice(0, 64));
         const errorEl = document.getElementById('oauth-error');
         errorEl.textContent = msg;
         errorEl.classList.remove('hidden');
@@ -177,7 +186,7 @@ window.addEventListener('DOMContentLoaded', () => {
 document.getElementById('google-login-btn').addEventListener('click', () => {
     const btn = document.getElementById('google-login-btn');
     btn.disabled = true;
-    btn.querySelector('span').textContent = '跳轉至 Google...';
+    btn.querySelector('span').textContent = '跳轉至 Google…';
 
     // 帶上目前前端 origin，OAuth 完成後回到同一網址（區網 IP 不會被導到 localhost）
     const returnUrl = encodeURIComponent(window.location.origin);

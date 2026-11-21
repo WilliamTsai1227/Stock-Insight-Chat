@@ -98,6 +98,8 @@ function showPortfolioView() {
     document.querySelector('.chat-input-area').style.display = 'none';
 
     pfEl('portfolio-view').style.display = 'flex';
+    if (window.AI_ASSISTANT) window.AI_ASSISTANT.setContext({ mode: 'portfolio' });
+
     pfEl('portfolio-btn')?.classList.add('active');
     if (typeof setMainChatTitle === 'function') setMainChatTitle('投資組合');
 
@@ -114,6 +116,7 @@ function hidePortfolioView() {
     if (view) view.style.display = 'none';
     pfEl('portfolio-btn')?.classList.remove('active');
     pfStopPolling();
+    if (window.AI_ASSISTANT) window.AI_ASSISTANT.clearContext();
 }
 
 function switchPortfolioTab(tab) {
