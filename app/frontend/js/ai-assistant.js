@@ -265,7 +265,13 @@
     if (!win) return;
     state.open = open;
     win.classList.toggle('open', open);
+    // 手機版為全螢幕面板：開啟時隱藏浮動按鈕並鎖住背後頁面捲動（見 ai-assistant.css）
+    document.body.classList.toggle('ai-assistant-open', open);
   }
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && state.open) toggle(false);
+  });
 
   function setContext(context) {
     state.context = context || null;
