@@ -491,6 +491,23 @@ body.light-theme .pf-detail-card {
 .pf-detail-row dd small { display: block; font-size: 0.72rem; color: var(--text-dim); margin-top: 2px; }
 .pf-detail-row.strong dd { font-weight: 600; }
 
+.pf-detail-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    justify-content: flex-end;
+    margin-top: 1rem;
+    padding-top: 0.85rem;
+    border-top: 1px solid var(--border);
+}
+
+/* 窄螢幕：庫存表欄位多，右側的操作欄會被擠出畫面（看起來像不能刪除）。
+   這時收起操作欄，改成點列打開明細，在明細視窗裡編輯／移動／刪除。觀察清單欄位少，照常顯示。 */
+@media (max-width: 760px) {
+    .pf-table-holding th:last-child,
+    .pf-table-holding td.pf-row-actions { display: none; }
+}
+
 @media (pointer: coarse) {
     .pf-text-btn {
         min-height: 36px;
