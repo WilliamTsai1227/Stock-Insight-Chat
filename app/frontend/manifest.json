@@ -9,8 +9,8 @@
   "scope": "/",
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui"],
-  "background_color": "#182024",
-  "theme_color": "#182024",
+  "background_color": "#212121",
+  "theme_color": "#212121",
   "icons": [
     {
       "src": "/icons/icon-192.png",

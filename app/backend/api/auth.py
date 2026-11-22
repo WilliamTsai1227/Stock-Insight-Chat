@@ -35,6 +35,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from app.backend.database.postgresql import get_db
+from app.backend.module import desktop_auth
 from app.backend.module.jwt import (
     REFRESH_TOKEN_EXPIRE_DAYS,
     create_access_token,
@@ -67,6 +68,11 @@ _GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 _GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 
 router = APIRouter(tags=["User Authentication"])
+
+
+def _require_desktop_auth():
+    if os.getenv("DESKTOP_AUTH_ENABLED", "false").lower() != "true":
+        raise HTTPException(503, "Desktop login is not enabled on this server")
 
 
 # ── Response Schemas ──────────────────────────────────────────────────────────
@@ -149,7 +155,12 @@ async def _issue_refresh_token(
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.get("/api/user/auth/google/start")
-async def google_start(return_url: Optional[str] = None):
+async def google_start(
+    return_url: Optional[str] = None,
+    desktop_redirect_uri: Optional[str] = None,
+    desktop_code_challenge: Optional[str] = None,
+    desktop_state: Optional[str] = None,
+):
     """
     啟動 Google OAuth 登入流程。
 
@@ -165,6 +176,15 @@ async def google_start(return_url: Optional[str] = None):
 
     state = secrets.token_urlsafe(32)
     frontend_return = resolve_frontend_return_url(return_url)
+    desktop_context = None
+    if any(v is not None for v in (desktop_redirect_uri, desktop_code_challenge, desktop_state)):
+        _require_desktop_auth()
+        desktop_auth.validate_desktop_request(
+            desktop_redirect_uri or "", desktop_code_challenge or "", desktop_state or ""
+        )
+        desktop_context = desktop_auth.seal_context(
+            desktop_redirect_uri, desktop_code_challenge, desktop_state, state
+        )
 
     params = {
         "client_id": GOOGLE_CLIENT_ID,
@@ -198,6 +218,13 @@ async def google_start(return_url: Optional[str] = None):
         samesite="lax",
         max_age=600,
     )
+    if desktop_context:
+        redirect.set_cookie(
+            "oauth_desktop", desktop_context, httponly=True, secure=COOKIE_SECURE,
+            samesite="lax", max_age=600,
+        )
+    else:
+        redirect.delete_cookie("oauth_desktop")
     return redirect
 
 
@@ -209,6 +236,7 @@ async def google_callback(
     error: Optional[str] = None,
     oauth_state: Optional[str] = Cookie(None),
     oauth_return_url: Optional[str] = Cookie(None),
+    oauth_desktop: Optional[str] = Cookie(None),
 ):
     """
     Google OAuth Callback。
@@ -217,14 +245,27 @@ async def google_callback(
     前端偵測到 refresh_token Cookie 後，呼叫 POST /api/user/refresh 取得 Access Token。
     """
     frontend_base = resolve_frontend_return_url(oauth_return_url)
+    desktop_context = desktop_auth.read_context(oauth_desktop, oauth_state)
+
+    def auth_error(code):
+        if desktop_context:
+            response = RedirectResponse(desktop_auth.callback_url(desktop_context, error=code), 302)
+            response.delete_cookie("oauth_desktop")
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Referrer-Policy"] = "no-referrer"
+            return response
+        return _fe_error(code, frontend_base)
 
     # 0. 使用者在 Google 頁面取消授權
     if error:
-        return _fe_error("oauth_cancelled", frontend_base)
+        return auth_error("oauth_cancelled")
 
     # 1. 防 CSRF：驗 state
     if not state or not oauth_state or state != oauth_state:
-        return _fe_error("invalid_state", frontend_base)
+        return auth_error("invalid_state")
+    # Never silently turn an expired or tampered desktop login into a web login.
+    if oauth_desktop and not desktop_context:
+        return auth_error("invalid_state")
     # oauth_state Cookie 有 max_age=600，驗過後自然過期，無需主動刪除
 
     # 2. 用 code 換 Google Access Token
@@ -244,11 +285,11 @@ async def google_callback(
             token_data = token_resp.json()
     except httpx.HTTPError as e:
         print(f"[Google OAuth] Token exchange failed: {e}")
-        return _fe_error("token_exchange_failed", frontend_base)
+        return auth_error("token_exchange_failed")
 
     google_at = token_data.get("access_token")
     if not google_at:
-        return _fe_error("no_access_token", frontend_base)
+        return auth_error("no_access_token")
 
     # 3. 取 Google UserInfo（sub、email、name）
     try:
@@ -261,14 +302,14 @@ async def google_callback(
             userinfo = userinfo_resp.json()
     except httpx.HTTPError as e:
         print(f"[Google OAuth] UserInfo fetch failed: {e}")
-        return _fe_error("userinfo_failed", frontend_base)
+        return auth_error("userinfo_failed")
 
     google_sub: Optional[str] = userinfo.get("sub")
     email: Optional[str] = userinfo.get("email")
     display_name: str = userinfo.get("name") or (email.split("@")[0] if email else "user")
 
     if not google_sub or not email:
-        return _fe_error("missing_user_info", frontend_base)
+        return auth_error("missing_user_info")
 
     # 4. Upsert user
     now = datetime.now(timezone.utc)
@@ -345,7 +386,20 @@ async def google_callback(
 
     except Exception as e:
         print(f"[Google OAuth] DB error: {e}")
-        return _fe_error("db_error", frontend_base)
+        return auth_error("db_error")
+
+    if desktop_context:
+        _require_desktop_auth()
+        try:
+            handoff = await desktop_auth.issue_code(db, user["id"], desktop_context)
+        except Exception:
+            return auth_error("session_error")
+        redirect = RedirectResponse(desktop_auth.callback_url(desktop_context, code=handoff), 302)
+        for cookie in ("oauth_desktop", "oauth_state", "oauth_return_url"):
+            redirect.delete_cookie(cookie)
+        redirect.headers["Cache-Control"] = "no-store"
+        redirect.headers["Referrer-Policy"] = "no-referrer"
+        return redirect
 
     # 5. 簽發自有 AT + RT
     user_data = {"sub": str(user["id"]), "email": user["email"]}
@@ -375,6 +429,39 @@ async def google_callback(
         max_age=REFRESH_TOKEN_EXPIRE_DAYS * 86400,
     )
     return redirect
+
+
+class DesktopExchangeRequest(BaseModel):
+    code: str
+    code_verifier: str
+
+
+@router.get("/api/public/desktop-config")
+async def desktop_config(response: Response):
+    response.headers["Cache-Control"] = "no-store"
+    return {"enabled": os.getenv("DESKTOP_AUTH_ENABLED", "false").lower() == "true"}
+
+
+@router.post("/api/user/auth/desktop/exchange")
+async def desktop_exchange(
+    body: DesktopExchangeRequest,
+    response: Response,
+    db: asyncpg.Connection = Depends(get_db),
+):
+    """Exchange a single-use PKCE code for the existing HttpOnly desktop session."""
+    _require_desktop_auth()
+    async with db.transaction():
+        user_id = await desktop_auth.consume_code(db, body.code, body.code_verifier)
+        user = await db.fetchrow("SELECT id, email, status FROM users WHERE id = $1", user_id)
+        if not user or user["status"] == "disabled":
+            raise HTTPException(403, "Account unavailable")
+        rt = await _issue_refresh_token(db, user_id, {"sub": str(user_id), "email": user["email"]})
+    response.set_cookie(
+        "refresh_token", rt, httponly=True, secure=COOKIE_SECURE, samesite="lax",
+        max_age=REFRESH_TOKEN_EXPIRE_DAYS * 86400,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return {"status": "success"}
 
 
 @router.post("/api/user/logout")

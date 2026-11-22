@@ -1,0 +1,42 @@
+{
+  "name": "stock-insight-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Stock Insight Windows desktop client",
+  "author": "Stock Insight",
+  "main": "main.cjs",
+  "scripts": {
+    "prepare:renderer": "node scripts/prepare.cjs",
+    "start": "npm run prepare:renderer && electron .",
+    "test": "node --test test/*.test.cjs",
+    "smoke": "npm run prepare:renderer && electron scripts/smoke.cjs",
+    "pack": "npm run prepare:renderer && electron-builder --dir --publish never",
+    "dist:win": "npm run prepare:renderer && electron-builder --win nsis --x64 --publish never",
+    "verify:package": "node scripts/verify-package.cjs"
+  },
+  "devDependencies": {
+    "@electron/asar": "^4.0.1",
+    "electron": "45.4.1",
+    "electron-builder": "26.18.0"
+  },
+  "build": {
+    "appId": "xyz.insight-chat.desktop",
+    "productName": "Stock Insight",
+    "asar": true,
+    "directories": { "output": "dist" },
+    "files": ["main.cjs", "preload.cjs", "lib/**/*.cjs", "desktop.config.json", "renderer/**/*"],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "icon": "renderer/icons/icon-512.png",
+      "artifactName": "Stock-Insight-${version}-Windows-${arch}-Setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Stock Insight"
+    }
+  }
+}

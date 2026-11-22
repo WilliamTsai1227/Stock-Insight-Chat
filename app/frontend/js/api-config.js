@@ -10,6 +10,9 @@
  * - window.API_BACKEND_PORT = 8000            本機 backend port
  */
 function resolveStockInsightApiBase() {
+    if (window.stockInsightDesktop && window.stockInsightDesktop.apiBase) {
+        return window.stockInsightDesktop.apiBase;
+    }
     if (typeof window.STOCK_INSIGHT_API_BASE === 'string' && window.STOCK_INSIGHT_API_BASE) {
         return window.STOCK_INSIGHT_API_BASE.replace(/\/$/, '');
     }

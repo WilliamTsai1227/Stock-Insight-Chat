@@ -9,6 +9,8 @@
 
 ## 系統架構
 
+Windows 桌面客戶端 v0.1.0 已加入 [app/desktop](app/desktop/README.md)：打包現有前端，核心 API、資料庫與金鑰仍留在雲端；包含系統瀏覽器 Google 登入、Windows NSIS 安裝檔設定和 GitHub Actions 建置流程。首次使用前需部署桌面登入支援，詳見該目錄說明。
+
 ```mermaid
 flowchart LR
     subgraph Client["前端（S3 靜態託管 + Cloudflare）"]
