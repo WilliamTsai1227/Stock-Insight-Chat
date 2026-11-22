@@ -52,6 +52,10 @@ const OAUTH_ERROR_MESSAGES = {
     no_access_token:       'Google 沒有完成授權，請再試一次。',
     userinfo_failed:       '暫時讀不到你的 Google 帳號資料，請過一分鐘再試一次。',
     missing_user_info:     'Google 沒有提供電子郵件。請在 Google 的授權畫面允許 Insight 讀取電子郵件後再登入。',
+    unverified_email:      '請先在 Google 帳號完成電子郵件驗證，再重新登入。',
+    account_disabled:      '此帳號目前無法使用服務，請聯絡服務管理員。',
+    account_conflict:      '此電子郵件已綁定其他 Google 帳號，請使用原帳號登入。',
+    account_link_required: '此電子郵件已有帳號，請聯絡服務管理員完成帳號綁定。',
     db_error:              'Insight 伺服器暫時無法完成登入，請稍後再試。',
     session_error:         'Insight 伺服器暫時無法完成登入，請稍後再試。',
 };

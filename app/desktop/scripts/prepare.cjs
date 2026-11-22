@@ -25,5 +25,8 @@ function copy(relative) {
 fs.rmSync(target, { recursive: true, force: true });
 fs.mkdirSync(target, { recursive: true });
 for (const entry of ['index.html', 'login.html', 'share.html', 'manifest.json', 'js', 'css', 'icons']) copy(entry);
+// Only the trusted slide player is shared with the backend template, never server code.
+fs.copyFileSync(path.resolve(root, '../backend/deep_research/templates/deck-player.js'),
+    path.join(target, 'js/deck-player.js'));
 fs.writeFileSync(path.join(root, 'desktop.config.json'), JSON.stringify(config, null, 2) + '\n');
 console.log(`Prepared bundled frontend → ${config.apiBase}`);

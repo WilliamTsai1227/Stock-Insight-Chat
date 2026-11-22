@@ -19,6 +19,10 @@
     "electron": "45.4.1",
     "electron-builder": "26.18.0"
   },
+  "overrides": {
+    "app-builder-lib": { "minimatch": "11.0.1" },
+    "@electron/universal": { "minimatch": "11.0.1" }
+  },
   "build": {
     "appId": "xyz.insight-chat.desktop",
     "productName": "Stock Insight",

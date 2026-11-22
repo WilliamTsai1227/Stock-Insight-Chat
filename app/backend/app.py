@@ -69,7 +69,7 @@ from app.backend.module.upload_limit import UploadSizeLimitMiddleware
 
 app.add_middleware(
     UploadSizeLimitMiddleware,
-    paths=["/api/deep-research/runs", "/api/chat/deep-research"],
+    paths=["/api/deep-research/runs", "/api/chat/deep-research", "/api/files/upload"],
     # 檔案總量上限 + 2MB 給 multipart 邊界與文字欄位
     max_bytes=_UPLOAD_MAX_BYTES + 2 * 1024 * 1024,
 )
@@ -78,7 +78,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_ALLOWED_ORIGINS,
     # 支援 192.168.0.* 網段 (任意 port) 以及 localhost
-    allow_origin_regex=r"^https?://(192\.168\.0\.\d+)(:\d+)?$",
+    allow_origin_regex=(r"^https?://(192\.168\.0\.\d+)(:\d+)?$"
+                        if os.getenv("ALLOW_DEV_ORIGINS", "false").lower() == "true" else None),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

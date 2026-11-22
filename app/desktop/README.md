@@ -51,6 +51,17 @@ Google 登入使用系統預設瀏覽器；後端驗證成功後才把自有的�
 
 未設定 `DESKTOP_AUTH_ENABLED=true` 時，既有網頁登入保持原本行為，桌面登入會提示尚未啟用。
 
+### 安全修補的部署要求（2026-11-22）
+
+- 必須重新部署 backend / frontend 並重建桌面安裝檔，工作區修補才會生效。
+- `SECRET_KEY` 必須明確設定，至少 32 bytes；空值或舊開發預設金鑰會阻止啟動。
+- PostgreSQL TLS 現在驗證 CA 與 hostname。RDS / 私有 CA 若不在系統信任庫，需掛載 PEM bundle，並設定容器內的 `DATABASE_SSL_CA_FILE`；不再跳過憑證驗證。
+- 正式環境維持 `ALLOW_DEV_ORIGINS=false`，以 `CORS_ALLOWED_ORIGINS` 列出實際前端網址。區網開發才明確開啟。
+- 舊 Access Token 沒有 `type=access`，更新後會被拒絕；有效 Refresh Token 可正常換發。
+- 報告 iframe 使用不含 `allow-same-origin` 的 sandbox；桌面新視窗另外使用暫存 session 與 opaque origin。簡報播放器仍保留翻頁及講稿功能。
+- 舊 `/api/files/upload` 與 DELETE stub 未實作儲存與權限驗證，改回 501；對話附件流程不受影響。
+- 既有後端相依套件仍有待升級項目，詳見 `test/security/README.md`；本次修補不代表整個相依樹已無安全公告。
+
 ## 本機執行與 Windows 打包
 
 使用 Node.js 24 LTS。在 Windows PowerShell：

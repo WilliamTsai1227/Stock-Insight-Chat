@@ -77,6 +77,8 @@ docker compose ... exec backend env | grep <變數名>               # 驗證讀
 | :--- | :--- | :---: | :--- |
 | `DATABASE_URL` | `postgresql://postgres:password123@db:5432/Insight` | ✅ | asyncpg 連線字串 |
 | `DATABASE_SSL` | `""` | RDS 建議 | 設為 `require` / `true` / `1` 時以 TLS 連線 |
+| `DATABASE_SSL_CA_FILE` | `""` | 私有 CA / RDS 視需要 | 容器內 PEM CA bundle 路徑；TLS 必須驗證憑證鏈與主機名稱 |
+| `ALLOW_DEV_ORIGINS` | `false` | 僅區網開發 | 明確開啟後才允許 192.168.0.* CORS 與本機 / 區網 OAuth return origin；正式環境維持 false |
 
 - 程式會自動把 `postgresql+asyncpg://` 正規化為 `postgresql://`。
 - asyncpg **不支援** URL query 上的 `?ssl=require`（會觸發 `CantChangeRuntimeParamError`），因此需改用 `DATABASE_SSL` 環境變數；若連線字串裡寫了 `?ssl=`，程式會剝離後改以 `create_pool(ssl=...)` 傳入。

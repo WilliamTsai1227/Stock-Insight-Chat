@@ -32,7 +32,7 @@ import httpx
 from asyncpg.exceptions import UniqueViolationError
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.backend.database.postgresql import get_db
 from app.backend.module import desktop_auth
@@ -107,7 +107,7 @@ def _is_allowed_frontend_origin(origin: str) -> bool:
         return True
     if normalized in _CORS_ALLOWED_ORIGINS:
         return True
-    return bool(_FRONTEND_RETURN_ORIGIN_RE.match(normalized))
+    return os.getenv("ALLOW_DEV_ORIGINS", "false").lower() == "true" and bool(_FRONTEND_RETURN_ORIGIN_RE.fullmatch(normalized))
 
 
 def resolve_frontend_return_url(candidate: Optional[str]) -> str:
@@ -310,22 +310,32 @@ async def google_callback(
 
     if not google_sub or not email:
         return auth_error("missing_user_info")
+    if userinfo.get("email_verified") is not True:
+        return auth_error("unverified_email")
 
     # 4. Upsert user
     now = datetime.now(timezone.utc)
     try:
         user = await db.fetchrow(
-            "SELECT id, email, username FROM users WHERE google_sub = $1",
+            "SELECT id, email, username, status FROM users WHERE google_sub = $1",
             google_sub,
         )
 
         if not user:
             # 4a. 相同 email 的既有帳號（舊密碼帳號升級或帳號合併）→ 補綁 google_sub
             existing = await db.fetchrow(
-                "SELECT id, email, username FROM users WHERE email = $1",
+                "SELECT id, email, username, status, google_sub FROM users WHERE email = $1",
                 email,
             )
             if existing:
+                if existing["status"] == "disabled":
+                    return auth_error("account_disabled")
+                if existing.get("google_sub") and existing["google_sub"] != google_sub:
+                    return auth_error("account_conflict")
+                # A previously verified third-party email may have changed owners.
+                # Without a Gmail/Workspace identity, require a separate linking flow.
+                if not email.lower().endswith("@gmail.com") and not userinfo.get("hd"):
+                    return auth_error("account_link_required")
                 await db.execute(
                     """
                     UPDATE users
@@ -373,7 +383,7 @@ async def google_callback(
                     )
 
                 user = await db.fetchrow(
-                    "SELECT id, email, username FROM users WHERE id = $1",
+                    "SELECT id, email, username, status FROM users WHERE id = $1",
                     user_id,
                 )
         else:
@@ -387,6 +397,9 @@ async def google_callback(
     except Exception as e:
         print(f"[Google OAuth] DB error: {e}")
         return auth_error("db_error")
+
+    if not user or user["status"] == "disabled":
+        return auth_error("account_disabled")
 
     if desktop_context:
         _require_desktop_auth()
@@ -428,12 +441,16 @@ async def google_callback(
         samesite="lax",
         max_age=REFRESH_TOKEN_EXPIRE_DAYS * 86400,
     )
+    for cookie in ("oauth_desktop", "oauth_state", "oauth_return_url"):
+        redirect.delete_cookie(cookie)
+    redirect.headers["Cache-Control"] = "no-store"
+    redirect.headers["Referrer-Policy"] = "no-referrer"
     return redirect
 
 
 class DesktopExchangeRequest(BaseModel):
-    code: str
-    code_verifier: str
+    code: str = Field(min_length=43, max_length=43, pattern=r"^[A-Za-z0-9_-]+$")
+    code_verifier: str = Field(min_length=43, max_length=128, pattern=r"^[A-Za-z0-9._~-]+$")
 
 
 @router.get("/api/public/desktop-config")
@@ -536,7 +553,7 @@ async def refresh_access_token(
 
     # 3. 取使用者資料
     user = await db.fetchrow(
-        "SELECT id, email FROM users WHERE id = $1",
+        "SELECT id, email, status FROM users WHERE id = $1",
         consumed["user_id"],
     )
     if not user:
@@ -544,6 +561,8 @@ async def refresh_access_token(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found",
         )
+    if user["status"] == "disabled":
+        raise HTTPException(status_code=403, detail="Account is disabled.")
 
     # 4. 簽發新 AT
     user_data = {"sub": str(user["id"]), "email": user["email"]}
@@ -568,6 +587,7 @@ async def refresh_access_token(
         max_age=REFRESH_TOKEN_EXPIRE_DAYS * 86400,
     )
 
+    response.headers["Cache-Control"] = "no-store"
     return {
         "status": "success",
         "access_token": new_at,

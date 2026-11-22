@@ -5,6 +5,8 @@ const path = require('node:path');
 const { readConfig } = require('./lib/config.cjs');
 const { assetPath, CONTENT_TYPES } = require('./lib/assets.cjs');
 const { createLoginAttempt } = require('./lib/login.cjs');
+const { contentSecurityPolicy, reportPreviewUrl } = require('./lib/security.cjs');
+const { randomUUID } = require('node:crypto');
 const config = readConfig(require('./desktop.config.json'));
 const rendererRoot = path.join(__dirname, 'renderer');
 let mainWindow, loginAttempt;
@@ -33,11 +35,14 @@ function createWindow(desktopSession) {
     mainWindow.once('ready-to-show', () => mainWindow.show());
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
         if (url.startsWith('blob:' + config.frontendOrigin + '/')) {
-            // Generated reports use blob URLs. Give them a separate sandboxed
-            // window with no preload bridge, filesystem access, or opener.
+            // The blob inherits the app origin. Read its bytes, then display it
+            // inside an opaque sandbox with a separate, temporary cookie jar.
+            const previewSession = session.fromPartition('report-' + randomUUID());
+            previewSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+            previewSession.setPermissionCheckHandler(() => false);
             const preview = new BrowserWindow({
                 parent: mainWindow, width: 1100, height: 800, title: '報告預覽',
-                webPreferences: { session: desktopSession, nodeIntegration: false,
+                webPreferences: { session: previewSession, nodeIntegration: false,
                     contextIsolation: true, sandbox: true, webSecurity: true, webviewTag: false },
             });
             preview.webContents.setWindowOpenHandler(({ url: link }) => {
@@ -45,7 +50,15 @@ function createWindow(desktopSession) {
             });
             preview.webContents.on('will-navigate', event => event.preventDefault());
             preview.webContents.on('will-redirect', event => event.preventDefault());
-            preview.loadURL(url).catch(() => preview.close());
+            mainWindow.webContents.executeJavaScript(`(async () => {
+                const response = await fetch(${JSON.stringify(url)});
+                const blob = await response.blob();
+                if (blob.size > 10 * 1024 * 1024) throw new Error('Report too large');
+                return blob.text();
+            })()`).then(html => {
+                if (typeof html !== 'string' || html.length > 10 * 1024 * 1024) throw new Error('Invalid report');
+                return preview.loadURL(reportPreviewUrl(html));
+            }).catch(() => { if (!preview.isDestroyed()) preview.close(); });
         } else {
             openExternal(url);
         }
@@ -76,6 +89,7 @@ if (!app.requestSingleInstanceLock()) {
     });
     app.whenReady().then(async () => {
         const desktopSession = session.fromPartition('persist:stock-insight');
+        const deckPlayer = await fs.readFile(path.join(rendererRoot, 'js/deck-player.js'), 'utf8');
         desktopSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
         desktopSession.setPermissionCheckHandler(() => false);
         desktopSession.on('will-download', (_event, item) => {
@@ -96,6 +110,9 @@ if (!app.requestSingleInstanceLock()) {
                         'Content-Type': CONTENT_TYPES[path.extname(file)],
                         'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
                         'Referrer-Policy': 'strict-origin-when-cross-origin',
+                        ...(path.extname(file) === '.html' ? {
+                            'Content-Security-Policy': contentSecurityPolicy(bytes.toString('utf8'), config, deckPlayer),
+                        } : {}),
                     } });
                 } catch { return new Response(null, { status: 404 }); }
             }

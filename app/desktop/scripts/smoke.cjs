@@ -42,7 +42,8 @@ app.whenReady().then(() => {
 require('../main.cjs');
 
 app.whenReady().then(async () => {
-    const window = BrowserWindow.getAllWindows()[0];
+    const window = BrowserWindow.getAllWindows()[0] || await new Promise(resolve =>
+        app.once('browser-window-created', (_event, child) => resolve(child)));
     assert.ok(window, 'main window created');
     const finished = new Promise(resolve => window.webContents.once('did-finish-load', resolve));
     await finished;
@@ -92,6 +93,7 @@ app.whenReady().then(async () => {
     assert.equal(await response.text(), 'ok');
     const cookies = await ses.cookies.get({ name: 'desktop_smoke' });
     assert.equal(cookies[0].httpOnly, true, 'session fetch persists HttpOnly cookies');
+    console.log("Smoke: assert.equal(cookies[0].httpOnly, true, 'session fetch persi");
 
     const previewReady = new Promise(resolve => app.once('browser-window-created', (_event, child) => {
         child.webContents.once('did-finish-load', () => resolve(child));
@@ -101,9 +103,14 @@ app.whenReady().then(async () => {
     ), '_blank', 'noopener'); undefined;`);
     const preview = await previewReady;
     assert.deepEqual(await preview.webContents.executeJavaScript(`({
-        content: document.getElementById('preview').textContent,
         node: typeof require, bridge: typeof window.stockInsightDesktop, opener: window.opener
-    })`), { content: 'Report', node: 'undefined', bridge: 'undefined', opener: null });
+    })`), { node: 'undefined', bridge: 'undefined', opener: null });
+    const reportFrame = preview.webContents.mainFrame.frames[0];
+    assert.ok(reportFrame, 'report is inside an opaque iframe');
+    assert.equal(await reportFrame.executeJavaScript("document.getElementById('preview').textContent"), 'Report');
+    assert.equal(await reportFrame.executeJavaScript(`(()=>{
+        try { return parent.localStorage.getItem('desktop_smoke'); } catch { return 'blocked'; }
+    })()`), 'blocked', 'report cannot read parent storage');
     preview.close();
     console.log('Electron smoke passed: bundled UI, sandbox, preload, API override, route isolation, cloud opt-in, browser handoff, PKCE exchange, session cookies and isolated report preview.');
     clearTimeout(timeout);

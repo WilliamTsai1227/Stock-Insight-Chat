@@ -44,7 +44,7 @@ def read_context(token: str | None, oauth_state: str | None) -> dict | None:
     if not token or not oauth_state:
         return None
     try:
-        data = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        data = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM], options={"require_exp": True})
         if data.get("type") != "desktop_oauth" or not secrets.compare_digest(
             data.get("oauth_state", ""), oauth_state
         ):
