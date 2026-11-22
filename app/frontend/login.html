@@ -1,12 +1,12 @@
 <!DOCTYPE html>
-<html lang="zh-Hant-TW">
+<html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Insight | 登入</title>
     <!-- PWA：可安裝、iOS 加到主畫面後以獨立視窗（standalone）開啟 -->
     <link rel="manifest" href="/manifest.json">
-    <meta name="theme-color" content="#182024">
+    <meta name="theme-color" content="#0d0d0d">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <!-- default：內容排在狀態列下方，狀態列底色跟著 theme-color 走（淺色主題才不會頂一條黑） -->
@@ -15,11 +15,9 @@
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
     <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16.png">
-    <meta name="description" content="Insight 是給台股與美股投資人的 AI 研究助手：讀新聞、查基本面、看技術面，整理成一份讀得完的分析。">
+    <meta name="description" content="登入 Insight — AI 對話、即時網路搜尋與股市資料分析。">
     <link rel="stylesheet" href="/css/login.css">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/lucide@latest"></script>
     <script>
         (function () {
@@ -44,70 +42,71 @@
         })();
     </script>
 
-    <header class="login-top">
-        <span class="login-brand" translate="no">Insight</span>
-        <button type="button" id="theme-toggle-btn" class="login-theme-toggle" aria-label="切換淺色／深色模式" title="切換主題">
-            <i data-lucide="contrast" aria-hidden="true"></i>
-        </button>
-    </header>
+    <button type="button" id="theme-toggle-btn" class="login-theme-toggle" aria-label="切換淺色／深色模式" title="切換主題">
+        <i data-lucide="contrast"></i>
+    </button>
+    <!-- 背景動態粒子效果 -->
+    <div class="bg-grid"></div>
 
-    <main class="login-page">
-        <section class="login-intro" aria-labelledby="login-headline">
-            <h1 id="login-headline" class="login-headline">新聞、財報、技術面，<br>一次問清楚。</h1>
-            <p class="login-lede">Insight 是給台股與美股投資人的 AI 研究助手。問一個問題，它會讀新聞、查基本面、看技術面，整理成一份你讀得完的分析。</p>
-        </section>
-
-        <!-- 登入：頁面上唯一的動作（手機上排在範例之前） -->
-        <section class="login-action" aria-labelledby="login-action-title">
-            <h2 id="login-action-title" class="login-action-title">登入開始提問</h2>
-
-            <!-- OAuth 錯誤訊息 -->
-            <div id="oauth-error" class="error-msg hidden" role="alert"></div>
-
-            <button id="google-login-btn" type="button" class="social-btn google-primary">
-                <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-                    <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4"/>
-                    <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                    <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-                    <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-                </svg>
-                <span>以 Google 帳號登入</span>
-            </button>
-
-            <p class="sso-note">不需要另外設定密碼。Insight 只會取得你 Google 帳號的名稱、電子郵件與大頭貼。</p>
-
-            <p class="legal-consent">
-                繼續即表示你同意<button type="button" class="legal-link" id="terms-link" data-legal="terms">服務條款</button>與<button type="button" class="legal-link" id="privacy-link" data-legal="privacy">隱私條款</button>。
-            </p>
-        </section>
-
-        <!-- 範例：產品實際產出的樣子（批註式研究筆記），不放具體數字，避免被當成真實資料 -->
-        <figure class="login-specimen" aria-label="Insight 回答的範例">
-            <div class="specimen-q">
-                <span class="specimen-q-label">提問</span>
-                <p>台積電這季財報出來了，現在還適合買嗎？</p>
+    <div class="auth-container">
+        <!-- 左側品牌區 -->
+        <div class="brand-panel">
+            <div class="brand-content">
+                <div class="brand-logo">
+                    <i data-lucide="trending-up" class="brand-icon"></i>
+                    <h1>Insight</h1>
+                </div>
+                <p class="brand-tagline">對話、搜尋、分析 — 你的 AI Workspace</p>
+                <div class="brand-features">
+                    <div class="feature-item">
+                        <i data-lucide="message-circle"></i>
+                        <span>智慧對話，自然問答各類問題</span>
+                    </div>
+                    <div class="feature-item">
+                        <i data-lucide="globe"></i>
+                        <span>即時網路搜尋，取得最新資訊</span>
+                    </div>
+                    <div class="feature-item">
+                        <i data-lucide="trending-up"></i>
+                        <span>股市 Agent：新聞、AI 分析、標的搜尋</span>
+                    </div>
+                </div>
             </div>
-            <div class="specimen-a">
-                <p class="specimen-line">先說結論：基本面仍強，但短線漲多，適合分批布局而不是一次進場。</p>
-                <dl class="specimen-lenses">
-                    <div class="specimen-line">
-                        <dt>基本面</dt>
-                        <dd>營收與毛利率是否優於財測、先進製程比重的變化。</dd>
-                    </div>
-                    <div class="specimen-line">
-                        <dt>新聞面</dt>
-                        <dd>法說會重點、主要客戶動向與供應鏈消息。</dd>
-                    </div>
-                    <div class="specimen-line">
-                        <dt>技術面</dt>
-                        <dd>季線支撐、成交量變化與前波高點的壓力。</dd>
-                    </div>
-                </dl>
-                <p class="specimen-line specimen-sources">每個論點都附上來源，數字與推論分開標示。</p>
+        </div>
+
+        <!-- 右側登入區 -->
+        <div class="form-panel">
+            <div id="login-form" class="auth-form active">
+                <h2>歡迎使用</h2>
+                <p class="form-subtitle">登入以開始 AI 對話與搜尋</p>
+
+                <!-- OAuth 錯誤訊息 -->
+                <div id="oauth-error" class="error-msg hidden"></div>
+
+                <button id="google-login-btn" class="social-btn google-primary">
+                    <svg viewBox="0 0 24 24" width="20" height="20">
+                        <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4"/>
+                        <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+                        <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+                        <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+                    </svg>
+                    <span>以 Google 帳號登入</span>
+                </button>
+
+                <p class="sso-note">
+                    <i data-lucide="lock" style="width:12px;height:12px;vertical-align:middle;margin-right:4px;"></i>
+                    系統支援 Google 帳號登入，無需設定密碼
+                </p>
+
+                <p class="legal-consent">
+                    繼續表示您同意我們的
+                    <button type="button" class="legal-link" id="terms-link" data-legal="terms">服務條款</button>
+                    與
+                    <button type="button" class="legal-link" id="privacy-link" data-legal="privacy">隱私條款</button>
+                </p>
             </div>
-            <figcaption class="specimen-caption">回答範例</figcaption>
-        </figure>
-    </main>
+        </div>
+    </div>
 
     <!-- 服務條款 / 隱私條款 Modal -->
     <div class="legal-modal-overlay hidden" id="legal-modal" role="dialog" aria-modal="true" aria-labelledby="legal-modal-title">
