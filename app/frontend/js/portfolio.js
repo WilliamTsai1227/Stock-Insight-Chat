@@ -164,8 +164,9 @@ function renderPortfolioItems() {
     form.cost.required = isHolding;
     form.shares.required = isHolding;
 
+    pfEl('pf-item-head').closest('table')?.classList.toggle('pf-table-holding', isHolding);
     pfEl('pf-list-hint').textContent = isHolding
-        ? `已買進的股票（${items.length}/${pfState.limit}）。排程會分析每一檔，並給出整體配置調整建議。`
+        ? `已買進的股票（${items.length}/${pfState.limit}）。點一下股票可以看明細、編輯或刪除。排程會分析每一檔，並給出整體配置調整建議。`
         : `還沒買、想追蹤的股票（${items.length}/${pfState.limit}）。排程會分析每一檔，但不納入整體配置建議。`;
 
     const head = pfEl('pf-item-head');
@@ -433,6 +434,20 @@ function renderPortfolioDetail() {
 function closePortfolioDetail() {
     pfState.detail = null;
 }
+
+/** 明細視窗的操作按鈕：先關視窗再沿用表格上的同一套動作。
+ *  只移除 .show（下面的 MutationObserver 會清掉 pfState.detail）；不要在 closePortfolioDetail
+ *  裡改 class，否則每次寫入 class 都會再觸發 observer，形成無限迴圈。 */
+function runPortfolioDetailAction(action) {
+    const item = pfState.detail?.item;
+    if (!item) return;
+    pfEl('pf-detail-modal').classList.remove('show');
+    action(item);
+}
+
+pfEl('pf-detail-edit')?.addEventListener('click', () => runPortfolioDetailAction(editPortfolioItem));
+pfEl('pf-detail-move')?.addEventListener('click', () => runPortfolioDetailAction(movePortfolioItem));
+pfEl('pf-detail-delete')?.addEventListener('click', () => runPortfolioDetailAction(deletePortfolioItem));
 
 pfEl('pf-detail-ccy')?.addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-ccy]');

@@ -150,7 +150,8 @@ async def create_item(body: ItemCreate, user_id: UUID = Depends(get_current_user
             """, user_id, body.list_type, body.market, symbol, name, body.cost, body.shares)
     except asyncpg.UniqueViolationError:
         raise HTTPException(status.HTTP_409_CONFLICT,
-                            f"{body.market} {symbol} 已經在清單裡了（同一檔只能在庫存或觀察清單其中一個）。")
+                            f"{body.market} {symbol} 已經在清單裡了：同一檔只能有一筆（庫存或觀察清單其中一個）。"
+                            "加買請按「編輯」改成平均成本與總股數；寫錯可以按「刪除」後重新加入。")
     return {"status": "success", "data": _item_row(row)}
 
 
