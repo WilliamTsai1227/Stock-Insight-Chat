@@ -1,23 +1,23 @@
 /*
  * 公開分享頁：批註式研究筆記
  * 提問放在左側批註欄（serif，捲動時固定在該組回答旁），回答是主欄的長文。
- * 不用聊天泡泡、不用卡片；顏色只有墨青一個強調色。紅／綠在台股代表漲／跌，這裡不拿來裝飾。
+ * 不用聊天泡泡、不用卡片；只用中性灰階（與主站一致，參考 ChatGPT）。紅／綠在台股代表漲／跌，這裡不拿來裝飾。
  */
 
 :root {
-    --paper: #F5F6F4;
-    --ink: #1C2326;
-    --ink-soft: #3A4549;
-    --muted: #5E686C;
-    --rule: #D8DDDC;
-    --rail: #E9EEEC;
-    --accent: #1D6B73;
+    --paper: #FFFFFF;
+    --ink: #0D0D0D;
+    --ink-soft: #333333;
+    --muted: #5D5D5D;
+    --rule: #E5E5E5;
+    --rail: #F4F4F4;
+    --accent: #0D0D0D;
     --accent-ink: #FFFFFF;
-    --code-bg: #ECEFEE;
+    --code-bg: #F9F9F9;
     color-scheme: light;
 
-    --serif: 'Noto Serif TC', 'Songti TC', 'PMingLiU', serif;
-    --sans: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', system-ui, sans-serif;
+    --sans: ui-sans-serif, -apple-system, system-ui, "Segoe UI", "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", Helvetica, Arial, sans-serif;
+    --serif: var(--sans);
 
     /* 字級：以 1.125 為比例的小階梯，閱讀頁不需要誇張的大字 */
     --fs-small: 0.8125rem;
@@ -33,15 +33,15 @@
 }
 
 :root[data-theme="dark"] {
-    --paper: #182024;
-    --ink: #E4E9E8;
-    --ink-soft: #C3CCCB;
-    --muted: #93A09F;
-    --rule: #2D393D;
-    --rail: #1F292D;
-    --accent: #7CC0C4;
-    --accent-ink: #10181B;
-    --code-bg: #121A1D;
+    --paper: #212121;
+    --ink: #ECECEC;
+    --ink-soft: #CDCDCD;
+    --muted: #B4B4B4;
+    --rule: #383838;
+    --rail: #2A2A2A;
+    --accent: #ECECEC;
+    --accent-ink: #0D0D0D;
+    --code-bg: #171717;
     color-scheme: dark;
 }
 
@@ -167,7 +167,7 @@ a:hover { text-decoration-thickness: 2px; }
 
 .exchange-q-label {
     display: block;
-    color: var(--accent);
+    color: var(--muted);
     font-size: var(--fs-small);
     font-weight: 500;
     margin-bottom: 0.35rem;
@@ -219,7 +219,7 @@ a:hover { text-decoration-thickness: 2px; }
 .answer blockquote {
     margin: 1.4em 0;
     padding: 0.1em 0 0.1em 1.1em;
-    border-left: 2px solid var(--accent);
+    border-left: 2px solid var(--rule);
     color: var(--muted);
 }
 

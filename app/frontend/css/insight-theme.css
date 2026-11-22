@@ -1,83 +1,87 @@
 /*
  * Insight 視覺層（最後載入，覆蓋 index.css 與各頁樣式的配色、字體與回答排版）
  * ------------------------------------------------------------------
- * 方向：給台灣投資人的研究工具，讀起來像一份批註過的研究筆記，而不是聊天室。
- * - 配色：墨青單一強調色＋中性紙色／板岩色。紅、綠在台股代表漲、跌，只留給行情語意，不拿來裝飾。
- * - 字體：Noto Sans TC 負責介面與內文；Noto Serif TC 只用在品牌、頁面標題與歡迎語，像研究報告的標題。
- * - 回答：AI 回答不再是卡片泡泡，是一欄好讀的長文；使用者的提問保留小泡泡，兩者一眼分得出來。
+ * 方向：對齊 ChatGPT 的介面語彙——黑白灰中性色、系統字體、內容優先。
+ * - 配色：只有中性灰階，沒有彩色強調色；主要按鈕是黑底白字（深色模式反過來）。
+ *   紅、綠在台股代表漲、跌，只留給行情語意，不拿來裝飾。
+ * - 字體：系統字體（蘋方／微軟正黑／Segoe UI），不另外下載網路字型。
+ * - 回答：AI 回答不是卡片泡泡，是一欄好讀的長文；使用者的提問是淺灰圓角泡泡。
  * 與公開分享頁（share-page.css）同一套色票。拿掉 index.html 裡引入本檔的那一行即回到舊外觀。
  */
 
-/* ── 色票與字體（深色預設）──────────────────────────── */
+/* ── 色票與字體（深色預設，數值參考 ChatGPT 深色模式）────── */
 :root {
-    --font-sans: 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', system-ui, sans-serif;
-    --font-serif: 'Noto Serif TC', 'Songti TC', 'PMingLiU', serif;
+    --font-sans: ui-sans-serif, -apple-system, system-ui, "Segoe UI", "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", Helvetica, Arial, sans-serif;
+    --font-serif: var(--font-sans);
 
-    --bg-dark: #182024;
-    --sidebar-bg: #141B1E;
-    --text-main: #E4E9E8;
-    --text-dim: #93A09F;
-    --accent: #7CC0C4;
-    --accent-rgb: 124, 192, 196;
-    --accent-glow: rgba(124, 192, 196, 0.16);
-    --accent-ink: #10181B;
-    --border: #2D393D;
-    --card-bg: rgba(228, 233, 232, 0.03);
-    --glass: rgba(24, 32, 36, 0.86);
+    --bg-dark: #212121;
+    --sidebar-bg: #181818;
+    --text-main: #ECECEC;
+    --text-dim: #B4B4B4;
+    --accent: #ECECEC;
+    --accent-rgb: 236, 236, 236;
+    --accent-glow: rgba(255, 255, 255, 0.08);
+    --accent-ink: #0D0D0D;
+    --border: rgba(255, 255, 255, 0.1);
+    --card-bg: rgba(255, 255, 255, 0.03);
+    --glass: rgba(33, 33, 33, 0.9);
     --bubble-ai: transparent;
-    --bubble-user: #253034;
-    --panel-header-bg: #1F282C;
-    --panel-body-bg: rgba(228, 233, 232, 0.02);
-    --dropdown-bg: #1F282C;
-    --dropdown-shadow: 0 16px 40px rgba(4, 10, 12, 0.5);
-    --modal-bg: #1F282C;
-    --modal-shadow: 0 24px 60px rgba(4, 10, 12, 0.55);
-    --modal-input-bg: rgba(228, 233, 232, 0.04);
-    --delete-modal-bg: #253034;
+    --bubble-user: #303030;
+    --panel-header-bg: #2A2A2A;
+    --panel-body-bg: rgba(255, 255, 255, 0.02);
+    --dropdown-bg: #2F2F2F;
+    --dropdown-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+    --modal-bg: #2F2F2F;
+    --modal-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+    --modal-input-bg: rgba(255, 255, 255, 0.05);
+    --delete-modal-bg: #2F2F2F;
     --content-surface-gradient: var(--bg-dark);
-    --popover-bg: #1F282C;
-    --surface-hover: rgba(124, 192, 196, 0.07);
-    --surface-border-subtle: rgba(228, 233, 232, 0.05);
-    --tip-bg: rgba(124, 192, 196, 0.06);
-    --mode-btn-bg: rgba(228, 233, 232, 0.04);
-    --menu-option-selected-bg: rgba(124, 192, 196, 0.14);
-    --code-block-bg: #121A1D;
-    --code-block-header-bg: rgba(228, 233, 232, 0.04);
+    --popover-bg: #2F2F2F;
+    --surface-hover: rgba(255, 255, 255, 0.07);
+    --surface-border-subtle: rgba(255, 255, 255, 0.05);
+    --tip-bg: rgba(255, 255, 255, 0.06);
+    --mode-btn-bg: rgba(255, 255, 255, 0.04);
+    --menu-option-selected-bg: rgba(255, 255, 255, 0.1);
+    --code-block-bg: #171717;
+    --code-block-header-bg: #2F2F2F;
+    --composer-bg: #303030;
 
-    --answer-width: 46rem;
+    --answer-width: 48rem;
 }
 
+/* 淺色：數值參考 ChatGPT 淺色模式 */
 body.light-theme {
-    --bg-dark: #F5F6F4;
-    --sidebar-bg: #ECEFEE;
-    --text-main: #1C2326;
-    --text-dim: #5E686C;
-    --accent: #1D6B73;
-    --accent-rgb: 29, 107, 115;
-    --accent-glow: rgba(29, 107, 115, 0.12);
+    --bg-dark: #FFFFFF;
+    --sidebar-bg: #F9F9F9;
+    --text-main: #0D0D0D;
+    --text-dim: #5D5D5D;
+    --accent: #0D0D0D;
+    --accent-rgb: 13, 13, 13;
+    --accent-glow: rgba(0, 0, 0, 0.06);
     --accent-ink: #FFFFFF;
-    --border: #D8DDDC;
-    --card-bg: rgba(28, 35, 38, 0.03);
-    --glass: rgba(245, 246, 244, 0.9);
+    --border: rgba(0, 0, 0, 0.1);
+    --card-bg: rgba(0, 0, 0, 0.02);
+    --glass: rgba(255, 255, 255, 0.92);
     --bubble-ai: transparent;
-    --bubble-user: #E3E9E8;
-    --panel-header-bg: #ECEFEE;
+    --bubble-user: #F4F4F4;
+    --panel-header-bg: #F9F9F9;
     --panel-body-bg: #FFFFFF;
     --dropdown-bg: #FFFFFF;
-    --dropdown-shadow: 0 14px 36px rgba(28, 35, 38, 0.12);
+    --dropdown-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
     --modal-bg: #FFFFFF;
-    --modal-shadow: 0 22px 50px rgba(28, 35, 38, 0.14);
-    --modal-input-bg: #F5F6F4;
+    --modal-shadow: 0 20px 50px rgba(0, 0, 0, 0.12);
+    --modal-input-bg: #FFFFFF;
     --delete-modal-bg: #FFFFFF;
     --content-surface-gradient: var(--bg-dark);
     --popover-bg: #FFFFFF;
-    --surface-hover: rgba(29, 107, 115, 0.06);
-    --surface-border-subtle: rgba(28, 35, 38, 0.06);
-    --tip-bg: rgba(29, 107, 115, 0.05);
-    --mode-btn-bg: rgba(28, 35, 38, 0.04);
-    --menu-option-selected-bg: rgba(29, 107, 115, 0.1);
-    --code-block-bg: #ECEFEE;
-    --code-block-header-bg: #E3E8E7;
+    --surface-hover: rgba(0, 0, 0, 0.05);
+    --surface-border-subtle: rgba(0, 0, 0, 0.06);
+    --tip-bg: rgba(0, 0, 0, 0.04);
+    --mode-btn-bg: rgba(0, 0, 0, 0.03);
+    --menu-option-selected-bg: rgba(0, 0, 0, 0.07);
+    --code-block-bg: #F9F9F9;
+    --code-block-header-bg: #F0F0F0;
+    --composer-bg: #FFFFFF;
 }
 
 body {
@@ -91,7 +95,7 @@ body.light-theme .main-content {
     background: var(--bg-dark);
 }
 
-/* ── 品牌與頁面標題（serif）────────────────────────── */
+/* ── 品牌與頁面標題 ─────────────────────────────── */
 .logo {
     font-family: var(--font-serif);
     font-weight: 600;
@@ -99,7 +103,7 @@ body.light-theme .main-content {
     color: var(--text-main);
     letter-spacing: 0.01em;
 }
-.logo i, .logo svg { color: var(--accent); }
+.logo i, .logo svg { color: var(--text-main); }
 
 .chat-title-info h2 {
     font-family: var(--font-serif);
@@ -107,7 +111,7 @@ body.light-theme .main-content {
     letter-spacing: 0.01em;
 }
 
-.chat-header { padding: 1rem 2.5rem; }
+.chat-header { padding: 1rem 2.5rem; border-bottom-color: transparent; }
 
 /* 狀態只在進行中出現（閒置時文字為空） */
 .status-badge {
@@ -133,14 +137,14 @@ body.light-theme .main-content {
     border-color: transparent;
     color: var(--text-main);
 }
-.new-chat-btn:hover i { color: var(--accent); }
+.new-chat-btn:hover i { color: var(--text-main); }
 
-/* 「新對話」是側欄唯一的主要動作：保留外框並與下方導覽拉開距離 */
+/* 「新對話」是側欄唯一的主要動作：與下方導覽拉開距離（ChatGPT 式無外框） */
 #new-chat-btn {
-    border-color: var(--border);
+    border-color: transparent;
     margin-bottom: 0.9rem;
 }
-#new-chat-btn:hover { border-color: rgba(var(--accent-rgb), 0.5); }
+#new-chat-btn:hover { border-color: var(--border); }
 
 .explore-btn.active,
 .new-chat-btn.active {
@@ -148,15 +152,15 @@ body.light-theme .main-content {
     border-color: transparent;
     color: var(--text-main);
 }
-.explore-btn.active i { color: var(--accent); }
+.explore-btn.active i { color: var(--text-main); }
 
 /* ── 歡迎畫面 ─────────────────────────────────────── */
 .welcome-hero h1,
 body.light-theme .welcome-hero h1 {
     font-family: var(--font-serif);
     font-weight: 600;
-    font-size: clamp(1.75rem, 1.3rem + 1.6vw, 2.4rem);
-    letter-spacing: 0.01em;
+    font-size: clamp(1.6rem, 1.3rem + 1vw, 2rem);
+    letter-spacing: 0;
     background: none;
     -webkit-background-clip: border-box;
     -webkit-text-fill-color: currentColor;
@@ -172,15 +176,15 @@ body.light-theme .welcome-hero h1 {
 body.light-theme .suggestion-chip {
     background: transparent;
     border-color: var(--border);
-    border-radius: 10px;
-    padding: 0.6rem 0.95rem;
+    border-radius: 999px;
+    padding: 0.55rem 1rem;
     font-size: 0.86rem;
     color: var(--text-main);
 }
 .suggestion-chip:hover,
 body.light-theme .suggestion-chip:hover {
     background: var(--surface-hover);
-    border-color: rgba(var(--accent-rgb), 0.45);
+    border-color: var(--border);
 }
 
 /* ── 對話：提問是小泡泡，回答是一欄長文 ───────────────── */
@@ -188,8 +192,8 @@ body.light-theme .suggestion-chip:hover {
 
 .message.user .bubble {
     background: var(--bubble-user);
-    border-radius: 16px 16px 4px 16px;
-    padding: 0.8rem 1.1rem;
+    border-radius: 22px;
+    padding: 0.65rem 1.15rem;
     line-height: 1.7;
 }
 
@@ -261,11 +265,11 @@ body.light-theme .suggestion-chip:hover {
 .ai .bubble ol > li::before { content: none; }
 .ai .bubble li::marker { color: var(--text-dim); font-variant-numeric: tabular-nums; }
 
-/* 引用：中文不做假斜體，用左側墨青線區隔 */
+/* 引用：中文不做假斜體，用左側灰線區隔 */
 .ai .bubble blockquote {
     font-style: normal;
     background: none;
-    border-left: 2px solid var(--accent);
+    border-left: 2px solid var(--border);
     border-radius: 0;
     padding: 0.1rem 0 0.1rem 1rem;
     color: var(--text-dim);
@@ -299,41 +303,44 @@ body.light-theme .suggestion-chip:hover {
 .ai .bubble tbody tr:hover { background: var(--surface-hover); }
 
 .ai .bubble a {
-    color: var(--accent);
+    color: inherit;
     text-decoration: underline;
     text-decoration-thickness: 1px;
     text-underline-offset: 0.2em;
 }
 .ai .bubble a:hover { text-decoration-thickness: 2px; }
 
-/* ── 輸入框 ───────────────────────────────────────── */
+/* ── 輸入框：ChatGPT 式大圓角膠囊，深色無框、淺色細框＋淡陰影 ── */
 .input-container {
-    background: var(--panel-header-bg);
-    border-radius: 16px;
-    box-shadow: 0 8px 28px rgba(4, 10, 12, 0.28);
+    background: var(--composer-bg);
+    border: 1px solid transparent;
+    border-radius: 28px;
+    box-shadow: none;
 }
-body.light-theme .input-container { background: #FFFFFF; box-shadow: 0 8px 24px rgba(28, 35, 38, 0.08); }
-.input-container:focus-within {
-    border-color: rgba(var(--accent-rgb), 0.55);
-    box-shadow: 0 0 0 3px var(--accent-glow);
+body.light-theme .input-container {
+    background: var(--composer-bg);
+    border-color: var(--border);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
 }
+.input-container:focus-within { border-color: var(--border); box-shadow: none; }
+body.light-theme .input-container:focus-within { box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08); }
 
-/* 主要按鈕：墨青底、深色字（深色模式）／白字（淺色模式） */
+/* 主要按鈕：深色模式白底黑字、淺色模式黑底白字 */
 .send-btn:not(:disabled),
 .modal-btn.primary {
     background: var(--accent);
     color: var(--accent-ink);
 }
-.modal-btn.primary:hover { background: var(--accent); filter: brightness(1.08); }
+.modal-btn.primary:hover { background: var(--accent); opacity: 0.85; filter: none; }
 
 /* ── 頭像 ─────────────────────────────────────────── */
 .user-avatar-btn,
 .dropdown-avatar,
 body.light-theme .user-avatar-btn,
 body.light-theme .dropdown-avatar {
-    background: var(--tip-bg);
-    color: var(--accent);
-    border: 1px solid rgba(var(--accent-rgb), 0.3);
+    background: var(--menu-option-selected-bg);
+    color: var(--text-main);
+    border: 0;
 }
 
 /* ── 窄螢幕 ───────────────────────────────────────── */
@@ -345,14 +352,14 @@ body.light-theme .dropdown-avatar {
 /* ── 圖示尺寸：lucide 會把 <i> 換成 <svg>，舊規則只寫 i 所以沒生效 ── */
 .new-chat-btn svg { width: 18px; height: 18px; flex-shrink: 0; color: var(--text-dim); }
 .new-chat-btn:hover svg,
-.explore-btn.active svg { color: var(--accent); }
+.explore-btn.active svg { color: var(--text-main); }
 .copy-btn svg { width: 13px; height: 13px; }
 .header-actions .icon-btn svg { width: 19px; height: 19px; }
 
-/* 「已複製」用墨青，不用綠色（綠色在台股是下跌） */
+/* 「已複製」用中性色，不用綠色（綠色在台股是下跌） */
 .copy-btn.copied {
-    color: var(--accent);
-    border-color: rgba(var(--accent-rgb), 0.45);
+    color: var(--text-main);
+    border-color: var(--border);
     background: var(--tip-bg);
 }
 

@@ -8,7 +8,7 @@
     'use strict';
 
     /** 與 index.css / login.css 的 --bg-dark 對齊；iOS 用它決定狀態列底色。 */
-    var THEME_COLORS = { dark: '#182024', light: '#F5F6F4' };
+    var THEME_COLORS = { dark: '#212121', light: '#FFFFFF' };
     var THEME_STORAGE_KEY = 'insightUiTheme';
     var HINT_DISMISSED_KEY = 'insightA2hsHintDismissed';
 
