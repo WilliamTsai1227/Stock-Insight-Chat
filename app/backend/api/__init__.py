@@ -14,6 +14,7 @@ from .chat_deep_research import router as chat_deep_research_router
 from .chat_artifacts import router as chat_artifacts_router
 from .skills import router as skills_router
 from .chat_share import router as chat_share_router
+from .calendar import router as calendar_router
 
 
 api_router = APIRouter()
@@ -62,5 +63,8 @@ api_router.include_router(skills_router)
 
 # 對話公開分享（唯讀快照；/api/share/{token} 免登入）
 api_router.include_router(chat_share_router)
+
+# 投資行事曆（Lambda 寫入 MongoDB market_events，這裡依庫存／觀察清單組合）
+api_router.include_router(calendar_router)
 
 __all__ = ["api_router"]

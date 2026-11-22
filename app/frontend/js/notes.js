@@ -48,6 +48,7 @@ function showNotesView() {
     if (typeof hideDeepResearchView === 'function') hideDeepResearchView();
     if (typeof hideFeedViews === 'function') hideFeedViews();
     if (typeof hidePortfolioView === 'function') hidePortfolioView();
+    if (typeof hideCalendarView === 'function') hideCalendarView();
     exitNoteSelectMode();
     closeNoteEditor();
 

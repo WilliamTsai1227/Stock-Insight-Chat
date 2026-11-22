@@ -3124,6 +3124,7 @@ function showProjectView(project, options = {}) {
     if (typeof hideNotesView === 'function') hideNotesView();
     if (typeof hideFeedViews === 'function') hideFeedViews();
     if (typeof hidePortfolioView === 'function') hidePortfolioView();
+    if (typeof hideCalendarView === 'function') hideCalendarView();
     const main = document.querySelector('.main-content');
     if (main) main.classList.add('project-view-mode');
     document.getElementById('chat-messages').style.display  = 'none';
@@ -3336,6 +3337,7 @@ function showChatView() {
     if (typeof hideNotesView === 'function') hideNotesView();
     if (typeof hideFeedViews === 'function') hideFeedViews();
     if (typeof hidePortfolioView === 'function') hidePortfolioView();
+    if (typeof hideCalendarView === 'function') hideCalendarView();
     document.getElementById('project-view').style.display   = 'none';
     const main = document.querySelector('.main-content');
     if (main) main.classList.remove('project-view-mode');
@@ -3364,6 +3366,7 @@ function showExploreView() {
     if (typeof hideNotesView === 'function') hideNotesView();
     if (typeof hideFeedViews === 'function') hideFeedViews();
     if (typeof hidePortfolioView === 'function') hidePortfolioView();
+    if (typeof hideCalendarView === 'function') hideCalendarView();
     // 離開對話視圖時收掉選取模式，否則回來會看到孤兒勾選框
     if (typeof exitNoteSelectMode === 'function') exitNoteSelectMode();
 
