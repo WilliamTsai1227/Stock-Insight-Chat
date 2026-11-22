@@ -32,6 +32,7 @@
     <link rel="stylesheet" href="/css/notes.css">
     <link rel="stylesheet" href="/css/market-feed.css">
     <link rel="stylesheet" href="/css/portfolio.css">
+    <link rel="stylesheet" href="/css/calendar.css">
     <link rel="stylesheet" href="/css/ai-assistant.css">
     <link rel="stylesheet" href="/css/share.css">
     <!-- 視覺層：配色、字體與回答排版（拿掉這行即回到舊外觀） -->
@@ -102,6 +103,12 @@
             <button id="portfolio-btn" class="new-chat-btn explore-btn">
                 <i data-lucide="briefcase"></i>
                 <span>投資組合</span>
+            </button>
+
+            <!-- 行事曆：總經數據、FOMC、巨頭財報，以及庫存／觀察清單的重要時間點 -->
+            <button id="calendar-btn" class="new-chat-btn explore-btn">
+                <i data-lucide="calendar-days"></i>
+                <span>行事曆</span>
             </button>
             </nav>
 
@@ -361,6 +368,62 @@
                     <div class="feed-list" data-role="list"></div>
                     <p class="feed-status" data-role="status"></p>
                     <div class="feed-sentinel" data-role="sentinel"></div>
+                </div>
+            </div>
+
+            <!-- 投資行事曆：通用重要時機點／庫存股／觀察清單（calendar.js） -->
+            <div id="calendar-view" class="cal-view">
+                <div class="cal-header">
+                    <nav class="cal-tabs" role="tablist" aria-label="行事曆分類">
+                        <button type="button" class="cal-tab active" data-tab="MACRO" role="tab" aria-selected="true">通用重要時機點</button>
+                        <button type="button" class="cal-tab" data-tab="HOLDING" role="tab" aria-selected="false">庫存股<span class="cal-tab-count" data-count="holding"></span></button>
+                        <button type="button" class="cal-tab" data-tab="WATCHLIST" role="tab" aria-selected="false">觀察清單<span class="cal-tab-count" data-count="watchlist"></span></button>
+                        <button type="button" class="cal-tab" data-tab="ALL" role="tab" aria-selected="false">全部</button>
+                    </nav>
+                    <div class="cal-toolbar">
+                        <div class="cal-month-nav">
+                            <button type="button" id="cal-prev" class="cal-icon-btn" aria-label="上個月"><i data-lucide="chevron-left"></i></button>
+                            <h2 id="cal-month-label" class="cal-month-label" aria-live="polite"></h2>
+                            <button type="button" id="cal-next" class="cal-icon-btn" aria-label="下個月"><i data-lucide="chevron-right"></i></button>
+                            <button type="button" id="cal-today" class="cal-text-btn">今天</button>
+                        </div>
+                        <div class="cal-controls">
+                            <select id="cal-importance" class="cal-select" aria-label="重要度篩選">
+                                <option value="1">全部重要度</option>
+                                <option value="2">中以上</option>
+                                <option value="3">只看高重要度</option>
+                            </select>
+                            <div class="cal-seg" role="group" aria-label="檢視方式">
+                                <button type="button" data-view="month" class="active" aria-pressed="true"><i data-lucide="calendar-days"></i><span>月曆</span></button>
+                                <button type="button" data-view="list" aria-pressed="false"><i data-lucide="list"></i><span>清單</span></button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="cal-scroll">
+                    <div class="cal-body">
+                        <div class="cal-meta">
+                            <ul class="cal-legend" aria-label="圖例">
+                                <li><span class="cal-dot cat-us"></span>美國數據</li>
+                                <li><span class="cal-dot cat-tw"></span>台灣數據</li>
+                                <li><span class="cal-dot cat-cb"></span>央行</li>
+                                <li><span class="cal-dot cat-earn"></span>財報</li>
+                            </ul>
+                            <p id="cal-freshness" class="cal-freshness"></p>
+                        </div>
+                        <p id="cal-notice" class="cal-notice hidden"></p>
+                        <div id="cal-month" class="cal-month">
+                            <div class="cal-grid-wrap">
+                                <div class="cal-weekdays" aria-hidden="true">
+                                    <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
+                                </div>
+                                <div id="cal-grid" class="cal-grid"></div>
+                            </div>
+                            <aside id="cal-agenda" class="cal-agenda" aria-live="polite"></aside>
+                        </div>
+                        <div id="cal-list" class="cal-list hidden"></div>
+                    </div>
                 </div>
             </div>
 
@@ -978,6 +1041,7 @@
     <script src="/js/notes.js"></script>
     <script src="/js/market-feed.js"></script>
     <script src="/js/portfolio.js"></script>
+    <script src="/js/calendar.js"></script>
     <script src="/js/ai-assistant.js"></script>
     <script src="/js/share-chat.js"></script>
     <script>lucide.createIcons();</script>

@@ -54,6 +54,7 @@ function showFeedView(kind) {
     if (typeof exitNoteSelectMode === 'function') exitNoteSelectMode();
     hideFeedViews();
     if (typeof hidePortfolioView === 'function') hidePortfolioView();
+    if (typeof hideCalendarView === 'function') hideCalendarView();
 
     document.getElementById('chat-messages').style.display = 'none';
     document.getElementById('project-view').style.display = 'none';

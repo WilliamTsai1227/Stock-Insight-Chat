@@ -43,6 +43,7 @@
 | | 下載產出（主要格式） | `/api/deep-research/runs/{sid}/artifacts/{kind}` | `GET` | 是 |
 | | 下載產出（指定格式） | `/api/deep-research/runs/{sid}/artifacts/{kind}/{fmt}` | `GET` | 是 |
 | | 釋放 session | `/api/deep-research/runs/{sid}` | `DELETE` | 是 |
+| **行事曆** | 行事曆事件（通用／庫存／觀察清單） | `/api/calendar/events` | `GET` | 是 |
 
 > **沒有 `PATCH /api/project`。** 專案目前不支援改名；[`project.py`](../app/backend/api/project.py) 只實作 POST / GET all / GET / DELETE。
 >

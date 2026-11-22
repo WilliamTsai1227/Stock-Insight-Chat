@@ -89,6 +89,7 @@ function showPortfolioView() {
     if (typeof hideDeepResearchView === 'function') hideDeepResearchView();
     if (typeof hideNotesView === 'function') hideNotesView();
     if (typeof hideFeedViews === 'function') hideFeedViews();
+    if (typeof hideCalendarView === 'function') hideCalendarView();
     if (typeof exitNoteSelectMode === 'function') exitNoteSelectMode();
 
     pfEl('chat-messages').style.display = 'none';

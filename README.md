@@ -220,6 +220,7 @@ python test/prompt_injection_test.py     # Prompt Injection 安全測試
 | [specifications/tools_spec.md](specifications/tools_spec.md) | RAG 工具與 Qdrant 檢索細節 |
 | [specifications/auth_system_spec.md](specifications/auth_system_spec.md) | JWT / SSO 認證設計 |
 | [specifications/portfolio_insight_spec.md](specifications/portfolio_insight_spec.md) | 投資組合排程分析（Zentra MCP） |
+| [specifications/market_calendar_spec.md](specifications/market_calendar_spec.md) | 投資行事曆（Lambda → MongoDB）與每日簡報 |
 | [specifications/ec2_deploy.md](specifications/ec2_deploy.md) | 正式環境部署（S3 + EC2 + Lambda） |
 
 ---
