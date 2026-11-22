@@ -154,6 +154,47 @@ docker compose -f docker-compose.prod.yml up -d backend   # 重建容器讓新 e
 docker compose -f docker-compose.prod.yml exec backend env | grep <變數名>
 ```
 
+### 3.2.1 RDS 憑證驗證失敗、backend 不斷重啟
+
+若 log 出現 `ssl.SSLCertVerificationError` / `self-signed certificate in certificate chain`，
+且 traceback 指向 `asyncpg.create_pool`，代表 PostgreSQL TLS 缺少受信任 CA。
+應安裝 AWS RDS 的公開 CA bundle，維持 CA 與 hostname 驗證；不需要關閉 TLS 或憑證驗證。
+
+於 VM 的部署目錄（`docker-compose.prod.yml` 所在位置）執行：
+
+```bash
+mkdir -p certs
+curl --fail --show-error --location --proto '=https' --proto-redir '=https' \
+  https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem \
+  -o certs/rds-global-bundle.pem
+chmod 644 certs/rds-global-bundle.pem
+```
+
+把本 repo 的 `deploy/docker-compose.rds-ca.yml` 複製至同一部署目錄，再執行：
+
+```bash
+docker compose -f docker-compose.prod.yml -f docker-compose.rds-ca.yml config --quiet
+docker compose -f docker-compose.prod.yml -f docker-compose.rds-ca.yml \
+  up -d --no-deps --force-recreate backend
+docker compose -f docker-compose.prod.yml -f docker-compose.rds-ca.yml ps backend
+docker compose -f docker-compose.prod.yml -f docker-compose.rds-ca.yml logs --tail 60 backend
+curl --fail-with-body --retry 15 --retry-all-errors --retry-delay 2 --max-time 5 \
+  http://127.0.0.1:8000/api/public/desktop-config
+```
+
+此 overlay 只替 backend 設定 CA 檔案路徑與唯讀掛載，沿用原本 `.env`、image、port 與相依服務；
+已有 `DATABASE_SSL_CA_FILE` 時，這個 overlay 會明確覆寫為上述掛載路徑。
+現有支援 `DATABASE_SSL_CA_FILE` 的 backend image 不需重建，桌面 `.exe` 也不需重打包。
+檔案不存在時 Compose 會拒絕啟動，避免錯把 CA 路徑建立成目錄。
+啟動時會先建立 DB pool 與暖機 BM25；看到 `Application startup complete` 才代表已可接收請求。
+暖機期間短暫的 connection reset / refused 由上述唯讀查詢的重試處理。
+
+**之後 pull / up / recreate backend 也要帶上這兩個 `-f`**，只用原本 prod 檔重建容器會移除 CA 設定。
+應先看到本機 endpoint 回 `{"enabled":true}`，再確認公開 endpoint：
+`https://api.insight-chat.xyz/api/public/desktop-config`；若本機正常但公開仍是 521，才排查 Cloudflare 回源與防火牆。
+
+官方來源：[RDS TLS 與 CA bundles](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.SSL.html)。
+
 ### 3.3 有 DB migration 時
 
 **順序：先跑 migration、再部署新後端**（新程式碼可能依賴新欄位）：

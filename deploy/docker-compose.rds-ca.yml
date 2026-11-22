@@ -1,0 +1,15 @@
+# Optional RDS trust bundle for an existing backend image; no rebuild required.
+# Download the public AWS bundle to ./certs/rds-global-bundle.pem first.
+# Always include both files when managing this deployment:
+# docker compose -f docker-compose.prod.yml -f docker-compose.rds-ca.yml up -d
+services:
+  backend:
+    environment:
+      DATABASE_SSL_CA_FILE: /etc/stock-insight/rds-global-bundle.pem
+    volumes:
+      - type: bind
+        source: ./certs/rds-global-bundle.pem
+        target: /etc/stock-insight/rds-global-bundle.pem
+        read_only: true
+        bind:
+          create_host_path: false
