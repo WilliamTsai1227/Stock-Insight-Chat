@@ -31,7 +31,9 @@ from app.backend.database.postgresql import get_db
 # ① 全域設定
 # ======================================================
 
-SECRET_KEY                 = os.getenv("SECRET_KEY", "super-secret-key-for-development")
+SECRET_KEY = os.getenv("SECRET_KEY", "")
+if len(SECRET_KEY.encode()) < 32 or SECRET_KEY == "super-secret-key-for-development":
+    raise RuntimeError("SECRET_KEY must be explicitly set to a random secret of at least 32 bytes")
 ALGORITHM                  = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 15
 REFRESH_TOKEN_EXPIRE_DAYS  = 7
@@ -69,7 +71,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
         expires_delta if expires_delta
         else timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
-    to_encode.update({"exp": expire})
+    to_encode.update({"exp": expire, "type": "access"})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
@@ -97,7 +99,7 @@ def decode_token(token: str) -> Optional[dict]:
     驗證失敗時回傳 None，由呼叫方決定如何處理。
     """
     try:
-        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM], options={"require_exp": True, "require_sub": True})
     except Exception:
         return None
 
@@ -123,33 +125,44 @@ def _decode_user_id(token: str) -> UUID:
     簽名錯誤、過期、格式不合一律拋出 401。
     """
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM], options={"require_exp": True, "require_sub": True})
+        if payload.get("type") != "access":
+            raise _CREDENTIALS_EXCEPTION
         user_id_str: str = payload.get("sub")
         if not user_id_str:
             raise _CREDENTIALS_EXCEPTION
         return UUID(user_id_str)
-    except (JWTError, ValueError):
+    except (JWTError, ValueError, TypeError, AttributeError):
         raise _CREDENTIALS_EXCEPTION
 
 
+def _validated_access_token(token: str = Depends(_oauth2_scheme)) -> str:
+    # Reject malformed credentials before acquiring a database connection.
+    _decode_user_id(token)
+    return token
+
+
 async def get_current_user_id(
-    token: str = Depends(_oauth2_scheme),
+    token: str = Depends(_validated_access_token),
+    db: asyncpg.Connection = Depends(get_db),
 ) -> UUID:
     """
-    【輕量版 Depends】純 JWT 驗證，不查資料庫。
-
-    適用情境：
-    - SSE 串流端點（/api/chat/messages）：連線可持續數秒，
-      不應在整個串流期間占用一個 DB 連線。
-    - 高頻讀取端點：只需確認 Token 合法，無需使用者詳細資料。
+    驗證 Access Token 與即時帳號狀態，只回傳 UUID。
+    FastAPI 0.110 在開始傳送 StreamingResponse 前會釋放 get_db 連線。
 
     回傳：使用者 UUID（來自 JWT sub claim）
     """
-    return _decode_user_id(token)
+    user_id = _decode_user_id(token)
+    user = await db.fetchrow("SELECT id, status FROM users WHERE id = $1", user_id)
+    if not user:
+        raise _CREDENTIALS_EXCEPTION
+    if user["status"] == "disabled":
+        raise HTTPException(status_code=403, detail="Account is disabled.")
+    return user_id
 
 
 async def get_current_user(
-    token: str = Depends(_oauth2_scheme),
+    token: str = Depends(_validated_access_token),
     db: asyncpg.Connection = Depends(get_db),
 ) -> asyncpg.Record:
     """

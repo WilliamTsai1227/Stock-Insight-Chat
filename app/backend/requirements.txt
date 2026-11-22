@@ -59,6 +59,7 @@ mcp==1.30.0
 orjson==3.11.8
 # 深度研究：研究報告樣板把 LLM 產出的 Markdown 轉成 HTML
 Markdown==3.10.3
+nh3==0.3.8
 # 深度研究：解析上傳的 .xlsx（OpenAI File Search 不支援試算表，需自行轉文字）
 openpyxl==3.1.5
 packaging==23.2

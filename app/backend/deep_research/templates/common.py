@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import re
+import nh3
 from html import escape as _html_escape
 from typing import Any
 
@@ -24,14 +24,12 @@ PALETTE = """
     --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif;
 """
 
-# LLM 產出的 Markdown 允許夾帶 HTML，這裡把可執行的部分拔掉。
-# 產出的檔案會被使用者下載後用瀏覽器開啟（file:// 同源），不能留下可執行入口。
-_DANGEROUS_TAGS = re.compile(
-    r"</?\s*(script|iframe|object|embed|form|link|meta|base|style)\b[^>]*>",
-    re.IGNORECASE,
-)
-_EVENT_ATTRS = re.compile(r"\son[a-z]+\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s>]+)", re.IGNORECASE)
-_JS_URLS = re.compile(r"(href|src)\s*=\s*([\"']?)\s*javascript:", re.IGNORECASE)
+# Parse HTML with an allowlist: regex cannot handle entities or malformed tags.
+_MARKDOWN_TAGS = {
+    "p", "br", "hr", "h1", "h2", "h3", "h4", "h5", "h6", "strong", "b",
+    "em", "i", "s", "del", "blockquote", "pre", "code", "ul", "ol", "li",
+    "table", "thead", "tbody", "tr", "th", "td", "a", "sup", "sub",
+}
 
 
 def esc(value: Any) -> str:
@@ -40,10 +38,10 @@ def esc(value: Any) -> str:
 
 
 def scrub_html(html: str) -> str:
-    html = _DANGEROUS_TAGS.sub("", html)
-    html = _EVENT_ATTRS.sub("", html)
-    html = _JS_URLS.sub(r"\1=\2#", html)
-    return html
+    return nh3.clean(html, tags=_MARKDOWN_TAGS,
+                     attributes={"a": {"href", "title"}},
+                     url_schemes={"https", "http", "mailto"},
+                     link_rel="noopener noreferrer")
 
 
 def markdown_to_html(text: str) -> str:

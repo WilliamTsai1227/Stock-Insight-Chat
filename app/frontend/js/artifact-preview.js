@@ -4,9 +4,8 @@
  * 原本放在深度研究頁（deep-research.js）。深度研究已整合進對話，獨立頁面移除後，
  * 對話的「產生報告／簡報」（chat-artifacts.js）仍需要這兩樣，因此獨立成這個檔案。
  *
- * 預覽視窗的 iframe 不加 sandbox 是刻意的：簡報的翻頁、講稿切換都靠產出檔自己的
- * inline script，加了 sandbox 就全部失效。安全性靠後端把關 —— `templates/common.scrub_html()`
- * 已經把 LLM 產出裡的 script / iframe / on* / javascript: 全部拔掉，其餘欄位一律跳脫。
+ * iframe 只允許簡報腳本和開啟連結，不允許同源權限；報告不能讀取主頁的憑證或 DOM。
+ * 後端另以 HTML parser 清理模型內容，兩層防護各自生效。
  */
 
 const DR_SKILL_META = {
@@ -51,9 +50,32 @@ function initArtifactPreviewModal() {
 
     const newtab = apEl('dr-preview-newtab');
     if (newtab) {
-        newtab.addEventListener('click', () => {
+        newtab.addEventListener('click', async () => {
             if (artifactPreviewSource && artifactPreviewSource.htmlUrl) {
-                window.open(artifactPreviewSource.htmlUrl, '_blank', 'noopener');
+                const url = artifactPreviewSource.htmlUrl;
+                // Reserve the tab during the click so browsers do not block it.
+                // Electron creates its own opaque report wrapper in the main process.
+                if (window.stockInsightDesktop) {
+                    window.open(url, '_blank', 'noopener');
+                    return;
+                }
+                const tab = window.open('', '_blank');
+                if (!tab) return;
+                tab.opener = null;
+                try {
+                    const html = await (await fetch(url)).text();
+                    const frame = tab.document.createElement('iframe');
+                    frame.title = '產出預覽';
+                    frame.setAttribute('sandbox', 'allow-scripts allow-popups');
+                    frame.referrerPolicy = 'no-referrer';
+                    frame.allowFullscreen = true;
+                    frame.style.cssText = 'border:0;width:100vw;height:100vh';
+                    tab.document.body.style.margin = '0';
+                    frame.srcdoc = html;
+                    tab.document.body.replaceChildren(frame);
+                } catch {
+                    tab.close();
+                }
             }
         });
     }
@@ -85,7 +107,7 @@ function openArtifactPreview(source) {
     modal.classList.add('show');
     document.body.style.overflow = 'hidden';
 
-    // 焦點交給 iframe，簡報才收得到方向鍵；blob: 繼承本頁 origin，拿得到 contentDocument
+    // 焦點交給 iframe；sandbox 隔離同源權限，跨來源存取會被瀏覽器拒絕。
     frame.addEventListener(
         'load',
         () => {

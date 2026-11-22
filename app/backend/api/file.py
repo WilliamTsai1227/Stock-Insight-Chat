@@ -1,8 +1,6 @@
 import asyncpg
 from fastapi import APIRouter, Depends, File, UploadFile, Form, HTTPException
 from uuid import UUID
-from ..models import FileModel
-from typing import List
 
 from app.backend.module.jwt import get_current_user
 
@@ -16,41 +14,11 @@ async def upload_file(
     current_user: asyncpg.Record = Depends(get_current_user),
 ):
     """
-    實作規格書 ## 1. 檔案上傳接口
-    1. 接收 Binary 檔案
-    2. 檢查檔案格式
-    3. 上傳至 S3 儲存
-    4. 建立資料庫紀錄並回傳 ID
+    舊版檔案上傳接口尚未完成儲存與權限驗證，一律拒絕處理。
     """
-    # 這裡定義允許的上傳格式
-    ALLOWED_CONTENT_TYPES = [
-        "image/jpeg", "image/png", "image/webp", # 圖片
-        "application/pdf",                        # PDF
-        "text/csv", "text/plain",                 # CSV / 文字檔
-        "application/vnd.ms-excel",               # 舊版 Excel
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" # 新版 Excel
-    ]
-
-    # 檢查 Content-Type
-    if file.content_type not in ALLOWED_CONTENT_TYPES:
-        raise HTTPException(
-            status_code=400, 
-            detail=f"不支援的檔案格式: {file.content_type}。目前僅支援：圖片、PDF、Excel 或 CSV 檔案。"
-        )
-
-    try:
-        # TODO: 這裡未來會實作 S3 上傳與資料庫儲存邏輯
-        return {
-            "status": "success",
-            "data": {
-                "file_id": "file_uuid_example",
-                "file_type": file.content_type,
-                "file_name": file.filename,
-                "status": "processing"
-            }
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    # Storage and ownership checks are not implemented for this legacy route.
+    # Fail closed instead of claiming a file was safely accepted or persisted.
+    raise HTTPException(status_code=501, detail="Legacy file upload is unavailable. Use chat attachments.")
 
 @router.delete("/api/files/{file_id}")
 async def delete_file(
@@ -58,6 +26,6 @@ async def delete_file(
     current_user: asyncpg.Record = Depends(get_current_user),
 ):
     """
-    根據 file_id 刪除指定檔案
+    舊版刪檔接口尚未實作，一律拒絕處理。
     """
-    return {"status": "success", "message": f"File {file_id} has been deleted."}
+    raise HTTPException(status_code=501, detail="Legacy file deletion is unavailable.")

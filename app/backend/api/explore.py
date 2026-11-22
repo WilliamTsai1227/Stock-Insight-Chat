@@ -9,9 +9,7 @@
 設計要點：
 - 前綴剝除在這裡完成（/explore/api/quote → 上游 /api/quote），
   kinetic 後端維持原路由、零改動。
-- 登入閘門：kinetic 本身無認證，這裡在轉發前先驗 refresh_token cookie
-  （stateless：簽章 + exp + type，不查 DB —— 每個靜態資源請求都會經過，必須夠快）。
-  已撤銷但未過期的 RT 仍會通過，對一個以讀為主的嵌入頁可接受。
+- 登入閘門：驗證 refresh_token 簽章、期限、資料庫 session 與帳號狀態。
 - 同源：iframe 與 chat API 同主機，samesite=lax 的 cookie 會自動帶上。
 - 未設定 KINETIC_UPSTREAM 時整組路由回 404（功能關閉，本地 dev 不受影響）。
 
@@ -22,12 +20,14 @@
 
 import os
 from typing import Optional
+from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, Cookie, HTTPException, Request, Response, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 
 from app.backend.module.jwt import decode_token
+from app.backend.database.postgresql import get_db
 
 KINETIC_UPSTREAM = os.getenv("KINETIC_UPSTREAM", "").rstrip("/")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost").rstrip("/")
@@ -40,7 +40,7 @@ _client: Optional[httpx.AsyncClient] = None
 # 上游回應中不該原樣轉發的 headers（hop-by-hop / 由本服務重算或覆寫）
 _EXCLUDED_RESPONSE_HEADERS = {
     "content-length", "content-encoding", "transfer-encoding", "connection",
-    "keep-alive", "server", "date", "cache-control",
+    "keep-alive", "server", "date", "cache-control", "set-cookie",
 }
 
 
@@ -54,14 +54,27 @@ def _get_client() -> httpx.AsyncClient:
     return _client
 
 
-def _require_session(refresh_token: Optional[str]) -> None:
-    """驗證 refresh_token cookie（stateless），失敗一律 401。"""
+async def _require_session(refresh_token: Optional[str], db) -> None:
+    """拒絕失效、撤銷或停用帳號的 session，不消費現有 RT。"""
     payload = decode_token(refresh_token) if refresh_token else None
     if not payload or payload.get("type") != "refresh" or not payload.get("sub"):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
         )
+    try:
+        user_id = UUID(payload["sub"])
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(401, "Not authenticated")
+    user = await db.fetchrow(
+        """SELECT u.id, u.status FROM refresh_tokens r JOIN users u ON u.id = r.user_id
+           WHERE r.token = $1 AND r.user_id = $2 AND r.expires_at > NOW()""",
+        refresh_token, user_id,
+    )
+    if not user:
+        raise HTTPException(401, "Not authenticated")
+    if user["status"] == "disabled":
+        raise HTTPException(403, "Account is disabled.")
 
 
 @router.get("/explore", include_in_schema=False)
@@ -79,11 +92,12 @@ async def explore_proxy(
     path: str,
     request: Request,
     refresh_token: Optional[str] = Cookie(None),
+    db = Depends(get_db),
 ):
     if not KINETIC_UPSTREAM:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
 
-    _require_session(refresh_token)
+    await _require_session(refresh_token, db)
 
     # 只轉發必要的 request headers；cookie 不外洩給上游
     upstream_headers = {}

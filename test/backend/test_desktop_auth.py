@@ -176,7 +176,7 @@ def test_google_callback_returns_only_one_use_code_to_loopback(monkeypatch):
             return GoogleResponse({"access_token": "google-token"})
 
         async def get(self, *args, **kwargs):
-            return GoogleResponse({"sub": "google-sub", "email": "test@example.com"})
+            return GoogleResponse({"sub": "google-sub", "email": "test@example.com", "email_verified": True})
 
     monkeypatch.setattr(auth.httpx, "AsyncClient", GoogleClient)
 
@@ -203,4 +203,51 @@ def test_google_cancellation_returns_desktop_error_without_db_access():
             oauth_state="oauth-state", oauth_return_url=None, oauth_desktop=token)
         params = parse_qs(urlparse(response.headers["location"]).query)
         assert params == {"state": [STATE], "error": ["oauth_cancelled"]}
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("verified,email,hosted_domain,linked_sub,status,expected", [
+    (False, "test@gmail.com", None, None, "active", "unverified_email"),
+    (True, "test@example.com", None, None, "active", "account_link_required"),
+    (True, "test@gmail.com", None, "another-google-sub", "active", "account_conflict"),
+    (True, "test@gmail.com", None, None, "disabled", "account_disabled"),
+    (True, "test@gmail.com", None, None, "active", None),
+    (True, "test@company.com", "company.com", None, "active", None),
+])
+def test_google_email_linking_requires_authoritative_identity(
+    monkeypatch, verified, email, hosted_domain, linked_sub, status, expected,
+):
+    """A verified third-party email alone must not take over an existing account."""
+    class GoogleClient:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def post(self, *args, **kwargs):
+            import httpx
+            return httpx.Response(200, json={"access_token": "fixture"}, request=httpx.Request("POST", "https://fixture.invalid"))
+        async def get(self, *args, **kwargs):
+            import httpx
+            return httpx.Response(200, json={"sub": "new-sub", "email": email,
+                "email_verified": verified, "hd": hosted_domain}, request=httpx.Request("GET", "https://fixture.invalid"))
+
+    class LinkDB(FakeDB):
+        linked = False
+        async def fetchrow(self, sql, *args):
+            if "WHERE google_sub =" in sql: return None
+            return {"id": self.user_id, "email": email, "status": status, "google_sub": linked_sub}
+        async def execute(self, sql, *args):
+            if "SET google_sub" in sql: self.linked = True
+
+    monkeypatch.setattr(auth.httpx, "AsyncClient", GoogleClient)
+    async def run():
+        db = LinkDB()
+        response = await auth.google_callback(db=db, code="fixture", state="fixture-state", error=None,
+            oauth_state="fixture-state", oauth_return_url=None, oauth_desktop=None)
+        assert db.linked is (expected is None)
+        query = parse_qs(urlparse(response.headers["location"]).query)
+        if expected:
+            assert query["error"] == [expected]
+            assert "refresh_token=" not in "\n".join(response.headers.getlist("set-cookie"))
+        else:
+            assert query == {"sso": ["1"]}
     asyncio.run(run())

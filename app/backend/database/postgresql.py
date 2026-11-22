@@ -48,10 +48,8 @@ def _parse_dsn() -> tuple[str, ssl.SSLContext | None]:
 
     ssl_context = None
     if ssl_required:
-        ssl_context = ssl.create_default_context()
-        # RDS 憑證鏈在本機 Docker 環境常無法完整驗證，仍啟用 TLS 加密
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
+        # Private/RDS CAs must be explicitly supplied; never disable verification.
+        ssl_context = ssl.create_default_context(cafile=os.getenv("DATABASE_SSL_CA_FILE") or None)
 
     return dsn, ssl_context
 

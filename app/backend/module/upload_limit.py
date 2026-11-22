@@ -43,7 +43,7 @@ class UploadSizeLimitMiddleware:
         await send({"type": "http.response.body", "body": body})
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope.get("path") not in self.paths:
+        if scope["type"] != "http" or scope.get("path", "").rstrip("/") not in self.paths:
             await self.app(scope, receive, send)
             return
 

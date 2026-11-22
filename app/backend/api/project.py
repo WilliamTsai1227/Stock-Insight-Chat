@@ -16,6 +16,7 @@ asyncpg 語法注意事項：
 """
 
 import re
+import logging
 import asyncpg
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -27,6 +28,7 @@ from app.backend.database.postgresql import get_db
 from app.backend.module.jwt import get_current_user
 
 router = APIRouter(tags=["Project"])
+logger = logging.getLogger(__name__)
 
 
 # ── Project Name 白名單正則 ────────────────────────────────────────────────────
@@ -156,10 +158,11 @@ async def create_project(
             detail="Unexpected referential integrity error. Please contact support."
         )
 
-    except asyncpg.PostgresError as e:
+    except asyncpg.PostgresError:
+        logger.exception("Project database operation failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Database error: {str(e)}"
+            detail="Database operation failed. Please try again later."
         )
 
     return {
@@ -210,10 +213,11 @@ async def list_all_projects(
             """,
             user_id,
         )
-    except asyncpg.PostgresError as e:
+    except asyncpg.PostgresError:
+        logger.exception("Project database operation failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Database error: {str(e)}"
+            detail="Database operation failed. Please try again later."
         )
 
     return {
@@ -303,10 +307,11 @@ async def get_project_detail(
 
     except HTTPException:
         raise
-    except asyncpg.PostgresError as e:
+    except asyncpg.PostgresError:
+        logger.exception("Project database operation failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Database error: {str(e)}"
+            detail="Database operation failed. Please try again later."
         )
 
     return {
@@ -378,10 +383,11 @@ async def delete_project(
             project_id,
             user_id,
         )
-    except asyncpg.PostgresError as e:
+    except asyncpg.PostgresError:
+        logger.exception("Project database operation failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Database error: {str(e)}"
+            detail="Database operation failed. Please try again later."
         )
 
     if result == "DELETE 0":

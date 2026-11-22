@@ -189,6 +189,7 @@ COMMIT;
 | `V011__portfolio_insight.sql` | 投資組合排程分析四張表（2026-11-07 已套用正式 RDS） |
 | `V012__chats_source.sql` | `chats.source`（main / assistant），小助手對話不列在主側欄。2026-11-22 已套用正式 RDS |
 | `V013__chat_shares.sql` | 新增 `chat_shares`（對話公開分享快照）。2026-11-22 已套用正式 RDS |
+| `V014__desktop_login_codes.sql` | 新增 `desktop_login_codes`（桌面登入一次性 PKCE 授權碼）與到期時間索引。2026-11-22 已套用正式 RDS；TLS 連線、交易預演回滾及套用後驗證通過，已確認 4 個欄位、主鍵、`users(id)` 的 `ON DELETE CASCADE` 外鍵與兩個有效索引 |
 
 ### 4.3 對既有資料庫執行 migration
 
