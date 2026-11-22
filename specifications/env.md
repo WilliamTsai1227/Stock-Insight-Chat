@@ -65,6 +65,7 @@ docker compose ... exec backend env | grep <變數名>               # 驗證讀
 | `GOOGLE_CLIENT_SECRET` | `""` | ✅ | Google OAuth Client Secret |
 | `GOOGLE_OAUTH_REDIRECT_URI` | 無預設（必填） | ✅ | Callback URI，須與 Google Console **完全一致**（含 protocol / port / path） |
 | `FRONTEND_URL` | `http://localhost` | ✅ | 前端根網址；登入後重導目標，同時作為 `/explore/*` 的 CSP `frame-ancestors` 白名單 |
+| `DESKTOP_AUTH_ENABLED` | `false` | — | 啟用 Windows 桌面 Google 登入交接；先套用 `V014__desktop_login_codes.sql` 並部署新版 backend，詳見 `app/desktop/README.md` |
 
 少了這組就無法登入。設定步驟與 Google Console 對應見 [`auth_system_spec.md`](./auth_system_spec.md) §6。
 

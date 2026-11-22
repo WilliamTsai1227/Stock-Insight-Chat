@@ -183,10 +183,29 @@ window.addEventListener('DOMContentLoaded', () => {
 });
 
 // ── Google SSO 按鈕 ───────────────────────────────────────────────
-document.getElementById('google-login-btn').addEventListener('click', () => {
+document.getElementById('google-login-btn').addEventListener('click', async () => {
     const btn = document.getElementById('google-login-btn');
     btn.disabled = true;
     btn.querySelector('span').textContent = '跳轉至 Google…';
+
+    if (window.stockInsightDesktop) {
+        btn.querySelector('span').textContent = '請在瀏覽器完成登入…';
+        try {
+            const result = await window.stockInsightDesktop.login();
+            if (result.ok) {
+                window.location.href = '/?sso=1';
+                return;
+            }
+            throw new Error(result.message);
+        } catch (error) {
+            const errorEl = document.getElementById('oauth-error');
+            errorEl.textContent = error.message || '登入失敗，請稍後再試。';
+            errorEl.classList.remove('hidden');
+            btn.disabled = false;
+            btn.querySelector('span').textContent = '以 Google 帳號登入';
+        }
+        return;
+    }
 
     // 帶上目前前端 origin，OAuth 完成後回到同一網址（區網 IP 不會被導到 localhost）
     const returnUrl = encodeURIComponent(window.location.origin);

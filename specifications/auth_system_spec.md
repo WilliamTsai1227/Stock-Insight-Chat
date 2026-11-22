@@ -6,6 +6,13 @@
 
 Google SSO 端點與 `users` 表設計見 §6；前端換發流程見 §7。
 
+Windows 桌面版沿用相同雲端帳號與 Refresh Token 機制，另使用系統瀏覽器完成 Google 登入。
+`DESKTOP_AUTH_ENABLED=true` 時，`/api/user/auth/google/start` 接受 loopback redirect、S256 challenge 和桌面 state；
+Google 仍回到雲端 callback，完成驗證後只將一次性授權碼送回 `127.0.0.1`。
+桌面以 `POST /api/user/auth/desktop/exchange` 和 verifier 交換 HttpOnly Cookie，原子消費有效 60 秒的授權碼。
+新增資料表需先套用 `V014__desktop_login_codes.sql`；`GET /api/public/desktop-config` 提供啟用狀態。
+部署與完整流程見 [桌面版說明](../app/desktop/README.md)。
+
 ## 2. 技術選型
 
 - **登入方式**: Google SSO（OAuth 2.0 / OIDC），以 `google_sub` 為身分主鍵

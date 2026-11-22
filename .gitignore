@@ -61,6 +61,8 @@ htmlcov/
 
 # Node.js (前端支持)
 node_modules/
+app/desktop/renderer/
+!app/desktop/lib/
 dist/
 .next/
 .vercel/
